@@ -1,0 +1,16 @@
+{
+  "name": "ap-pos",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AP หมูสด POS — Electron + Vue + NestJS (offline-first)",
+  "scripts": {
+    "dev:pos": "pnpm --filter @ap-pos/pos dev",
+    "dev:api": "pnpm --filter @ap-pos/api start:dev",
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.15.0"
+}
