@@ -1,19 +1,21 @@
 /**
- * Price-embedded barcode (EAN-13 style used in Thai retail scales/labels):
- * 99 + productCode(5) + priceInSatangOrBahtDigits(5) + checkDigit(1)
+ * Price-embedded barcode (EAN-13):
+ * 9 + productBarcode(6) + priceBaht(5) + checkDigit(1)
  *
- * Example: 99aaaaabbbbbc
- * - prefix 99
- * - aaaaa = product code
- * - bbbbb = price digits (baht*100 as 5 digits, e.g. 01250 = 12.50)
- * - c = check digit (modulo-10, EAN-13)
+ * Example: 9900009000555
+ * - prefix 9
+ * - 900009 = บาร์สินค้า (ระบบเก่าเก็บค่านี้)
+ * - 00055 = ราคาบาทเต็ม 55 (ไม่มีทศนิยม)
+ * - 5 = check digit (EAN-13)
  */
 export type ParsedBarcode =
   | { kind: "standard"; barcode: string }
   | {
       kind: "priceEmbedded";
       barcode: string;
-      productCode: string;
+      /** บาร์สินค้า 6 หลัก ที่ระบบเก่าเก็บใน master/ขาย */
+      productBarcode: string;
+      /** ราคาเป็นบาทเต็ม (ไม่มีทศนิยม) */
       price: number;
       checkDigit: string;
       validCheckDigit: boolean;
@@ -33,16 +35,17 @@ export function ean13CheckDigit(digits12: string): string {
 
 export function parseBarcode(raw: string): ParsedBarcode {
   const barcode = raw.trim();
-  if (/^99\d{11}$/.test(barcode)) {
-    const productCode = barcode.slice(2, 7);
+  // 9 + 6 หลักบาร์สินค้า + 5 หลักราคา + 1 check = 13 หลัก
+  if (/^9\d{12}$/.test(barcode)) {
+    const productBarcode = barcode.slice(1, 7);
     const priceDigits = barcode.slice(7, 12);
     const checkDigit = barcode.slice(12, 13);
     const expected = ean13CheckDigit(barcode.slice(0, 12));
-    const price = Number(priceDigits) / 100;
+    const price = Number(priceDigits);
     return {
       kind: "priceEmbedded",
       barcode,
-      productCode,
+      productBarcode,
       price,
       checkDigit,
       validCheckDigit: checkDigit === expected,

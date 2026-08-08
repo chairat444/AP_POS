@@ -1,0 +1,131 @@
+/** กลุ่มร้านซื้อของ — คอลัมน์สรุป */
+export const PURCHASE_GROUPS = [
+  { key: "meatball", label: "ร้านลูกชิ้น", hint: "ลูกชิ้น · ของแช่แข็งแปรรูป" },
+  { key: "market", label: "ร้านในตลาด", hint: "ไก่ · เห็ด · ถุง · ของตลาด" },
+  { key: "veg", label: "ร้านผัก", hint: "ผักสด" },
+  {
+    key: "transfer",
+    label: "ร้าน (ส่งหลุมดิน)",
+    hint: "ของที่เจ็ดเสมียนส่งให้หลุมดิน",
+  },
+  { key: "makro", label: "แม็คโค", hint: "ของจากแม็คโค" },
+] as const;
+
+export type PurchaseGroupKey = (typeof PURCHASE_GROUPS)[number]["key"];
+
+/** สถานะขอสินค้าของแต่ละวัน */
+export const PURCHASE_DAY_STATUSES = [
+  { key: "open", label: "รับรายการ", tone: "neutral" },
+  { key: "requested", label: "ขอสินค้าแล้ว", tone: "warn" },
+  { key: "buying", label: "กำลังซื้อ", tone: "info" },
+  { key: "done", label: "เสร็จแล้ว", tone: "ok" },
+] as const;
+
+export type PurchaseDayStatus = (typeof PURCHASE_DAY_STATUSES)[number]["key"];
+
+export function purchaseDayStatusLabel(status: string) {
+  return (
+    PURCHASE_DAY_STATUSES.find((s) => s.key === status)?.label ?? status
+  );
+}
+
+export function isPurchaseDayStatus(v: string): v is PurchaseDayStatus {
+  return PURCHASE_DAY_STATUSES.some((s) => s.key === v);
+}
+
+export type ParsedPurchaseLine = {
+  name: string;
+  qtyText: string | null;
+  note: string | null;
+};
+
+/** ข้ามเฉพาะบรรทัดหัวข้อ/เวลา ไม่ใช่รายการสินค้า */
+function shouldSkipLine(line: string) {
+  if (/^\d{1,2}:\d{2}\s*$/.test(line)) return true;
+  if (/^สาขา/i.test(line) && line.length < 40) return true;
+  if (/^(ในครัว|หลุมดิน|เจ็ดเสมียน)\s*$/i.test(line)) return true;
+  // แค่ชื่อคน เช่น "น้องกวิน"
+  if (/^น้อง\S{0,20}$/u.test(line)) return true;
+  return false;
+}
+
+/** ตัดคำนำหน้า/ขยะที่พบบ่อย */
+function cleanName(raw: string) {
+  return raw
+    .replace(/^\d{1,2}:\d{2}\s*/u, "")
+    .replace(/^น้อง\S*\s+/u, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * แยกบรรทัดรายการจากข้อความที่น้องส่ง
+ * รองรับ: เห็ดเข็ม9 · ผักบุ้ง5 · สันคอสไลด์มี1ครึ่ง · ถุงร้อน6*9 · หมูสับมี1ถาดครึ่ง
+ */
+export function parsePurchaseText(raw: string): ParsedPurchaseLine[] {
+  const lines = raw
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\u00a0/g, " ").trim())
+    .filter(Boolean);
+
+  const out: ParsedPurchaseLine[] = [];
+  for (const line of lines) {
+    if (shouldSkipLine(line)) continue;
+    if (line.length < 2) continue;
+
+    let name = cleanName(line);
+    let qtyText: string | null = null;
+    let note: string | null = null;
+    if (!name || name.length < 2) continue;
+
+    // ขนาดถุง/ถาด แบบ 6*9, 7x11 — เก็บทั้งชื่อ ไม่แยกจำนวน
+    if (/\d+\s*[x*×]\s*\d+/i.test(name)) {
+      out.push({ name, qtyText: null, note: null });
+      continue;
+    }
+
+    // "xxx มี3" / "มี 1 ครึ่ง" / "มี1ถาดครึ่ง"
+    const hasMatch = name.match(/^(.*?)(มี\s*.+)$/u);
+    if (hasMatch && hasMatch[1].trim().length >= 2) {
+      name = hasMatch[1].trim();
+      note = hasMatch[2].trim();
+      qtyText = note;
+    } else {
+      // ชื่อ + ตัวเลขท้าย เช่น เห็ดเข็ม9, ผักบุ้ง5, อังคณา4
+      const numTail = name.match(
+        /^(.*?)(\d+(?:\.\d+)?(?:\s*[+＋]\s*\d+(?:\.\d+)?)?(?:\s*(?:โล|ขีด|มัด|ถุง|ถาด|กก|kg))?)$/iu,
+      );
+      if (numTail && numTail[1].trim().length >= 2) {
+        const before = numTail[1];
+        // กันเคสชื่อจบด้วย * หรือ x ก่อนตัวเลข
+        if (/[x*×]\s*$/i.test(before)) {
+          // keep full as name
+        } else {
+          name = before.trim();
+          qtyText = numTail[2].trim();
+        }
+      }
+    }
+
+    if (!name || name.length < 2) continue;
+    if (/^\d+([:.]\d+)?$/.test(name)) continue;
+
+    out.push({ name, qtyText, note });
+  }
+  return out;
+}
+
+export function normalizePurchaseKey(name: string) {
+  return name
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[.\-_/]/g, "")
+    .replace(/ชิเมจิ|ชิมิจิ/g, "ชิเมจิ")
+    .replace(/อังคณา|อังคนะ|อังคนา|อังคนามี/g, "อังคณา")
+    .replace(/ว่ากาเมะ|วากาเมะ|ส่าหร่ายว่ากาเมะ|สาหร่ายวากาเมะ/g, "วากาเมะ")
+    .replace(/ชีล้อม|ผักชีล้อม/g, "ชีล้อม")
+    .replace(/กาดขาว|ผักกาด/g, "ผักกาด")
+    .replace(/เบคอล|เบคอน/g, "เบคอน")
+    .replace(/ซอสหอย|ซอลหอย/g, "ซอสหอย")
+    .replace(/หมูหั่น|หมูสไลด์|เนื้อหมูสไลด์/g, "หมูสไลด์");
+}

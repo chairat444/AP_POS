@@ -2,7 +2,7 @@
 import { nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 
 const open = defineModel<boolean>("open", { default: false });
-const props = withDefaults(
+withDefaults(
   defineProps<{
     title?: string;
     message?: string;

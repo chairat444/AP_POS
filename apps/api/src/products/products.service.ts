@@ -1,189 +1,386 @@
-import { Injectable, NotFoundException, OnModuleInit } from "@nestjs/common";
-import { mkdirSync, existsSync, readFileSync, writeFileSync, copyFileSync } from "node:fs";
+import {
+  Injectable,
+  NotFoundException,
+  OnModuleInit,
+} from "@nestjs/common";
+import { and, asc, eq, gt, isNull } from "drizzle-orm";
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { ProductRecord, UpsertProductDto } from "./product.types";
+import { pg } from "@ap-pos/db";
+import { DatabaseService } from "../db/database.service";
+import { UnitsService } from "../units/units.service";
+import type {
+  BulkPriceResult,
+  BulkPriceRow,
+  ProductRecord,
+  UpsertProductDto,
+} from "./product.types";
 
-const DATA_DIR = join(process.cwd(), "data");
 const UPLOAD_DIR = join(process.cwd(), "uploads", "products");
-const PRODUCTS_FILE = join(DATA_DIR, "products.json");
+const JSON_SEED = join(process.cwd(), "data", "products.json");
 
-function nowIso() {
-  return new Date().toISOString();
+function now() {
+  return new Date();
+}
+
+function toRecord(row: typeof pg.products.$inferSelect): ProductRecord {
+  return {
+    id: row.id,
+    barcode: row.barcode,
+    productCode: row.productCode ?? undefined,
+    name: row.name,
+    unit: row.unit,
+    costPrice: row.costPrice == null ? null : Number(row.costPrice),
+    price: row.price == null ? null : Number(row.price),
+    isQuick: Boolean(row.isQuick),
+    quickSort: row.quickSort,
+    imageUrl: row.imageUrl,
+    isOpenPrice: Boolean(row.isOpenPrice),
+    openPriceMax: Number(row.openPriceMax ?? 100),
+    active: row.active == null ? true : Boolean(row.active),
+    updatedAt: row.updatedAt.toISOString(),
+  };
 }
 
 @Injectable()
 export class ProductsService implements OnModuleInit {
-  private products: ProductRecord[] = [];
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly units: UnitsService,
+  ) {}
 
-  onModuleInit() {
-    mkdirSync(DATA_DIR, { recursive: true });
+  async onModuleInit() {
     mkdirSync(UPLOAD_DIR, { recursive: true });
-    this.loadOrSeed();
+    const existing = await this.database.db.select().from(pg.products).limit(1);
+    if (existing.length) return;
+    await this.seed();
   }
 
-  private loadOrSeed() {
-    if (existsSync(PRODUCTS_FILE)) {
-      this.products = JSON.parse(readFileSync(PRODUCTS_FILE, "utf8")) as ProductRecord[];
-      return;
+  private async seed() {
+    if (!existsSync(JSON_SEED)) return;
+    const rows = JSON.parse(readFileSync(JSON_SEED, "utf8")) as ProductRecord[];
+    if (!rows.length) return;
+    for (const p of rows) {
+      await this.database.db.insert(pg.products).values({
+        id: p.id,
+        barcode: p.barcode,
+        productCode: p.productCode ?? null,
+        name: p.name,
+        unit: p.unit,
+        costPrice: p.costPrice == null ? null : String(p.costPrice),
+        price: p.price == null ? null : String(p.price),
+        isQuick: p.isQuick ? 1 : 0,
+        quickSort: p.quickSort,
+        imageUrl: p.imageUrl,
+        isOpenPrice: p.isOpenPrice ? 1 : 0,
+        openPriceMax: String(p.openPriceMax ?? 100),
+        active: p.active === false ? 0 : 1,
+        updatedAt: new Date(p.updatedAt),
+        deletedAt: null,
+      });
     }
-    this.products = this.seedProducts();
-    this.persist();
   }
 
-  private persist() {
-    writeFileSync(PRODUCTS_FILE, JSON.stringify(this.products, null, 2), "utf8");
-  }
-
-  private seedProducts(): ProductRecord[] {
-    const seeded: Array<Omit<ProductRecord, "updatedAt"> & { seedImage?: string }> = [
-      { id: "p-00001", barcode: "8850001000011", productCode: "00001", name: "ผักบุ้ง", unit: "มัด", price: 15, isQuick: true, quickSort: 1, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "morning-glory.jpg" },
-      { id: "p-00002", barcode: "8850001000028", productCode: "00002", name: "เห็ดเข็มทอง", unit: "แพ็ค", price: 25, isQuick: true, quickSort: 2, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "enoki.jpg" },
-      { id: "p-00003", barcode: "8850001000035", productCode: "00003", name: "ซี่โครง", unit: "กก.", price: null, isQuick: false, quickSort: 3, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "ribs.jpg" },
-      { id: "p-00004", barcode: "8850001000042", productCode: "00004", name: "สันนอก", unit: "กก.", price: null, isQuick: false, quickSort: 4, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "loin.jpg" },
-      { id: "p-00005", barcode: "8850001000059", productCode: "00005", name: "เต้าหู้ไข่", unit: "แพ็ค", price: 20, isQuick: true, quickSort: 5, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "tofu.jpg" },
-      { id: "p-00006", barcode: "8850001000066", productCode: "00006", name: "หมูเด้ง", unit: "กก.", price: null, isQuick: false, quickSort: 6, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "pork-bounce.jpg" },
-      { id: "p-00007", barcode: "8850001000073", productCode: "00007", name: "ผักกาดขาว", unit: "กก.", price: 35, isQuick: true, quickSort: 7, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "cabbage.jpg" },
-      { id: "p-00008", barcode: "8850001000080", productCode: "00008", name: "ลูกชิ้นหมู", unit: "แพ็ค", price: 45, isQuick: true, quickSort: 8, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "meatball.jpg" },
-      { id: "p-00009", barcode: "8850001000097", productCode: "00009", name: "สามชั้นสไลด์", unit: "กก.", price: null, isQuick: false, quickSort: 9, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "belly.jpg" },
-      { id: "p-00010", barcode: "8850001000103", productCode: "00010", name: "หอยดอง", unit: "ขวด", price: 25, isQuick: true, quickSort: 10, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "mussels.jpg" },
-      { id: "p-00011", barcode: "8850001000110", productCode: "00011", name: "น้ำจิ้มซีฟู้ด", unit: "ขวด", price: 35, isQuick: true, quickSort: 11, imageUrl: null, isOpenPrice: false, openPriceMax: 100, seedImage: "sauce.jpg" },
-      {
-        id: "p-misc",
-        barcode: "MISC",
-        productCode: "99999",
-        name: "สินค้าเบ็ดเตล็ด",
-        unit: "ชิ้น",
-        price: null,
-        isQuick: false,
-        quickSort: 12,
-        imageUrl: null,
-        isOpenPrice: true,
-        openPriceMax: 100,
-        seedImage: "misc.jpg",
-      },
-    ];
-
-    const seedDir = join(process.cwd(), "..", "pos", "src", "renderer", "src", "assets", "products");
-
-    return seeded.map((item) => {
-      const { seedImage, ...rest } = item;
-      let imageUrl: string | null = null;
-      if (seedImage) {
-        const src = join(seedDir, seedImage);
-        const destName = `${rest.id}-${seedImage}`;
-        const dest = join(UPLOAD_DIR, destName);
-        if (existsSync(src)) {
-          copyFileSync(src, dest);
-          imageUrl = `/uploads/products/${destName}`;
-        }
-      }
-      return { ...rest, imageUrl, updatedAt: nowIso() };
-    });
-  }
-
-  list() {
+  async list() {
+    const rows = await this.database.db
+      .select()
+      .from(pg.products)
+      .where(isNull(pg.products.deletedAt))
+      .orderBy(asc(pg.products.quickSort));
     return {
-      products: [...this.products].sort((a, b) => a.quickSort - b.quickSort),
-      syncedAt: nowIso(),
+      products: rows.map(toRecord),
+      syncedAt: now().toISOString(),
     };
   }
 
-  listQuick() {
+  /** สำหรับ POS / sync — เฉพาะสินค้าที่ใช้งาน */
+  async listActive() {
+    const rows = await this.database.db
+      .select()
+      .from(pg.products)
+      .where(
+        and(
+          isNull(pg.products.deletedAt),
+          eq(pg.products.active, 1),
+        ),
+      )
+      .orderBy(asc(pg.products.quickSort));
     return {
-      products: this.products
-        .filter((p) => p.isQuick)
-        .sort((a, b) => a.quickSort - b.quickSort),
-      syncedAt: nowIso(),
+      products: rows.map(toRecord),
+      syncedAt: now().toISOString(),
     };
   }
 
-  /**
-   * หลังบ้านเลือกสินค้าด่วนทั้งแผง
-   * productIds ตามลำดับที่ต้องการโชว์บนจอ — ตัวอื่น isQuick=false
-   * ข้ามสินค้าที่ไม่มีราคาคงที่ / เบ็ดเตล็ด (ต้องสแกนบาร์ราคา)
-   */
-  setQuickBoard(productIds: string[]) {
+  async listQuick() {
+    const rows = await this.database.db
+      .select()
+      .from(pg.products)
+      .where(
+        and(
+          isNull(pg.products.deletedAt),
+          eq(pg.products.active, 1),
+          eq(pg.products.isQuick, 1),
+        ),
+      )
+      .orderBy(asc(pg.products.quickSort));
+    return {
+      products: rows.map(toRecord),
+      syncedAt: now().toISOString(),
+    };
+  }
+
+  /** รหัสสินค้าถัดไป เช่น 00013 (ข้าม 99999) */
+  async nextProductCode() {
+    const rows = await this.database.db
+      .select({ productCode: pg.products.productCode })
+      .from(pg.products);
+    let max = 0;
+    for (const row of rows) {
+      const code = (row.productCode ?? "").trim();
+      if (!/^\d+$/.test(code)) continue;
+      const n = Number(code);
+      if (n >= 99999) continue;
+      if (n > max) max = n;
+    }
+    const next = Math.min(max + 1, 99998);
+    return { productCode: String(next).padStart(5, "0") };
+  }
+
+  async setQuickBoard(productIds: string[]) {
     const order = new Map(productIds.map((id, i) => [id, i + 1]));
-    for (const p of this.products) {
+    const all = await this.database.db.select().from(pg.products);
+    for (const p of all) {
+      if (p.deletedAt) continue;
       const sort = order.get(p.id);
-      if (sort != null && p.price != null && !p.isOpenPrice) {
-        p.isQuick = true;
-        p.quickSort = sort;
+      const price = p.price == null ? null : Number(p.price);
+      const isOpen = Boolean(p.isOpenPrice);
+      const isActive = p.active == null ? true : Boolean(p.active);
+      if (sort != null && price != null && !isOpen && isActive) {
+        await this.database.db
+          .update(pg.products)
+          .set({ isQuick: 1, quickSort: sort, updatedAt: now() })
+          .where(eq(pg.products.id, p.id));
       } else {
-        p.isQuick = false;
-        if (sort != null) {
-          // ขอเป็นด่วนแต่เป็นบาร์ราคา — ไม่ติดธง
-          p.quickSort = sort;
-        }
+        await this.database.db
+          .update(pg.products)
+          .set({
+            isQuick: 0,
+            quickSort: sort ?? p.quickSort,
+            updatedAt: now(),
+          })
+          .where(eq(pg.products.id, p.id));
       }
-      p.updatedAt = nowIso();
     }
-    this.persist();
     return this.listQuick();
   }
 
-  get(id: string) {
-    const product = this.products.find((p) => p.id === id);
-    if (!product) throw new NotFoundException("Product not found");
-    return product;
+  async listSince(since?: string | null) {
+    const rows = await this.database.db
+      .select()
+      .from(pg.products)
+      .where(
+        since
+          ? and(
+              isNull(pg.products.deletedAt),
+              eq(pg.products.active, 1),
+              gt(pg.products.updatedAt, new Date(since)),
+            )
+          : and(isNull(pg.products.deletedAt), eq(pg.products.active, 1)),
+      );
+    return rows.map(toRecord);
   }
 
-  create(dto: UpsertProductDto) {
+  async listDeletedSince(since?: string | null) {
+    const rows = await this.database.db.select().from(pg.products);
+    return rows
+      .filter((r) => r.deletedAt || !r.active)
+      .map((r) => ({
+        id: r.id,
+        updatedAt: (r.deletedAt ?? r.updatedAt).toISOString(),
+      }))
+      .filter((r) => !since || r.updatedAt > since);
+  }
+
+  async get(id: string) {
+    const rows = await this.database.db
+      .select()
+      .from(pg.products)
+      .where(and(eq(pg.products.id, id), isNull(pg.products.deletedAt)))
+      .limit(1);
+    if (!rows[0]) throw new NotFoundException("Product not found");
+    return toRecord(rows[0]);
+  }
+
+  async create(dto: UpsertProductDto) {
     const price = dto.price ?? null;
+    const costPrice = dto.costPrice ?? null;
     const isOpenPrice = dto.isOpenPrice ?? false;
     const wantQuick = dto.isQuick ?? false;
-    const product: ProductRecord = {
-      id: `p-${randomUUID().slice(0, 8)}`,
+    const unit = await this.units.ensureUnit(dto.unit ?? "ชิ้น");
+    const productCode =
+      dto.productCode?.trim() || (await this.nextProductCode()).productCode;
+    const id = `p-${randomUUID().slice(0, 8)}`;
+    await this.database.db.insert(pg.products).values({
+      id,
       barcode: dto.barcode,
-      productCode: dto.productCode,
+      productCode,
       name: dto.name,
-      unit: dto.unit ?? "ชิ้น",
-      price,
-      isQuick: wantQuick && price != null && !isOpenPrice,
+      unit,
+      costPrice: costPrice == null ? null : String(costPrice),
+      price: price == null ? null : String(price),
+      isQuick: wantQuick && price != null && !isOpenPrice ? 1 : 0,
       quickSort: dto.quickSort ?? 999,
       imageUrl: dto.imageUrl ?? null,
-      isOpenPrice,
-      openPriceMax: dto.openPriceMax ?? 100,
-      updatedAt: nowIso(),
-    };
-    this.products.push(product);
-    this.persist();
-    return product;
+      isOpenPrice: isOpenPrice ? 1 : 0,
+      openPriceMax: String(dto.openPriceMax ?? 100),
+      active: dto.active === false ? 0 : 1,
+      updatedAt: now(),
+      deletedAt: null,
+    });
+    return this.get(id);
   }
 
-  update(id: string, dto: Partial<UpsertProductDto>) {
-    const idx = this.products.findIndex((p) => p.id === id);
-    if (idx < 0) throw new NotFoundException("Product not found");
-    const current = this.products[idx];
-    const next: ProductRecord = {
-      ...current,
-      ...dto,
-      unit: dto.unit ?? current.unit,
-      updatedAt: nowIso(),
-    };
-    // สินค้าบาร์ราคา / เบ็ดเตล็ด ห้ามเป็นสินค้าด่วน
-    if (next.price == null || next.isOpenPrice) {
-      next.isQuick = false;
+  async update(id: string, dto: Partial<UpsertProductDto>) {
+    const current = await this.get(id);
+    const nextPrice = dto.price === undefined ? current.price : dto.price;
+    const nextCost =
+      dto.costPrice === undefined ? current.costPrice : dto.costPrice;
+    const nextOpen = dto.isOpenPrice ?? current.isOpenPrice;
+    const nextActive = dto.active ?? current.active;
+    let nextQuick = dto.isQuick ?? current.isQuick;
+    if (nextPrice == null || nextOpen || !nextActive) nextQuick = false;
+    const unit =
+      dto.unit === undefined
+        ? current.unit
+        : await this.units.ensureUnit(dto.unit);
+    await this.database.db
+      .update(pg.products)
+      .set({
+        barcode: dto.barcode ?? current.barcode,
+        productCode: dto.productCode ?? current.productCode ?? null,
+        name: dto.name ?? current.name,
+        unit,
+        costPrice: nextCost == null ? null : String(nextCost),
+        price: nextPrice == null ? null : String(nextPrice),
+        isQuick: nextQuick ? 1 : 0,
+        quickSort: dto.quickSort ?? current.quickSort,
+        imageUrl: dto.imageUrl === undefined ? current.imageUrl : dto.imageUrl,
+        isOpenPrice: nextOpen ? 1 : 0,
+        openPriceMax: String(dto.openPriceMax ?? current.openPriceMax),
+        active: nextActive ? 1 : 0,
+        updatedAt: now(),
+      })
+      .where(eq(pg.products.id, id));
+    return this.get(id);
+  }
+
+  /** อัปเดตราคาทุน/ขายเป็นชุด — จับคู่ barcode ก่อน แล้วค่อย productCode */
+  async bulkUpdatePrices(rows: BulkPriceRow[]): Promise<BulkPriceResult> {
+    const products = (await this.list()).products;
+    const byBarcode = new Map<string, ProductRecord>();
+    const byCode = new Map<string, ProductRecord>();
+    for (const p of products) {
+      const bc = p.barcode.trim();
+      if (bc && !byBarcode.has(bc)) byBarcode.set(bc, p);
+      const code = (p.productCode ?? "").trim();
+      if (code && !byCode.has(code)) byCode.set(code, p);
     }
-    this.products[idx] = next;
-    this.persist();
-    return next;
+
+    let updated = 0;
+    let skipped = 0;
+    const notFound: string[] = [];
+
+    for (const row of rows) {
+      const barcode = row.barcode?.trim() ?? "";
+      const productCode = row.productCode?.trim() ?? "";
+      const hasCost = Object.prototype.hasOwnProperty.call(row, "costPrice");
+      const hasPrice = Object.prototype.hasOwnProperty.call(row, "price");
+      if (!hasCost && !hasPrice) {
+        skipped += 1;
+        continue;
+      }
+
+      const found =
+        (barcode ? byBarcode.get(barcode) : undefined) ??
+        (productCode ? byCode.get(productCode) : undefined);
+
+      if (!found) {
+        notFound.push(barcode || productCode || "(ว่าง)");
+        continue;
+      }
+
+      const patch: Partial<UpsertProductDto> = {};
+      if (hasCost) {
+        const v = row.costPrice;
+        patch.costPrice =
+          v == null || (typeof v === "number" && !Number.isFinite(v))
+            ? null
+            : Math.round(Number(v) * 100) / 100;
+      }
+      if (hasPrice) {
+        const v = row.price;
+        patch.price =
+          v == null || (typeof v === "number" && !Number.isFinite(v))
+            ? null
+            : Math.round(Number(v) * 100) / 100;
+      }
+
+      await this.update(found.id, patch);
+      updated += 1;
+    }
+
+    return { updated, skipped, notFound };
   }
 
-  setImage(id: string, filename: string) {
-    const product = this.get(id);
-    product.imageUrl = `/uploads/products/${filename}`;
-    product.updatedAt = nowIso();
-    this.persist();
-    return product;
+  async setImage(id: string, filename: string) {
+    const current = await this.get(id);
+    await this.database.db
+      .update(pg.products)
+      .set({
+        imageUrl: `/uploads/products/${filename}`,
+        updatedAt: now(),
+      })
+      .where(eq(pg.products.id, id));
+    // ลบไฟล์เก่าถ้าอยู่ใต้ /uploads/products/
+    if (current.imageUrl?.startsWith("/uploads/products/")) {
+      const old = join(process.cwd(), current.imageUrl.replace(/^\//, ""));
+      if (existsSync(old) && !old.endsWith(filename)) {
+        try {
+          unlinkSync(old);
+        } catch {
+          // ignore
+        }
+      }
+    }
+    return this.get(id);
   }
 
-  remove(id: string) {
-    const idx = this.products.findIndex((p) => p.id === id);
-    if (idx < 0) throw new NotFoundException("Product not found");
-    const [removed] = this.products.splice(idx, 1);
-    this.persist();
-    return removed;
+  async clearImage(id: string) {
+    const current = await this.get(id);
+    await this.database.db
+      .update(pg.products)
+      .set({ imageUrl: null, updatedAt: now() })
+      .where(eq(pg.products.id, id));
+    if (current.imageUrl?.startsWith("/uploads/products/")) {
+      const old = join(process.cwd(), current.imageUrl.replace(/^\//, ""));
+      if (existsSync(old)) {
+        try {
+          unlinkSync(old);
+        } catch {
+          // ignore
+        }
+      }
+    }
+    return this.get(id);
+  }
+
+  async remove(id: string) {
+    const current = await this.get(id);
+    await this.database.db
+      .update(pg.products)
+      .set({ deletedAt: now(), updatedAt: now() })
+      .where(eq(pg.products.id, id));
+    return current;
   }
 }

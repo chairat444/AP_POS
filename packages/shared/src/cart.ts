@@ -10,6 +10,13 @@ export type CartLine = {
   lineTotal: number;
 };
 
+/** สรุปช่องทางชำระบนจอลูกค้า */
+export type CartPaymentLine = {
+  method: string;
+  label: string;
+  amount: number;
+};
+
 export type CartSnapshot = {
   lines: CartLine[];
   itemCount: number;
@@ -19,6 +26,19 @@ export type CartSnapshot = {
   change: number;
   memberName?: string;
   memberPoints?: number;
+  /** แต้มที่ใช้เป็นส่วนลดได้ตอนนี้ (หักที่ใช้ไปในบิลแล้ว) */
+  pointsUsable?: number;
+  /** แต้มที่จะได้จากบิลนี้ */
+  pointsToEarn?: number;
+  /** ส่วนลดจากแต้ม (บาท) — ให้จอลูกค้าคำนวณฐานได้แต้มให้ตรง */
+  pointsDiscount?: number;
+  /** กำลังเปิดหน้าชำระเงิน */
+  paying?: boolean;
+  paid?: number;
+  remaining?: number;
+  paymentLines?: CartPaymentLine[];
+  /** หลังจบบิล — ค้างรายการบนจอลูกค้าชั่วคราว */
+  postPaid?: boolean;
 };
 
 export function recalcLine(line: Omit<CartLine, "lineTotal">): CartLine {

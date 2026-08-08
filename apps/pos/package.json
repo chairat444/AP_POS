@@ -1,22 +1,35 @@
 {
   "name": "@ap-pos/pos",
+  "productName": "AP POS",
+  "description": "AP หมูสด POS (offline-first)",
+  "author": "AP หมูสด",
   "version": "0.1.0",
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
+    "brand:electron": "node ./scripts/brand-electron.mjs",
+    "predev": "node ./scripts/brand-electron.mjs",
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json"
+    "typecheck": "vue-tsc --noEmit -p tsconfig.web.json",
+    "postinstall": "node ./scripts/brand-electron.mjs",
+    "seed:export": "node ./scripts/export-offline-seed.mjs",
+    "dist": "pnpm build && electron-builder --config electron-builder.yml",
+    "dist:win": "pnpm build && electron-builder --config electron-builder.yml --win",
+    "dist:mac": "pnpm build && electron-builder --config electron-builder.yml --mac",
+    "dist:dir": "pnpm build && electron-builder --config electron-builder.yml --dir"
   },
   "dependencies": {
     "@ap-pos/shared": "workspace:*",
     "pinia": "^2.3.1",
+    "sql.js": "^1.14.1",
     "vue": "^3.5.13"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
     "electron": "^34.0.1",
+    "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "typescript": "^5.7.3",
     "vite": "^5.4.11",

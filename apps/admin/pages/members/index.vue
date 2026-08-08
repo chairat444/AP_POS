@@ -1,0 +1,349 @@
+<script setup lang="ts">
+import { paginateItems } from "~/utils/pagination";
+
+type Member = {
+  id: string;
+  code: string;
+  name: string;
+  phone?: string;
+  points: number;
+};
+
+type MemberForm = {
+  code: string;
+  name: string;
+  phone: string;
+  points: string;
+};
+
+const emptyForm = (): MemberForm => ({
+  code: "",
+  name: "",
+  phone: "",
+  points: "0",
+});
+
+const { get, post, patch, del } = useAdminApi();
+const { askConfirm } = useConfirmDialog();
+const pending = ref(false);
+const saving = ref(false);
+const error = ref("");
+const q = ref("");
+const sortKey = ref<"points" | "name" | "code" | "phone">("points");
+const sortDir = ref<"desc" | "asc">("desc");
+const rows = ref<Member[]>([]);
+const modalOpen = ref(false);
+const editingId = ref<string | null>(null);
+const form = ref<MemberForm>(emptyForm());
+
+const filtered = computed(() => {
+  const s = q.value.trim().toLowerCase();
+  const digits = s.replace(/\D/g, "");
+  let list = !s
+    ? [...rows.value]
+    : rows.value.filter((m) => {
+        const phone = (m.phone ?? "").replace(/\D/g, "");
+        return (
+          m.name.toLowerCase().includes(s) ||
+          m.code.toLowerCase().includes(s) ||
+          (digits.length > 0 && phone.includes(digits)) ||
+          (m.phone ?? "").includes(s)
+        );
+      });
+
+  const dir = sortDir.value === "asc" ? 1 : -1;
+  list.sort((a, b) => {
+    if (sortKey.value === "points") {
+      return (a.points - b.points) * dir;
+    }
+    if (sortKey.value === "phone") {
+      return (a.phone ?? "").localeCompare(b.phone ?? "", "th") * dir;
+    }
+    if (sortKey.value === "code") {
+      return a.code.localeCompare(b.code, "th", { numeric: true }) * dir;
+    }
+    return a.name.localeCompare(b.name, "th") * dir;
+  });
+  return list;
+});
+
+const page = ref(1);
+const perPage = ref(20);
+const paged = computed(() =>
+  paginateItems(filtered.value, page.value, perPage.value),
+);
+const pageRows = computed(() => paged.value.rows);
+const meta = computed(() => paged.value.meta);
+
+watch([q, sortKey, sortDir], () => {
+  page.value = 1;
+});
+
+function toggleSort(key: typeof sortKey.value) {
+  if (sortKey.value === key) {
+    sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
+  } else {
+    sortKey.value = key;
+    sortDir.value = key === "points" ? "desc" : "asc";
+  }
+}
+
+function sortMark(key: typeof sortKey.value) {
+  if (sortKey.value !== key) return "";
+  return sortDir.value === "asc" ? " ↑" : " ↓";
+}
+
+function onPageChange(payload: { page: number; per_page: number }) {
+  page.value = payload.page;
+  perPage.value = payload.per_page;
+}
+
+async function load() {
+  pending.value = true;
+  error.value = "";
+  try {
+    const data = await get<{ members: Member[] }>("/members");
+    rows.value = data.members ?? [];
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "โหลดสมาชิกไม่สำเร็จ";
+  } finally {
+    pending.value = false;
+  }
+}
+
+async function openCreate() {
+  editingId.value = null;
+  form.value = emptyForm();
+  try {
+    const next = await get<{ code: string }>("/members/next-code");
+    form.value.code = next.code;
+  } catch {
+    // server จะออกเลขให้อีกทีตอนบันทึก
+  }
+  modalOpen.value = true;
+}
+
+function openEdit(row: Member) {
+  editingId.value = row.id;
+  form.value = {
+    code: row.code,
+    name: row.name,
+    phone: row.phone ?? "",
+    points: String(row.points ?? 0),
+  };
+  modalOpen.value = true;
+}
+
+function closeModal() {
+  modalOpen.value = false;
+}
+
+async function save() {
+  if (!form.value.name.trim()) {
+    error.value = "กรุณากรอกชื่อสมาชิก";
+    return;
+  }
+  saving.value = true;
+  error.value = "";
+  try {
+    const body = {
+      code: form.value.code.trim() || undefined,
+      name: form.value.name.trim(),
+      phone: form.value.phone.trim(),
+      points: Math.max(0, Math.floor(Number(form.value.points) || 0)),
+    };
+    if (editingId.value) {
+      await patch(`/members/${editingId.value}`, body);
+    } else {
+      await post("/members", body);
+    }
+    closeModal();
+    await load();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "บันทึกไม่สำเร็จ";
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function remove(row: Member) {
+  const ok = await askConfirm({
+    title: "ลบสมาชิก",
+    message: `ต้องการลบ 「${row.name}」 ใช่หรือไม่?`,
+    detail: row.code ? `รหัส ${row.code}` : undefined,
+    confirmLabel: "ลบสมาชิก",
+  });
+  if (!ok) return;
+  saving.value = true;
+  error.value = "";
+  try {
+    await del(`/members/${row.id}`);
+    await load();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "ลบไม่สำเร็จ";
+  } finally {
+    saving.value = false;
+  }
+}
+
+onMounted(load);
+</script>
+
+<template>
+  <div>
+    <div class="ui-page-head">
+      <div>
+        <h1 class="ui-page-title">สมาชิก</h1>
+        <p class="ui-page-sub">เพิ่ม แก้ไข ลบ และปรับแต้มที่ส่วนกลาง</p>
+      </div>
+      <div class="ui-page-head__actions">
+        <button type="button" class="ui-btn ui-btn--ghost" :disabled="pending" @click="load">
+          {{ pending ? "กำลังโหลด..." : "รีเฟรช" }}
+        </button>
+        <NuxtLink to="/members/points" class="ui-btn ui-btn--ghost">ประวัติแต้ม</NuxtLink>
+        <button type="button" class="ui-btn ui-btn--primary" @click="openCreate">
+          + เพิ่มสมาชิก
+        </button>
+      </div>
+    </div>
+
+    <div v-if="error && !modalOpen" class="ui-empty">{{ error }}</div>
+
+    <div class="ui-card">
+      <div class="ui-card__toolbar">
+        <div class="ui-toolbar-search">
+          <span class="ui-toolbar-search__meta">
+            สมาชิก {{ meta.total }} รายการ
+            · เรียงตาม
+            {{
+              sortKey === "points"
+                ? "แต้ม"
+                : sortKey === "name"
+                  ? "ชื่อ"
+                  : sortKey === "code"
+                    ? "รหัส"
+                    : "เบอร์"
+            }}
+            {{ sortDir === "desc" ? "มาก→น้อย" : "น้อย→มาก" }}
+          </span>
+          <div class="ui-toolbar-search__controls">
+            <input
+              v-model="q"
+              class="ui-input"
+              type="search"
+              placeholder="ค้นหาชื่อ / รหัส / เบอร์..."
+              aria-label="ค้นหาสมาชิก"
+            />
+          </div>
+        </div>
+      </div>
+      <div v-if="pending && !rows.length" class="ui-empty">กำลังโหลด...</div>
+      <div v-else-if="!pageRows.length" class="ui-empty">ไม่พบข้อมูล</div>
+      <div v-else class="ui-table-wrap">
+        <table class="ui-table ui-table--fit">
+          <thead>
+            <tr>
+              <th>
+                <button type="button" class="ui-th-sort" @click="toggleSort('code')">
+                  รหัส{{ sortMark("code") }}
+                </button>
+              </th>
+              <th>
+                <button type="button" class="ui-th-sort" @click="toggleSort('name')">
+                  ชื่อ{{ sortMark("name") }}
+                </button>
+              </th>
+              <th>
+                <button type="button" class="ui-th-sort" @click="toggleSort('phone')">
+                  เบอร์{{ sortMark("phone") }}
+                </button>
+              </th>
+              <th>
+                <button type="button" class="ui-th-sort" @click="toggleSort('points')">
+                  แต้ม{{ sortMark("points") }}
+                </button>
+              </th>
+              <th class="ui-table__actions">จัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="row in pageRows" :key="row.id">
+              <td>{{ row.code }}</td>
+              <td>{{ row.name }}</td>
+              <td>{{ row.phone || "-" }}</td>
+              <td>
+                <strong>{{ row.points.toLocaleString("th-TH") }}</strong>
+              </td>
+              <td class="ui-table__actions">
+                <NuxtLink
+                  :to="`/members/points?id=${row.id}&q=${encodeURIComponent(row.phone || row.code)}`"
+                  class="ui-btn ui-btn--ghost"
+                >
+                  ประวัติแต้ม
+                </NuxtLink>
+                <button type="button" class="ui-btn ui-btn--ghost" @click="openEdit(row)">
+                  แก้ไข
+                </button>
+                <button
+                  type="button"
+                  class="ui-btn ui-btn--ghost-danger"
+                  :disabled="saving"
+                  @click="remove(row)"
+                >
+                  ลบ
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <UiPagination :meta="meta" @change="onPageChange" />
+    </div>
+
+    <div v-if="modalOpen" class="ui-modal">
+      <div class="ui-modal__panel" role="dialog" aria-modal="true">
+        <div class="ui-modal__head">
+          <h2>{{ editingId ? "แก้ไขสมาชิก" : "เพิ่มสมาชิก" }}</h2>
+          <button class="ui-icon-btn" type="button" @click="closeModal">×</button>
+        </div>
+        <div class="ui-modal__body">
+          <div class="ui-form-grid">
+            <label class="ui-field">
+              <span>รหัสสมาชิก (ออโต้)</span>
+              <input
+                v-model="form.code"
+                class="ui-input"
+                type="text"
+                readonly
+                title="ออกเลขอัตโนมัติ"
+              />
+            </label>
+            <label class="ui-field">
+              <span>ชื่อ *</span>
+              <input v-model="form.name" class="ui-input" type="text" />
+            </label>
+            <label class="ui-field">
+              <span>เบอร์โทร</span>
+              <input v-model="form.phone" class="ui-input" type="text" />
+            </label>
+            <label class="ui-field">
+              <span>แต้ม</span>
+              <input v-model="form.points" class="ui-input" type="number" min="0" step="1" />
+            </label>
+          </div>
+        </div>
+        <div class="ui-modal__foot">
+          <button type="button" class="ui-btn ui-btn--ghost" @click="closeModal">ยกเลิก</button>
+          <button
+            type="button"
+            class="ui-btn ui-btn--primary"
+            :disabled="saving"
+            @click="save"
+          >
+            {{ saving ? "กำลังบันทึก..." : "บันทึก" }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>

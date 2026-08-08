@@ -1,0 +1,48 @@
+appId: th.ap.pos
+productName: AP POS
+copyright: Copyright © AP หมูสด
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+  - node_modules/sql.js/**/*
+asar: true
+extraResources:
+  - from: resources/seed
+    to: seed
+    filter:
+      - "**/*"
+  - from: resources/icon.png
+    to: icon.png
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.png
+  artifactName: ${productName}-Setup-${version}.${ext}
+  # ไม่ sign — กัน error symlink winCodeSign บน Windows ที่ไม่มี Developer Mode
+  signAndEditExecutable: false
+  forceCodeSigning: false
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: AP POS
+  installerLanguages:
+    - th_TH
+    - en_US
+  language: 1054
+mac:
+  target:
+    - dmg
+  icon: resources/icon.icns
+  category: public.app-category.business
+  artifactName: ${productName}-${version}.${ext}
+linux:
+  target:
+    - AppImage
+  category: Office

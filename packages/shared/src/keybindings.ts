@@ -1,8 +1,8 @@
 /**
- * คีย์ลัด POS — ค่าเริ่มต้น + โครงที่หลังบ้านส่งทับได้
+ * คีย์ลัด POS — ค่าเริ่มต้น + หลังบ้านส่งทับได้
  *
- * หลังบ้าน (อนาคต) ส่งประมาณ:
- *   { keybindings: { open_payment: [{ key: "F12" }], confirm_payment: [{ key: "Home" }] } }
+ * Admin ส่ง:
+ *   { keybindings: { member: [{ key: "F2" }], open_payment: [{ key: "Home" }] } }
  * คีย์ที่ไม่ได้ส่งมาใช้ค่า DEFAULT
  */
 
@@ -31,6 +31,52 @@ export type PosActionId =
   | "close_shift"
   | "open_shift";
 
+/** ปุ่ม/คีย์ลัดหน้าขาย (แถบล่าง + ที่เกี่ยวข้อง) */
+export const SALE_SCREEN_ACTION_IDS = [
+  "open_shift",
+  "member",
+  "void_line",
+  "product_search",
+  "hold_bill",
+  "recall_bill",
+  "cash_in",
+  "cash_out",
+  "float_count",
+  "sale_summary",
+  "cancel_bill",
+  "open_payment",
+  "close_shift",
+] as const satisfies readonly PosActionId[];
+
+export type SaleScreenActionId = (typeof SALE_SCREEN_ACTION_IDS)[number];
+
+/** ชื่อภาษาไทยสำหรับ Admin */
+export const POS_ACTION_LABELS_TH: Record<PosActionId, string> = {
+  open_payment: "ชำระเงิน",
+  confirm_payment: "ยืนยันชำระ",
+  pay_cash: "จ่ายเงินสด",
+  pay_transfer: "จ่ายโอน",
+  pay_government: "จ่ายสวัสดิการ",
+  pay_points: "จ่ายแต้ม",
+  fill_exact: "เติมยอดพอดี",
+  fill_round_100: "ปัดขึ้น 100",
+  clear_amount: "ล้างยอด",
+  remove_last_payment: "ลบรายการจ่ายล่าสุด",
+  cancel_payment: "ยกเลิกหน้าชำระ",
+  member: "ลูกค้า",
+  hold_bill: "พักบิล",
+  recall_bill: "เรียกบิลพัก",
+  cancel_bill: "ยกเลิกบิล",
+  void_line: "ยกเลิกรายการ",
+  product_search: "ค้นหาสินค้า",
+  sale_summary: "สรุปการขาย",
+  float_count: "นับเงินทอน",
+  cash_in: "นำเงินเข้า",
+  cash_out: "นำเงินออก",
+  close_shift: "ปิดรอบ",
+  open_shift: "เปิดรอบ",
+};
+
 export type KeyChord = {
   /** ค่าจาก KeyboardEvent.key เช่น "Home", "F3", "Enter" */
   key: string;
@@ -52,7 +98,8 @@ export const DEFAULT_KEYBINDINGS: Record<PosActionId, KeyChord[]> = {
   open_payment: [{ key: "Home" }],
   confirm_payment: [{ key: "Home" }],
   pay_cash: [{ key: "F12" }, { key: "Enter" }],
-  pay_transfer: [{ key: "F11" }],
+  // F11 โดน macOS (Show Desktop) แย่งบ่อย — มี Ctrl+F11 สำรอง
+  pay_transfer: [{ key: "F11" }, { key: "F11", ctrl: true }],
   pay_government: [{ key: "F10" }],
   pay_points: [{ key: "F9" }],
   fill_exact: [{ key: "+" }, { key: "=" }, { key: "Insert" }],
@@ -99,6 +146,38 @@ export function mergeKeybindings(
     next[action] = chords.map(normalizeChord);
   }
   return next;
+}
+
+/** ทำความสะอาด payload จาก Admin/API */
+export function sanitizeKeybindingMap(
+  raw: unknown,
+): KeybindingMap {
+  if (!raw || typeof raw !== "object") return {};
+  const out: KeybindingMap = {};
+  const known = new Set(Object.keys(DEFAULT_KEYBINDINGS) as PosActionId[]);
+  for (const [action, chords] of Object.entries(
+    raw as Record<string, unknown>,
+  )) {
+    if (!known.has(action as PosActionId)) continue;
+    if (!Array.isArray(chords) || !chords.length) continue;
+    const list: KeyChord[] = [];
+    for (const c of chords) {
+      if (!c || typeof c !== "object") continue;
+      const key = String((c as KeyChord).key || "").trim();
+      if (!key) continue;
+      list.push(
+        normalizeChord({
+          key,
+          ctrl: Boolean((c as KeyChord).ctrl),
+          shift: Boolean((c as KeyChord).shift),
+          alt: Boolean((c as KeyChord).alt),
+          meta: Boolean((c as KeyChord).meta),
+        }),
+      );
+    }
+    if (list.length) out[action as PosActionId] = list;
+  }
+  return out;
 }
 
 export function eventMatchesChord(e: KeyboardEvent, chord: KeyChord): boolean {

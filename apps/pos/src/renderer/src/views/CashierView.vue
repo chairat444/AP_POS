@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useCartStore } from "../stores/cart";
+import { useMembersStore } from "../stores/members";
 import { useSessionStore } from "../stores/session";
 import { useSettingsStore } from "../stores/settings";
 import PaymentModal from "../components/PaymentModal.vue";
@@ -15,10 +16,70 @@ import ProductSearchModal from "../components/ProductSearchModal.vue";
 import HoldRecallModal from "../components/HoldRecallModal.vue";
 import ConfirmModal from "../components/ConfirmModal.vue";
 import StaffAlert from "../components/StaffAlert.vue";
+import SaleSummaryModal from "../components/SaleSummaryModal.vue";
+import {
+  applyPrinterConfigFromTerminal,
+  cacheLocalProductImages,
+  ensureProductImagesFromPull,
+  ensureSettingsMediaCached,
+  getDeviceConfig,
+  loadCachedMembers,
+  loadCachedProducts,
+  loadCachedPromos,
+  loadCachedSettings,
+  loadMediaIndex,
+  loadTerminals,
+  mediaCacheEpoch,
+  pendingOutboxCount,
+  resolveImage,
+  syncPullMasterData,
+  syncPushOutbox,
+} from "../services/sync";
+import { formatMoney } from "../utils/format";
+import fallbackLogo from "../assets/store-logo.png";
+import { PLACEHOLDER_IMAGE } from "../data/demo-products";
 
+/** ชื่อบนปุ่มด่วน — ตัดหน่วยท้าย อนุญาตยาวขึ้น (ขึ้นบรรทัดใหม่ใน CSS) */
+function shortQuickName(name: string, max = 22) {
+  let s = String(name || "").trim();
+  s = s
+    .replace(
+      /\s*[-–—]?\s*\d+([.,]\d+)?\s*(ml|มล\.?|g|กรัม|kg|กก\.?|ลิตร|ชิ้น|แพ็ค|ฟอง)\s*$/iu,
+      "",
+    )
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!s) s = String(name || "").trim();
+  if (s.length <= max) return s;
+  return `${s.slice(0, Math.max(1, max - 1))}…`;
+}
 const cart = useCartStore();
+const members = useMembersStore();
 const session = useSessionStore();
 const settings = useSettingsStore();
+const {
+  storeName,
+  storeTagline,
+  logoUrl,
+} = storeToRefs(settings);
+
+const brandLogoSrc = computed(() => {
+  void mediaCacheEpoch.value;
+  return resolveImage(logoUrl.value, fallbackLogo);
+});
+
+/** รูปสินค้าด่วน — อ่าน cache ใหม่เมื่อ mediaCacheEpoch เปลี่ยน */
+function productThumb(url: string | null | undefined) {
+  void mediaCacheEpoch.value;
+  return resolveImage(url, PLACEHOLDER_IMAGE);
+}
+
+function onThumbError(e: Event) {
+  const el = e.target as HTMLImageElement | null;
+  if (!el || el.dataset.fallback === "1") return;
+  el.dataset.fallback = "1";
+  el.src = PLACEHOLDER_IMAGE;
+}
 const {
   lines,
   summary,
@@ -26,22 +87,27 @@ const {
   statusMessage,
   revision,
   appliedPromos,
-  billDiscount,
+  pointsDiscount,
+  manualDiscount,
   memberName,
   memberPoints,
   memberId,
+  pointsRedeemedPts,
+  pointsToEarnPreview,
   pendingQty,
   heldBills,
   lastChange,
 } = storeToRefs(cart);
-const { isOpen, staff, floatCounted, summary: shiftSummary } = storeToRefs(session);
+const { isOpen, staff, floatCounted, summary: shiftSummary, device, exiting } =
+  storeToRefs(session);
 
 const scanBuffer = ref("");
 const scanInput = ref<HTMLInputElement | null>(null);
 const cartScroller = ref<HTMLElement | null>(null);
 const selectedIndex = ref(-1);
 const quickPage = ref(0);
-const pageSize = 10;
+/** 8×2 = 16/หน้า — ช่องใกล้ 1:1 ให้รูปเต็ม */
+const pageSize = 16;
 
 const payOpen = ref(false);
 const openShiftOpen = ref(false);
@@ -54,6 +120,7 @@ const memberOpen = ref(false);
 const memberOpenBlockUntil = ref(0);
 const productSearchOpen = ref(false);
 const holdOpen = ref(false);
+const summaryOpen = ref(false);
 const holdMode = ref<"hold" | "recall">("hold");
 const confirmOpen = ref(false);
 const confirmKind = ref<"bill" | "line">("bill");
@@ -63,6 +130,114 @@ const alertOpen = ref(false);
 const alertTitle = ref("แจ้งเตือน");
 const alertMessage = ref("");
 const alertHint = ref("");
+let syncTimer: number | undefined;
+let unsubCloseBlocked: (() => void) | undefined;
+
+watch(exiting, (v) => {
+  if (v) openShiftOpen.value = false;
+});
+
+watch(
+  isOpen,
+  (open) => {
+    window.apPos?.setShiftOpen?.(open);
+  },
+  { immediate: true },
+);
+
+async function runBackgroundSync() {
+  try {
+    const pull = await syncPullMasterData();
+    await Promise.all([
+      session.refreshStaffDirectory(),
+      session.refreshDevice(),
+    ]);
+    // ดึงค่าใบเสร็จจาก Admin (ตามเครื่องที่ผูก) — ไม่ให้ตั้งที่ POS
+    try {
+      const dev = await getDeviceConfig();
+      const terminals = await loadTerminals(dev.branchId);
+      const mine = terminals.find((t) => t.id === dev.terminalId);
+      if (mine) await applyPrinterConfigFromTerminal(mine);
+    } catch {
+      /* offline */
+    }
+    // สื่อไม่ค่อยเปลี่ยน — แคชเฉพาะเมื่อ settings/รูปสินค้าใน pull เปลี่ยน หรือยังขาดในเครื่อง
+    if (pull.settings) {
+      await ensureSettingsMediaCached(pull.settings);
+    }
+    if (pull.products.length) {
+      await ensureProductImagesFromPull(pull.products);
+    }
+    if (pull.products.length || pull.removedProductIds.length) {
+      cart.setCatalog(await loadCachedProducts(), "api");
+    }
+    if (pull.members.length || pull.removedMemberIds.length) {
+      await members.replaceAll(await loadCachedMembers());
+      if (memberId.value) {
+        const latest = members.findById(memberId.value);
+        if (latest) cart.setMember(latest);
+      }
+    }
+    if (pull.promos?.length || pull.removedPromoIds?.length) {
+      const promos = await loadCachedPromos();
+      cart.setPromos(
+        promos.map((p) => ({
+          id: p.id,
+          productCode: p.productCode,
+          buyQty: p.buyQty,
+          payAmount: p.payAmount,
+          label: p.label,
+        })),
+      );
+    } else if (pull.promos && !pull.promos.length) {
+      const promos = await loadCachedPromos();
+      if (promos.length) {
+        cart.setPromos(
+          promos.map((p) => ({
+            id: p.id,
+            productCode: p.productCode,
+            buyQty: p.buyQty,
+            payAmount: p.payAmount,
+            label: p.label,
+          })),
+        );
+      }
+    }
+    if (
+      pull.settings?.points ||
+      pull.settings?.display ||
+      pull.settings?.branding ||
+      pull.settings?.customerAds ||
+      pull.settings?.keybindings
+    ) {
+      settings.applyFromBackend({
+        points: pull.settings.points,
+        display: pull.settings.display,
+        branding: pull.settings.branding,
+        customerAds: pull.settings.customerAds,
+        keybindings: pull.settings.keybindings,
+      });
+    }
+    // ส่งไปจอ 2 ทุกครั้งหลัง sync — กันโฆษณาค้างเวอร์ชันเก่า
+    settings.publishSettingsToCustomer();
+    await syncPushOutbox();
+    if (window.apPos?.db?.purgeSyncedSales) {
+      await window.apPos.db.purgeSyncedSales();
+    }
+    const pending = await pendingOutboxCount();
+    if (pending > 0) {
+      statusMessage.value = `มีบิลรอ sync ${pending} รายการ`;
+    }
+  } catch {
+    // offline — ใช้สื่อจากดิสก์ที่มีอยู่แล้ว ไม่ดึงซ้ำ
+    try {
+      await loadMediaIndex();
+      cart.setCatalog(await loadCachedProducts(), cart.catalogSource);
+    } catch {
+      /* ignore */
+    }
+  }
+}
 
 function showAlert(title: string, message: string, hint = "") {
   alertTitle.value = title;
@@ -73,10 +248,8 @@ function showAlert(title: string, message: string, hint = "") {
 }
 
 const today = new Date().toLocaleDateString("th-TH");
-const billNo = computed(() => {
-  const n = String((session.sales?.length ?? 0) + 1).padStart(6, "0");
-  return `S2607-001-${n}`;
-});
+void session.refreshDevice();
+const billNo = computed(() => session.previewBillNo());
 
 const anyModalOpen = computed(
   () =>
@@ -88,6 +261,7 @@ const anyModalOpen = computed(
     memberOpen.value ||
     productSearchOpen.value ||
     holdOpen.value ||
+    summaryOpen.value ||
     confirmOpen.value ||
     alertOpen.value,
 );
@@ -98,14 +272,14 @@ const confirmTitle = computed(() =>
 
 const confirmMessage = computed(() => {
   if (confirmKind.value === "bill") {
-    return `ยกเลิกบิลนี้ทั้งหมด ${lines.value.length} รายการ · ยอด ${summary.value.total.toFixed(2)} บาท?`;
+    return `ยกเลิกบิลนี้ทั้งหมด ${lines.value.length} รายการ · ยอด ${formatMoney(summary.value.total)} บาท?`;
   }
   const line =
     pendingVoidIndex.value >= 0
       ? lines.value[pendingVoidIndex.value]
       : lines.value[lines.value.length - 1];
   if (!line) return "ยกเลิกรายการนี้?";
-  return `ยกเลิก “${line.name}” ×${line.qty} · ${line.lineTotal.toFixed(2)} บาท?`;
+  return `ยกเลิก “${line.name}” ×${line.qty} · ${formatMoney(line.lineTotal)} บาท?`;
 });
 
 const confirmLabel = computed(() =>
@@ -119,6 +293,10 @@ const quickPageCount = computed(() =>
 const pagedQuick = computed(() => {
   const start = quickPage.value * pageSize;
   return quickTiles.value.slice(start, start + pageSize);
+});
+
+watch(quickPageCount, (n) => {
+  if (quickPage.value > n - 1) quickPage.value = Math.max(0, n - 1);
 });
 
 const selectedLine = computed(() =>
@@ -135,6 +313,7 @@ type ActionBtn = {
 
 function requireShift(): boolean {
   if (isOpen.value) return true;
+  if (exiting.value) return false;
   showAlert(
     "ยังไม่ได้เปิดรอบ",
     "ต้องเปิดรอบก่อนขาย",
@@ -330,7 +509,7 @@ const primaryActions = computed<ActionBtn[]>(() => [
     id: "cash-in",
     label: "นำเงินเข้า",
     hint: settings.label("cash_in"),
-    tone: "tone-soft",
+    tone: "tone-cash-in",
     run: () => {
       if (!requireShift()) return;
       cashMoveDir.value = "in";
@@ -341,7 +520,7 @@ const primaryActions = computed<ActionBtn[]>(() => [
     id: "cash-out",
     label: "นำเงินออก",
     hint: settings.label("cash_out"),
-    tone: "tone-soft",
+    tone: "tone-cash-out",
     run: () => {
       if (!requireShift()) return;
       cashMoveDir.value = "out";
@@ -352,7 +531,7 @@ const primaryActions = computed<ActionBtn[]>(() => [
     id: "float-count",
     label: floatCounted.value ? "นับเงินทอน" : "นับเงินทอน*",
     hint: settings.label("float_count"),
-    tone: floatCounted.value ? "tone-soft" : "tone-warn",
+    tone: floatCounted.value ? "tone-shift" : "tone-warn",
     run: () => {
       if (!requireShift()) return;
       cashCountOpen.value = true;
@@ -362,18 +541,10 @@ const primaryActions = computed<ActionBtn[]>(() => [
     id: "summary",
     label: "สรุปการขาย",
     hint: settings.label("sale_summary"),
-    tone: "tone-soft",
+    tone: "tone-search",
     run: () => {
       if (!requireShift()) return;
-      const v = shiftSummary.value;
-      statusMessage.value =
-        `รอบนี้ ${v.billCount} บิล · ยอด ${v.grossTotal.toFixed(2)}` +
-        ` · ลิ้นชักคาด ${v.expectedCash.toFixed(0)}` +
-        (v.voidLineCount || v.voidBillCount
-          ? ` · ยกเลิก ${v.voidLineCount} รายการ / ${v.voidBillCount} บิล`
-          : "") +
-        (v.floatCounted ? "" : " · ยังไม่นับทอน");
-      focusScan();
+      summaryOpen.value = true;
     },
   },
 ]);
@@ -382,9 +553,10 @@ const closeShiftAction = computed<ActionBtn>(() => ({
   id: "close-shift",
   label: "ปิดรอบ",
   hint: settings.label("close_shift"),
-  tone: "tone-warn",
+  tone: "tone-close",
   run: () => {
     if (!isOpen.value) {
+      if (exiting.value) return;
       showAlert(
         "ยังไม่ได้เปิดรอบ",
         "ยังไม่มีรอบขายที่เปิดอยู่",
@@ -405,6 +577,21 @@ const closeShiftAction = computed<ActionBtn>(() => ({
   },
 }));
 
+/** ปุ่มฟังก์ชันแถวล่าง — 3×3 รวมปิดรอบขนาดเท่ากัน */
+const funcActions = computed<ActionBtn[]>(() => [
+  ...primaryActions.value,
+  closeShiftAction.value,
+]);
+
+/** ถ้า quit ไม่ได้ (เช่นรันในเบราว์เซอร์) ค่อยกลับหน้าล็อกอิน */
+function onShiftClosedFallback() {
+  if (exiting.value) {
+    openShiftOpen.value = false;
+    return;
+  }
+  openShiftOpen.value = true;
+}
+
 function runAction(id: string) {
   if (id === "search") {
     if (!requireShift()) return;
@@ -420,7 +607,18 @@ function runAction(id: string) {
 
 function focusScan() {
   if (payOpen.value || anyModalOpen.value) return;
-  void nextTick(() => scanInput.value?.focus());
+  void nextTick(() => {
+    const el = scanInput.value;
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    el.select();
+  });
+}
+
+function clearScanBuffer() {
+  scanBuffer.value = "";
+  const el = scanInput.value;
+  if (el) el.value = "";
 }
 
 function openPayment() {
@@ -434,36 +632,42 @@ function openPayment() {
   payOpen.value = true;
 }
 
+let scanSubmitting = false;
+
 function onScanSubmit() {
-  if (!requireShift()) {
-    scanBuffer.value = "";
-    return;
-  }
-  const raw = scanBuffer.value.trim();
-  if (!raw) return;
-
-  // คูณรายการล่าสุด: กดปุ่มคูณแล้วพิมพ์จำนวนอย่างเดียว
-  if (/^\*\d+$/.test(raw) || raw === "*") {
-    const n = Number(raw.replace(/^\*/, ""));
-    if (Number.isFinite(n) && n > 0) cart.multiplyLast(n);
-    scanBuffer.value = "";
+  if (scanSubmitting) return;
+  scanSubmitting = true;
+  try {
+    if (!requireShift()) {
+      clearScanBuffer();
+      focusScan();
+      return;
+    }
+    const raw = scanBuffer.value.trim();
+    // กด Enter → เคลียร์เลขบาร์ทันที (เช่น พิมพ์ 25 แล้ว Enter)
+    clearScanBuffer();
     focusScan();
-    scrollCartToBottom();
-    return;
-  }
+    if (!raw) return;
 
-  // 3* อย่างเดียว → ตั้ง pending แล้วรอสแกน
-  if (/^\d+\*$/.test(raw)) {
+    // คูณรายการล่าสุด: กดปุ่มคูณแล้วพิมพ์จำนวนอย่างเดียว
+    if (/^\*\d+$/.test(raw) || raw === "*") {
+      const n = Number(raw.replace(/^\*/, ""));
+      if (Number.isFinite(n) && n > 0) cart.multiplyLast(n);
+      scrollCartToBottom();
+      return;
+    }
+
+    // 3* อย่างเดียว → ตั้ง pending แล้วรอสแกน
+    if (/^\d+\*$/.test(raw)) {
+      cart.scan(raw);
+      return;
+    }
+
     cart.scan(raw);
-    scanBuffer.value = "";
-    focusScan();
-    return;
+    scrollCartToBottom();
+  } finally {
+    scanSubmitting = false;
   }
-
-  cart.scan(raw);
-  scanBuffer.value = "";
-  focusScan();
-  scrollCartToBottom();
 }
 
 function onScanInput() {
@@ -472,8 +676,21 @@ function onScanInput() {
   const m = raw.match(/^(\d+)\*$/);
   if (m) {
     cart.setPendingQty(Number(m[1]));
-    scanBuffer.value = "";
+    clearScanBuffer();
     focusScan();
+  }
+}
+
+function onScanKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    e.preventDefault();
+    clearScanBuffer();
+    focusScan();
+    return;
+  }
+  if (e.key === "Enter") {
+    e.preventDefault();
+    onScanSubmit();
   }
 }
 
@@ -537,7 +754,7 @@ function onKeydown(e: KeyboardEvent) {
   }
   if (settings.matches("open_shift", e)) {
     e.preventDefault();
-    if (!isOpen.value) openShiftOpen.value = true;
+    if (!isOpen.value && !exiting.value) openShiftOpen.value = true;
     return;
   }
   if (settings.matches("float_count", e)) {
@@ -573,18 +790,80 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => {
-  settings.resetKeybindings();
   window.addEventListener("keydown", onKeydown, true);
-  // เปิดระบบมาถ้ายังไม่เปิดรอบ ให้ขึ้นหน้าเปิดรอบรอเลย
-  if (!isOpen.value) openShiftOpen.value = true;
-  void cart.loadCatalog().then(() => {
+  void members.loadLocal();
+  void (async () => {
+    await loadMediaIndex();
+    const [promos, cachedSettings] = await Promise.all([
+      loadCachedPromos(),
+      loadCachedSettings(),
+    ]);
+    // ครั้งแรกของรอบเปิดแอป — เติมเฉพาะที่ขาด / URL เปลี่ยน
+    await ensureSettingsMediaCached(cachedSettings);
+    if (promos.length) {
+      cart.setPromos(
+        promos.map((p) => ({
+          id: p.id,
+          productCode: p.productCode,
+          buyQty: p.buyQty,
+          payAmount: p.payAmount,
+          label: p.label,
+        })),
+      );
+    }
+    if (
+      cachedSettings?.points ||
+      cachedSettings?.display ||
+      cachedSettings?.branding ||
+      cachedSettings?.customerAds ||
+      cachedSettings?.keybindings
+    ) {
+      settings.applyFromBackend({
+        points: cachedSettings.points,
+        display: cachedSettings.display,
+        branding: cachedSettings.branding,
+        customerAds: cachedSettings.customerAds,
+        keybindings: cachedSettings.keybindings,
+      });
+      settings.publishSettingsToCustomer();
+    } else {
+      settings.syncCustomerScreenToMain();
+    }
+  })();
+  // เปิดระบบมาถ้ายังไม่เปิดรอบ → หน้า PIN (โฟกัสช่องรหัสใน OpenShiftModal)
+  if (!isOpen.value && !exiting.value) {
+    openShiftOpen.value = true;
+  } else {
+    void nextTick(() => focusScan());
+  }
+  void (async () => {
+    await loadMediaIndex();
+    await cart.loadCatalog();
     cart.publish();
-    if (isOpen.value) focusScan();
+    if (isOpen.value && !anyModalOpen.value) focusScan();
+    // เติมรูปด่วนที่ยังไม่มีในดิสก์เท่านั้น (ข้ามถ้ารายการเดิมครบแล้ว)
+    const changed = await cacheLocalProductImages({ awaitQuick: true });
+    if (changed) {
+      cart.setCatalog(await loadCachedProducts(), cart.catalogSource);
+    }
+  })();
+  void runBackgroundSync();
+  syncTimer = window.setInterval(() => {
+    void runBackgroundSync();
+  }, 15000);
+  unsubCloseBlocked = window.apPos?.onCloseBlocked?.(() => {
+    showAlert(
+      "ปิดแอปไม่ได้",
+      "ต้องปิดรอบขายก่อน ระบบถึงจะปิดได้",
+      "กดปุ่มปิดรอบ → ปิดรอบเลย หรือนับเงินแล้วปิด",
+    );
   });
 });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onKeydown, true);
+  if (syncTimer) window.clearInterval(syncTimer);
+  unsubCloseBlocked?.();
 });
 </script>
 
@@ -597,9 +876,9 @@ onUnmounted(() => {
             ref="scanInput"
             v-model="scanBuffer"
             class="scan-input"
-            autofocus
             :placeholder="pendingQty > 1 ? `คูณ x${pendingQty}` : 'บาร์โค้ด'"
             @input="onScanInput"
+            @keydown="onScanKeydown"
           />
         </form>
 
@@ -639,9 +918,9 @@ onUnmounted(() => {
                   <td class="col-name">{{ line.name }}</td>
                   <td class="num col-qty">{{ line.qty }}</td>
                   <td class="col-unit">{{ line.unit }}</td>
-                  <td class="num col-price">{{ line.unitPrice.toFixed(2) }}</td>
-                  <td class="num col-disc">{{ line.discount.toFixed(2) }}</td>
-                  <td class="num col-total">{{ line.lineTotal.toFixed(2) }}</td>
+                  <td class="num col-price">{{ formatMoney(line.unitPrice) }}</td>
+                  <td class="num col-disc">{{ formatMoney(line.discount) }}</td>
+                  <td class="num col-total">{{ formatMoney(line.lineTotal) }}</td>
                   <td class="col-act">
                     <button
                       type="button"
@@ -672,58 +951,70 @@ onUnmounted(() => {
 
         <div class="quick-area">
           <div class="quick-board">
-            <button
-              v-if="quickPageCount > 1"
-              type="button"
-              class="quick-nav"
-              :disabled="quickPage <= 0"
-              aria-label="หน้าก่อน"
-              @click.stop="quickPage = Math.max(0, quickPage - 1)"
-            >
-              ‹
-            </button>
-
             <div class="quick-grid">
               <button
                 v-for="p in pagedQuick"
                 :key="p.id"
                 type="button"
                 class="quick-tile"
+                :title="p.name"
                 @click.stop="
                   requireShift() &&
                     (cart.addQuick(p), focusScan(), scrollCartToBottom())
                 "
               >
                 <span class="quick-thumb">
-                  <img :src="p.image" :alt="p.name" loading="lazy" />
+                  <img
+                    class="quick-thumb__img"
+                    :src="productThumb(p.image)"
+                    :alt="p.name"
+                    loading="lazy"
+                    @error="onThumbError"
+                  />
                 </span>
-                <span class="quick-copy">
-                  <span class="quick-name">{{ p.name }}</span>
-                  <span class="quick-price">{{ p.price!.toFixed(2) }} ฿</span>
+                <span class="quick-meta">
+                  <span class="quick-name">{{ shortQuickName(p.name) }}</span>
+                  <span v-if="p.price != null" class="quick-price">
+                    {{ formatMoney(p.price) }}
+                    <small>บ.</small>
+                  </span>
+                  <span v-else class="quick-price quick-price--open">เปิดราคา</span>
                 </span>
               </button>
             </div>
 
-            <button
-              v-if="quickPageCount > 1"
-              type="button"
-              class="quick-nav"
-              :disabled="quickPage >= quickPageCount - 1"
-              aria-label="หน้าถัดไป"
-              @click.stop="quickPage = Math.min(quickPageCount - 1, quickPage + 1)"
-            >
-              ›
-            </button>
-          </div>
-          <div v-if="quickPageCount > 1" class="quick-page-dots">
-            {{ quickPage + 1 }} / {{ quickPageCount }}
+            <div class="quick-side-nav">
+              <button
+                type="button"
+                class="quick-side-nav__btn"
+                :disabled="quickPageCount <= 1 || quickPage <= 0"
+                aria-label="หน้าก่อน"
+                @click.stop="quickPage = Math.max(0, quickPage - 1)"
+              >
+                <span class="quick-side-nav__arrow">‹</span>
+                <span>ก่อน</span>
+              </button>
+              <div class="quick-side-nav__page">
+                {{ quickPage + 1 }}/{{ quickPageCount }}
+              </div>
+              <button
+                type="button"
+                class="quick-side-nav__btn"
+                :disabled="quickPageCount <= 1 || quickPage >= quickPageCount - 1"
+                aria-label="หน้าถัดไป"
+                @click.stop="quickPage = Math.min(quickPageCount - 1, quickPage + 1)"
+              >
+                <span>ถัดไป</span>
+                <span class="quick-side-nav__arrow">›</span>
+              </button>
+            </div>
           </div>
         </div>
 
         <div class="func-row">
           <div class="func-grid primary">
             <button
-              v-for="btn in primaryActions"
+              v-for="btn in funcActions"
               :key="btn.id"
               type="button"
               class="func-btn"
@@ -734,36 +1025,28 @@ onUnmounted(() => {
               <span v-if="btn.hint" class="func-hint">{{ btn.hint }}</span>
             </button>
           </div>
-          <button
-            type="button"
-            class="func-btn func-btn-tall"
-            :class="closeShiftAction.tone"
-            @click.stop="closeShiftAction.run()"
-          >
-            <span class="func-label">{{ closeShiftAction.label }}</span>
-            <span v-if="closeShiftAction.hint" class="func-hint">
-              {{ closeShiftAction.hint }}
-            </span>
-          </button>
         </div>
       </section>
 
-      <aside class="side">
-        <div class="side-card side-meta">
+        <aside class="side">
+        <div class="side-card side-hero">
           <div class="side-top">
             <div class="terminal">001</div>
             <div class="date">{{ today }}</div>
           </div>
           <div class="brand-block">
-            <div class="brand-mark">AP</div>
+            <img
+              class="brand-mark brand-mark--logo"
+              :src="brandLogoSrc"
+              alt=""
+              width="44"
+              height="44"
+            />
             <div class="brand-text">
-              <div class="brand-name">AP หมูสด</div>
-              <div class="brand-tag">Fresh Pork POS</div>
+              <div class="brand-name">{{ storeName }}</div>
+              <div class="brand-tag">{{ storeTagline }}</div>
             </div>
           </div>
-        </div>
-
-        <div class="side-card">
           <div class="bill-no">{{ billNo }}</div>
           <div class="side-member-row">
             <button
@@ -772,14 +1055,23 @@ onUnmounted(() => {
               :class="{ 'is-member': Boolean(memberId) }"
               @pointerdown.stop.prevent="openMemberSearch"
             >
-              <span class="side-member-label">ลูกค้า</span>
-              <strong class="side-member-name">{{ memberName }}</strong>
-              <span v-if="memberPoints > 0" class="side-points">
-                {{ memberPoints }} แต้ม
-              </span>
-              <span class="side-member-action">
-                {{ memberId ? "เปลี่ยน / ยกเลิก" : "เลือกสมาชิก" }}
-              </span>
+              <div class="side-member-main">
+                <span class="side-member-label">ลูกค้า</span>
+                <strong class="side-member-name">{{ memberName }}</strong>
+                <span v-if="memberId" class="side-mp side-mp--earn">
+                  แต้มบิลนี้
+                  <strong>+{{ pointsToEarnPreview }}</strong>
+                </span>
+                <span class="side-member-action">
+                  {{ memberId ? "เปลี่ยน / ยกเลิก" : "เลือกสมาชิก" }}
+                </span>
+              </div>
+              <div v-if="memberId" class="side-mp side-mp--usable">
+                <em>แต้มใช้ได้</em>
+                <strong>{{
+                  Math.max(0, memberPoints - pointsRedeemedPts)
+                }}</strong>
+              </div>
             </button>
           </div>
           <div class="side-staff">
@@ -797,39 +1089,58 @@ onUnmounted(() => {
             <strong>{{ summary.itemCount }}</strong>
           </div>
 
-          <div v-if="appliedPromos.length || billDiscount > 0" class="disc-block">
+          <div
+            v-if="
+              appliedPromos.length ||
+              pointsDiscount > 0 ||
+              manualDiscount > 0
+            "
+            class="disc-block"
+          >
             <div v-for="p in appliedPromos" :key="p.promoId" class="disc-line">
-              <span>{{ p.label }}</span>
-              <strong>-{{ p.discount.toFixed(2) }}</strong>
+              <span>โปร: {{ p.label }}</span>
+              <strong>-{{ formatMoney(p.discount) }}</strong>
             </div>
-            <div class="disc-line">
-              <span>ส่วนลดรวม</span>
-              <strong>-{{ billDiscount.toFixed(2) }}</strong>
+            <div
+              v-if="pointsDiscount > 0"
+              class="disc-line disc-line--points"
+            >
+              <span>ส่วนลดแต้ม</span>
+              <strong>-{{ formatMoney(pointsDiscount) }}</strong>
+            </div>
+            <div v-if="manualDiscount > 0" class="disc-line">
+              <span>ส่วนลดอื่น</span>
+              <strong>-{{ formatMoney(manualDiscount) }}</strong>
             </div>
           </div>
 
           <div class="total-block">
             <span>รวมเงิน</span>
-            <strong>{{ summary.total.toFixed(2) }}</strong>
+            <strong>{{ formatMoney(summary.total) }}</strong>
           </div>
         </div>
 
-        <div class="change-block" :class="{ 'has-change': lastChange > 0 }">
-          <span>{{ lastChange > 0 ? "ทอนบิลล่าสุด" : "เงินทอน" }}</span>
-          <strong>{{ lastChange.toFixed(2) }}</strong>
-        </div>
+        <div class="side-checkout">
+          <div class="change-block" :class="{ 'has-change': lastChange > 0 }">
+            <span>{{ lastChange > 0 ? "ทอนบิลล่าสุด" : "เงินทอน" }}</span>
+            <strong>{{ formatMoney(lastChange) }}</strong>
+          </div>
 
-        <button type="button" class="pay-btn" @click.stop="openPayment">
-          <span class="pay-btn-label">ชำระเงิน</span>
-          <span class="pay-btn-amount">{{ summary.total.toFixed(2) }}</span>
-          <span class="pay-btn-hint">{{ settings.label("open_payment") }}</span>
-        </button>
+          <button type="button" class="pay-btn" @click.stop="openPayment">
+            <span class="pay-btn-label">ชำระเงิน</span>
+            <span class="pay-btn-amount">{{ formatMoney(summary.total) }}</span>
+            <span class="pay-btn-hint">{{ settings.label("open_payment") }}</span>
+          </button>
+        </div>
       </aside>
     </div>
 
     <footer class="status-bar">
       <span>AP Retail — Version 0.1.0</span>
-      <span>สาขา (00001) สาขาหลุมดิน</span>
+      <span class="status-bar__device" :title="`${device.branchId} / ${device.terminalId}`">
+        {{ device.branchName }} · {{ device.terminalName || "เครื่อง POS" }}
+        <template v-if="!device.setupDone"> · ยังไม่ลงทะเบียน</template>
+      </span>
       <span>
         {{
           isOpen
@@ -841,10 +1152,15 @@ onUnmounted(() => {
     </footer>
 
     <PaymentModal v-model:open="payOpen" />
-    <OpenShiftModal v-model:open="openShiftOpen" :required="!isOpen" @opened="focusScan" />
+    <OpenShiftModal
+      v-model:open="openShiftOpen"
+      :required="!isOpen && !exiting"
+      :before-ready="runBackgroundSync"
+      @opened="focusScan"
+    />
     <CloseShiftModal
       v-model:open="closeShiftOpen"
-      @closed="openShiftOpen = true"
+      @closed="onShiftClosedFallback"
     />
     <CashCountModal v-model:open="cashCountOpen" purpose="float" />
     <CashMoveModal v-model:open="cashMoveOpen" :direction="cashMoveDir" />
@@ -859,6 +1175,7 @@ onUnmounted(() => {
     />
     <ProductSearchModal v-model:open="productSearchOpen" />
     <HoldRecallModal v-model:open="holdOpen" v-model:mode="holdMode" />
+    <SaleSummaryModal v-model:open="summaryOpen" />
     <ConfirmModal
       v-model:open="confirmOpen"
       :title="confirmTitle"

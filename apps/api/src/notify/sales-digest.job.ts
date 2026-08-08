@@ -16,7 +16,7 @@ export class SalesDigestJob {
   /** Every 5 minutes — summarize if new sales arrived. */
   @Cron("*/5 * * * *")
   async handle() {
-    const count = this.sync.recentSalesCount();
+    const count = await this.sync.recentSalesCount();
     if (count === this.lastCount) {
       this.logger.debug("No new sales since last digest");
       return;

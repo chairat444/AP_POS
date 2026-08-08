@@ -12,15 +12,19 @@ import {
   type PaymentMethod,
 } from "../stores/cart";
 import { useSettingsStore } from "../stores/settings";
+import { formatInt, formatMoney } from "../utils/format";
 
 const open = defineModel<boolean>("open", { default: false });
 
 const cart = useCartStore();
 const settings = useSettingsStore();
+const isMac = /Mac|iPhone|iPod|iPad/i.test(navigator.platform || navigator.userAgent);
 const {
   summary,
   appliedPromos,
   manualDiscount,
+  pointsDiscount,
+  pointsRedeemedPts,
   lines,
   memberId,
   memberName,
@@ -41,7 +45,11 @@ const extraDiscount = computed(() =>
 );
 
 const paidToward = computed(() =>
-  round2(payments.value.reduce((s, p) => s + p.amount, 0)),
+  round2(
+    payments.value
+      .filter((p) => p.method !== "points")
+      .reduce((s, p) => s + p.amount, 0),
+  ),
 );
 
 const remaining = computed(() =>
@@ -79,32 +87,26 @@ const displayedChange = computed(() =>
   change.value > 0 ? change.value : previewCashChange.value,
 );
 
-const pointsUsed = computed(() =>
-  Math.floor(
-    payments.value
-      .filter((p) => p.method === "points")
-      .reduce((s, p) => s + p.amount, 0),
-  ),
-);
+const { pointsConfig } = storeToRefs(settings);
+
+const pointsUsed = computed(() => pointsRedeemedPts.value);
 
 const pointsRemaining = computed(() =>
   Math.max(0, memberPoints.value - pointsUsed.value),
 );
 
-const pointsEarnThisBill = computed(() =>
-  earnPoints(Math.max(0, summary.value.total - pointsUsed.value)),
-);
+const pointsEarnThisBill = computed(() => {
+  const earnBase = round2(
+    summary.value.total + Math.max(0, pointsDiscount.value),
+  );
+  return earnPoints(earnBase, pointsConfig.value);
+});
 
 const amountInput = computed(() => Number(amountText.value) || 0);
 
-const canConfirm = computed(
-  () =>
-    lines.value.length > 0 &&
-    remaining.value <= 1e-9 &&
-    payments.value.length > 0,
-);
-
-const isPaid = computed(() => remaining.value <= 1e-9 && payments.value.length > 0);
+function round2(n: number) {
+  return Math.round(n * 100) / 100;
+}
 
 /** กัน confirm ซ้ำตอนจบอัตโนมัติ */
 let finishing = false;
@@ -122,13 +124,18 @@ function focusAmount(select = true) {
 watch(open, (v) => {
   if (!v) {
     allowOtherFocus.value = false;
+    // จบชำระ: completePayment เป็นคนเคลียร์ progress + ส่งเงินทอน
+    // ออกจากหน้าชำระโดยไม่จบบิล → เคลียร์ส่วนลดแต้ม ให้กรอกใหม่
+    if (!finishing) {
+      cart.clearPayProgress();
+      cart.clearPointsDiscount();
+    }
     finishing = false;
     return;
   }
   finishing = false;
-  // ดึงคีย์ลัดล่าสุด (กัน HMR ค้าง F5–F8 เก่า)
-  settings.resetKeybindings();
   resetForm();
+  syncPayToCustomer();
   focusAmount(true);
   requestAnimationFrame(() => focusAmount(true));
   setTimeout(() => focusAmount(true), 50);
@@ -137,6 +144,30 @@ watch(open, (v) => {
 watch(extraDiscount, (v) => {
   if (open.value) cart.setManualDiscount(v);
 });
+
+watch(
+  [open, payments, paidToward, remaining, change, displayedChange, summary],
+  () => {
+    if (open.value) syncPayToCustomer();
+  },
+  { deep: true },
+);
+
+function syncPayToCustomer() {
+  if (!open.value) return;
+  cart.setPayProgress({
+    paid: paidToward.value,
+    remaining: remaining.value,
+    change: displayedChange.value,
+    lines: payments.value
+      .filter((p) => p.method !== "points")
+      .map((p) => ({
+        method: p.method,
+        label: methodLabel(p.method),
+        amount: p.amount,
+      })),
+  });
+}
 
 function resetForm() {
   payments.value = [];
@@ -170,11 +201,12 @@ function onAmountInput(e: Event) {
 }
 
 function onAmountKeydown(e: KeyboardEvent) {
-  // บล็อกตัวอักษร/สัญลักษณ์ — อนุญาต control keys
+  // บล็อกตัวอักษร/สัญลักษณ์ — อนุญาต control keys + F-keys ชำระเงิน
   if (
     e.ctrlKey ||
     e.metaKey ||
     e.altKey ||
+    /^F\d{1,2}$/.test(e.key) ||
     [
       "Backspace",
       "Delete",
@@ -185,6 +217,7 @@ function onAmountKeydown(e: KeyboardEvent) {
       "ArrowRight",
       "Home",
       "End",
+      "Insert",
     ].includes(e.key)
   ) {
     return;
@@ -251,20 +284,19 @@ function payWith(method: PaymentMethod) {
       return;
     }
     const pts = Math.floor(raw);
-    if (pts > pointsRemaining.value) {
-      errorText.value = `แต้มไม่พอ (มี ${pointsRemaining.value} แต้ม)`;
+    if (pts <= 0) {
+      errorText.value = "ระบุจำนวนแต้ม";
       focusAmount(true);
       return;
     }
-    const check = validateExactOrPartialPay(pts, remaining.value, "แต้ม");
-    if (!check.ok) {
-      errorText.value = check.reason;
+    const result = cart.setPointsRedeem(pts);
+    if (!result.ok) {
+      errorText.value = result.reason;
       focusAmount(true);
       return;
     }
-    payments.value = [...payments.value, { method: "points", amount: check.amount }];
   } else {
-    const label = method === "transfer" ? "เงินโอน" : "โครงการรัฐ";
+    const label = method === "transfer" ? "เงินโอน" : "เงินสวัสดิการ";
     const check = validateExactOrPartialPay(raw, remaining.value, label);
     if (!check.ok) {
       errorText.value = check.reason;
@@ -318,7 +350,7 @@ function fillRound100() {
   setAmount(Math.ceil(rem / 100) * 100);
 }
 
-function confirm() {
+async function confirm() {
   if (finishing) return;
 
   // บิลเคลียร์แล้วแต่หน้าชำระค้าง — ปิดอย่างเดียว
@@ -328,22 +360,19 @@ function confirm() {
   }
 
   if (remaining.value > 1e-9) {
-    errorText.value = `ชำระยังไม่ครบ ขาด ${remaining.value.toFixed(2)} บาท — พิมพ์จำนวนแล้ว F12/F11/F10/F9`;
-    focusAmount(true);
-    return;
-  }
-  if (!payments.value.length) {
-    errorText.value = "ยังไม่ได้ใส่การชำระ";
+    errorText.value = `ชำระยังไม่ครบ ขาด ${formatMoney(remaining.value)} บาท — พิมพ์จำนวนแล้ว F12/F11/F10/F9`;
     focusAmount(true);
     return;
   }
 
   finishing = true;
-  const payload = payments.value.map((p) => ({ ...p }));
+  const payload = payments.value
+    .filter((p) => p.method !== "points")
+    .map((p) => ({ ...p }));
   // ปิดก่อน แล้วค่อยบันทึก — ไม่ให้ UI ค้างหลังจบบิล
   open.value = false;
 
-  const ok = cart.completePayment(payload);
+  const ok = await cart.completePayment(payload);
   finishing = false;
   if (!ok) {
     open.value = true;
@@ -371,6 +400,36 @@ function onKeydown(e: KeyboardEvent) {
     e.stopPropagation();
     e.stopImmediatePropagation();
     confirm();
+    return;
+  }
+
+  // วิธีจ่ายต้องทำงานแม้โฟกัสช่องส่วนลด (F9–F12)
+  if (settings.matches("pay_cash", e)) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    payWith("cash");
+    return;
+  }
+  if (settings.matches("pay_transfer", e)) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    payWith("transfer");
+    return;
+  }
+  if (settings.matches("pay_government", e)) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    payWith("government");
+    return;
+  }
+  if (settings.matches("pay_points", e)) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    payWith("points");
     return;
   }
 
@@ -409,50 +468,74 @@ function onKeydown(e: KeyboardEvent) {
     e.stopPropagation();
     e.stopImmediatePropagation();
     removeLastPayment();
-    return;
-  }
-
-  if (settings.matches("pay_cash", e)) {
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-    payWith("cash");
-    return;
-  }
-  if (settings.matches("pay_transfer", e)) {
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-    payWith("transfer");
-    return;
-  }
-  if (settings.matches("pay_government", e)) {
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-    payWith("government");
-    return;
-  }
-  if (settings.matches("pay_points", e)) {
-    e.preventDefault();
-    e.stopPropagation();
-    e.stopImmediatePropagation();
-    payWith("points");
   }
 }
 
-onMounted(() => window.addEventListener("keydown", onKeydown, true));
-onUnmounted(() => window.removeEventListener("keydown", onKeydown, true));
+/**
+ * คีย์จาก main ที่ Chromium/OS แย่ง (F10 เมนู, F11 Show Desktop บน macOS)
+ * — แมปตรงๆ ไม่พึ่ง synthetic KeyboardEvent (กัน match พลาด)
+ */
+function onPosHotkey(payload: {
+  key: string;
+  code: string;
+  ctrl?: boolean;
+  shift?: boolean;
+  alt?: boolean;
+  meta?: boolean;
+}) {
+  if (!open.value) return;
+  const key = payload.key || payload.code;
+  if (key === "F12") {
+    payWith("cash");
+    return;
+  }
+  if (key === "F11") {
+    payWith("transfer");
+    return;
+  }
+  if (key === "F10") {
+    payWith("government");
+    return;
+  }
+  if (key === "F9") {
+    payWith("points");
+    return;
+  }
+  const e = new KeyboardEvent("keydown", {
+    key: payload.key,
+    code: payload.code,
+    ctrlKey: Boolean(payload.ctrl),
+    shiftKey: Boolean(payload.shift),
+    altKey: Boolean(payload.alt),
+    metaKey: Boolean(payload.meta),
+    bubbles: true,
+    cancelable: true,
+  });
+  onKeydown(e);
+}
+
+let unsubHotkey: (() => void) | undefined;
+
+onMounted(() => {
+  window.addEventListener("keydown", onKeydown, true);
+  unsubHotkey = window.apPos?.onPosHotkey?.(onPosHotkey);
+});
+onUnmounted(() => {
+  window.removeEventListener("keydown", onKeydown, true);
+  unsubHotkey?.();
+});
 
 function methodLabel(m: PaymentMethod) {
   if (m === "cash") return "เงินสด";
   if (m === "transfer") return "เงินโอน";
-  if (m === "government") return "โครงการรัฐ";
+  if (m === "government") return "เงินสวัสดิการ";
   return "แต้ม";
 }
 
-function round2(n: number) {
-  return Math.round(n * 100) / 100;
+function clearPointsDiscount() {
+  cart.clearPointsDiscount();
+  errorText.value = "";
+  focusAmount(true);
 }
 </script>
 
@@ -462,9 +545,17 @@ function round2(n: number) {
       <header class="pay-screen-head">
         <h2>ชำระเงิน</h2>
         <div class="pay-screen-head-meta">
-          <span>{{ memberName }}</span>
-          <span v-if="memberId">· {{ pointsRemaining }} แต้มใช้ได้</span>
-          <span v-if="memberId">· ได้บิลนี้ {{ pointsEarnThisBill }} แต้ม</span>
+          <span class="pay-member-name">{{ memberName }}</span>
+          <template v-if="memberId">
+            <span class="pay-mp">
+              <em>แต้มใช้ได้</em>
+              <strong>{{ formatInt(pointsRemaining) }}</strong>
+            </span>
+            <span class="pay-mp pay-mp--earn">
+              <em>แต้มบิลนี้</em>
+              <strong>+{{ formatInt(pointsEarnThisBill) }}</strong>
+            </span>
+          </template>
         </div>
         <button
           type="button"
@@ -477,40 +568,84 @@ function round2(n: number) {
       </header>
 
       <div class="pay-screen-body">
+        <div class="pay-hero-bar">
+          <div class="pay-stat pay-stat-due">
+            <span class="pay-stat-label">ยอดที่ต้องชำระ</span>
+            <strong class="pay-stat-value">{{ formatMoney(summary.total) }}</strong>
+          </div>
+          <div class="pay-stat">
+            <span class="pay-stat-label">ชำระแล้ว</span>
+            <strong class="pay-stat-value">{{ formatMoney(paidToward) }}</strong>
+          </div>
+          <div
+            class="pay-stat pay-stat-remain"
+            :class="{ done: remaining <= 0 }"
+          >
+            <span class="pay-stat-label">คงเหลือ</span>
+            <strong class="pay-stat-value">{{ formatMoney(remaining) }}</strong>
+          </div>
+        </div>
+
         <div class="pay-main">
           <aside class="pay-side-col">
             <div
-              class="pay-change-hero"
+              class="pay-change-chip"
               :class="{
                 active: displayedChange > 0,
                 draft: previewCashChange > 0 && change <= 0,
               }"
             >
-              <div class="pay-change-hero-label">
+              <div class="pay-change-chip-label">
                 <span>เงินทอน</span>
                 <small v-if="previewCashChange > 0 && change <= 0">
-                  จากจำนวนที่พิมพ์ — กด F12 รับเงินสด
+                  พรีวิวจากจำนวนที่พิมพ์
                 </small>
-                <small v-else-if="change > 0">ต้องทอนให้ลูกค้า</small>
-                <small v-else>พิมพ์เงินสดเกินยอด แล้วโชว์ตรงนี้</small>
+                <small v-else-if="change > 0">หลังรับเงินสด</small>
+                <small v-else>ดูหลักที่หน้ารายการหลังจบบิล</small>
               </div>
-              <strong>{{ displayedChange.toFixed(2) }}</strong>
+              <strong>{{ formatMoney(displayedChange) }}</strong>
             </div>
 
             <div class="pay-side-meta">
               <div class="pay-side-row">
                 <span>ก่อนลด</span>
-                <strong>{{ summary.subtotal.toFixed(2) }}</strong>
+                <strong>{{ formatMoney(summary.subtotal) }}</strong>
               </div>
-              <div class="pay-side-row">
-                <span>ส่วนลด</span>
-                <strong :class="{ disc: summary.discount > 0 }">
+              <div
+                v-if="summary.discount - pointsDiscount > 0"
+                class="pay-side-row"
+              >
+                <span>โปร / ส่วนลดอื่น</span>
+                <strong class="disc">
+                  -{{ formatMoney(summary.discount - pointsDiscount) }}
+                </strong>
+              </div>
+              <div
+                class="pay-side-row pay-side-row--points"
+                :class="{ 'is-on': pointsDiscount > 0 }"
+              >
+                <span>
+                  ส่วนลดแต้ม
+                  <small v-if="pointsUsed > 0">
+                    (ใช้ {{ formatInt(pointsUsed) }} แต้ม)
+                  </small>
+                </span>
+                <strong :class="{ disc: pointsDiscount > 0 }">
                   {{
-                    summary.discount > 0
-                      ? `-${summary.discount.toFixed(2)}`
+                    pointsDiscount > 0
+                      ? `-${formatMoney(pointsDiscount)}`
                       : "0.00"
                   }}
                 </strong>
+                <button
+                  v-if="pointsDiscount > 0"
+                  type="button"
+                  class="pay-points-clear"
+                  @mousedown="keepAmountFocus"
+                  @click="clearPointsDiscount"
+                >
+                  ลบ
+                </button>
               </div>
               <label class="pay-disc-inline" @click.stop>
                 <span>ลดท้ายบิล</span>
@@ -525,7 +660,7 @@ function round2(n: number) {
               </label>
               <div v-if="appliedPromos.length" class="pay-promo-mini">
                 <span v-for="p in appliedPromos" :key="p.promoId">
-                  {{ p.label }} -{{ p.discount.toFixed(0) }}
+                  {{ p.label }} -{{ formatInt(p.discount) }}
                 </span>
               </div>
             </div>
@@ -539,10 +674,10 @@ function round2(n: number) {
                     <template
                       v-if="p.method === 'cash' && (p.tendered ?? 0) > p.amount"
                     >
-                      รับ {{ (p.tendered ?? 0).toFixed(0) }}
+                      รับ {{ formatInt(p.tendered ?? 0) }}
                     </template>
                   </span>
-                  <strong>{{ p.amount.toFixed(2) }}</strong>
+                  <strong>{{ formatMoney(p.amount) }}</strong>
                   <button
                     type="button"
                     @mousedown="keepAmountFocus"
@@ -559,24 +694,6 @@ function round2(n: number) {
           </aside>
 
           <section class="pay-input-col">
-            <div class="pay-left-sums">
-              <div class="pay-stat pay-stat-due">
-                <span class="pay-stat-label">ยอดชำระ</span>
-                <strong class="pay-stat-value">{{ summary.total.toFixed(2) }}</strong>
-              </div>
-              <div class="pay-stat">
-                <span class="pay-stat-label">ชำระแล้ว</span>
-                <strong class="pay-stat-value">{{ paidToward.toFixed(2) }}</strong>
-              </div>
-              <div
-                class="pay-stat pay-stat-remain"
-                :class="{ done: remaining <= 0 }"
-              >
-                <span class="pay-stat-label">คงเหลือ</span>
-                <strong class="pay-stat-value">{{ remaining.toFixed(2) }}</strong>
-              </div>
-            </div>
-
             <label class="pay-amount-display">
               <span>จำนวนเงิน</span>
               <input
@@ -649,7 +766,7 @@ function round2(n: number) {
                 @mousedown="keepAmountFocus"
                 @click="payWith('government')"
               >
-                <span class="pay-type-name">โครงการรัฐ</span>
+                <span class="pay-type-name">เงินสวัสดิการ</span>
                 <kbd>{{ settings.label("pay_government") }}</kbd>
               </button>
               <button
@@ -659,14 +776,16 @@ function round2(n: number) {
                 @mousedown="keepAmountFocus"
                 @click="payWith('points')"
               >
-                <span class="pay-type-name">ใช้แต้ม</span>
+                <span class="pay-type-name">ส่วนลดแต้ม</span>
                 <kbd>{{ settings.label("pay_points") }}</kbd>
               </button>
             </div>
 
             <div v-if="errorText" class="pay-warn-inline">{{ errorText }}</div>
             <p v-else class="pay-keys-hint">
-              พิมพ์จำนวน → F12 เงินสด · F11 โอน · F10 รัฐ · F9 แต้ม · ครบยอดจบบิลอัตโนมัติ
+              พิมพ์จำนวน → F12 เงินสด · F11 โอน
+              <template v-if="isMac"> (หรือ Ctrl+F11)</template>
+              · F10 สวัสดิการ · F9 ส่วนลดแต้ม · ครบยอดจบบิลอัตโนมัติ
             </p>
           </section>
         </div>

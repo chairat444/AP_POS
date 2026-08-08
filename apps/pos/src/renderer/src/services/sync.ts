@@ -1,0 +1,1165 @@
+import type { CartLine } from "@ap-pos/shared";
+import { ref } from "vue";
+import type { Member } from "../data/demo-members";
+import { PLACEHOLDER_IMAGE, type QuickProduct } from "../data/demo-products";
+import type { PaymentEntry } from "../stores/cart";
+import { savePrinterConfig } from "./receipt";
+
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
+
+/** bump เมื่อ media cache พร้อม — ให้ computed ที่อ่าน epoch รีเรนเดอร์ */
+export const mediaCacheEpoch = ref(0);
+
+export type DeviceConfig = {
+  branchId: string;
+  branchName: string;
+  terminalId: string;
+  terminalName?: string;
+  setupDone?: boolean;
+};
+
+export type SyncedSalePayload = {
+  id: string;
+  billNo: string;
+  branchId: string;
+  terminalId: string;
+  shiftId?: string | null;
+  customerId?: string | null;
+  customerName?: string;
+  subtotal: number;
+  discount: number;
+  total: number;
+  paid: number;
+  change: number;
+  pointsRedeemed: number;
+  pointsEarned: number;
+  createdAt: string;
+  payments: PaymentEntry[];
+  lines: CartLine[];
+};
+
+export type SyncedShiftPayload = {
+  id: string;
+  branchId: string;
+  terminalId: string;
+  staffId?: string | null;
+  staffCode?: string | null;
+  staffName: string;
+  openedAt: string;
+  closedAt?: string | null;
+  openCash: number;
+  closeCash?: number | null;
+  expectedCash?: number | null;
+  variance?: number | null;
+  status: "open" | "closed";
+  billCount?: number;
+  grossTotal?: number;
+  closeNote?: string | null;
+  summary?: unknown;
+  cashMoves?: unknown[];
+  cashCounts?: unknown[];
+  terminalName?: string;
+};
+
+export type SyncedAuditPayload = {
+  id: string;
+  shiftId: string;
+  branchId: string;
+  terminalId: string;
+  staffId?: string | null;
+  staffName: string;
+  type: "line_void" | "bill_cancel" | string;
+  at: string;
+  barcode?: string | null;
+  productName?: string | null;
+  qty?: number | null;
+  amount: number;
+  billTotalBefore?: number | null;
+  itemCountBefore?: number | null;
+};
+
+type BootstrapResponse = {
+  cursor: string;
+  products: ApiProduct[];
+  members: Member[];
+  promos?: Array<{
+    id: string;
+    productCode: string;
+    buyQty: number;
+    payAmount: number;
+    label: string;
+    active?: boolean;
+  }>;
+  settings?: {
+    points?: { bahtPerPoint: number; bahtPerRedeemPoint: number };
+    display?: {
+      customerScreenEnabled?: boolean;
+      bannerUrl?: string | null;
+      panelUrl?: string | null;
+    };
+    branding?: {
+      storeName?: string;
+      storeTagline?: string;
+      logoUrl?: string | null;
+    };
+    customerAds?: {
+      enabled?: boolean;
+      imageDurationSec?: number;
+      items?: Array<{
+        id: string;
+        type: "image" | "video";
+        url: string;
+        name: string;
+        sort: number;
+        active: boolean;
+        durationSec: number;
+      }>;
+    };
+    keybindings?: Record<
+      string,
+      Array<{
+        key: string;
+        ctrl?: boolean;
+        shift?: boolean;
+        alt?: boolean;
+        meta?: boolean;
+      }>
+    >;
+    updatedAt?: string;
+  };
+  removedProductIds: string[];
+  removedMemberIds: string[];
+  removedPromoIds?: string[];
+};
+
+type ApiProduct = {
+  id: string;
+  barcode: string;
+  productCode?: string;
+  name: string;
+  unit: string;
+  costPrice?: number | null;
+  price: number | null;
+  isQuick: boolean;
+  quickSort: number;
+  imageUrl: string | null;
+  isOpenPrice?: boolean;
+  openPriceMax?: number;
+  updatedAt?: string;
+};
+
+type SyncEnvelope =
+  | {
+      id: string;
+      type: "sale";
+      payload: SyncedSalePayload;
+    }
+  | {
+      id: string;
+      type: "shift";
+      payload: SyncedShiftPayload;
+    }
+  | {
+      id: string;
+      type: "audit";
+      payload: SyncedAuditPayload;
+    };
+
+/** remote absolute URL → appos-media:// (โหลดจากดิสก์ตอนออฟไลน์) */
+const mediaLocalByRemote = new Map<string, string>();
+
+const MEDIA_FP_PREFIX = "media-fp:";
+
+function toAbsoluteMediaUrl(url: string): string | null {
+  const t = url.trim();
+  if (!t) return null;
+  if (
+    t.startsWith("data:") ||
+    t.startsWith("appos-media:") ||
+    t.startsWith("blob:")
+  ) {
+    return null;
+  }
+  let abs: string;
+  if (t.startsWith("http://") || t.startsWith("https://")) {
+    abs = t;
+  } else {
+    abs = `${API_BASE}${t.startsWith("/") ? "" : "/"}${t}`;
+  }
+  try {
+    const u = new URL(abs);
+    if (u.hostname === "127.0.0.1") u.hostname = "localhost";
+    return u.href;
+  } catch {
+    return abs;
+  }
+}
+
+function rememberMediaMap(map: Record<string, string>) {
+  let added = 0;
+  for (const [remote, local] of Object.entries(map)) {
+    if (remote && local && mediaLocalByRemote.get(remote) !== local) {
+      mediaLocalByRemote.set(remote, local);
+      added++;
+    }
+  }
+  if (added > 0) mediaCacheEpoch.value++;
+}
+
+function fingerprintUrls(urls: string[]): string {
+  const abs = urls
+    .map((u) => toAbsoluteMediaUrl(u) ?? u.trim())
+    .filter(Boolean)
+    .sort();
+  return [...new Set(abs)].join("\n");
+}
+
+/** โหลดดัชนี cache จาก main (เรียกตอนเปิดแอป) */
+export async function loadMediaIndex() {
+  if (!window.apPos?.media?.index) return;
+  try {
+    rememberMediaMap(await window.apPos.media.index());
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * แคชสื่อแบบประหยัด:
+ * - ดาวน์โหลดเฉพาะ URL ที่ยังไม่มีในดิสก์
+ * - ข้ามทั้งชุดถ้า fingerprint รายการเดิม + ครบในเครื่องแล้ว (เมื่อใช้ fingerprint)
+ * สื่อไม่ค่อยเปลี่ยน — ไม่ต้อง sync ทุก 15 วิ
+ */
+export async function ensureMediaCached(
+  scope: string,
+  urls: Array<string | null | undefined>,
+  opts?: { fingerprint?: boolean },
+): Promise<boolean> {
+  if (!window.apPos?.media?.cache) return false;
+  const list = [
+    ...new Set(
+      urls.filter((u): u is string => Boolean(u && String(u).trim())),
+    ),
+  ];
+  if (!list.length) return false;
+
+  await loadMediaIndex();
+
+  const missing: string[] = [];
+  for (const u of list) {
+    const abs = toAbsoluteMediaUrl(u);
+    if (!abs) continue;
+    if (!mediaLocalByRemote.has(abs)) missing.push(u);
+  }
+
+  const useFp = opts?.fingerprint !== false;
+  if (useFp) {
+    const fp = fingerprintUrls(list);
+    const metaKey = `${MEDIA_FP_PREFIX}${scope}`;
+    let prevFp: string | null = null;
+    try {
+      prevFp = (await window.apPos.db?.getMeta?.(metaKey)) ?? null;
+    } catch {
+      prevFp = null;
+    }
+
+    if (missing.length === 0 && prevFp === fp) {
+      return false;
+    }
+
+    if (missing.length > 0) {
+      try {
+        rememberMediaMap(await window.apPos.media.cache(missing));
+      } catch {
+        return false;
+      }
+    }
+
+    try {
+      await window.apPos.db?.setMeta?.(metaKey, fp);
+    } catch {
+      /* ignore */
+    }
+    return missing.length > 0;
+  }
+
+  // โหมดไม่มี fingerprint (เช่น delta จาก pull) — โหลดเฉพาะที่ขาด
+  if (!missing.length) return false;
+  try {
+    rememberMediaMap(await window.apPos.media.cache(missing));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** @deprecated ใช้ ensureMediaCached — ยังเรียกได้ จะดาวน์โหลดเฉพาะที่ขาด */
+export async function cacheMediaUrls(urls: Array<string | null | undefined>) {
+  await ensureMediaCached("adhoc", urls, { fingerprint: false });
+}
+
+export async function ensureSettingsMediaCached(
+  settings: BootstrapResponse["settings"] | null | undefined,
+) {
+  return ensureMediaCached("settings", collectSettingsMediaUrls(settings));
+}
+
+/**
+ * แคชรูปสินค้าจาก SQLite ท้องถิ่น
+ * ด่วนก่อน (หน้าขาย) — awaitQuick=true จะรอเฉพาะสินค้าด่วน
+ * ข้ามถ้ารายการ URL ไม่เปลี่ยนและครบในดิสก์แล้ว
+ */
+export async function cacheLocalProductImages(opts?: {
+  awaitQuick?: boolean;
+}) {
+  if (!window.apPos?.db?.listProducts) return false;
+  const rows = await window.apPos.db.listProducts();
+  const quickUrls: string[] = [];
+  const otherUrls: string[] = [];
+  for (const p of rows) {
+    const u = p.imageUrl?.trim();
+    if (!u) continue;
+    if (p.isQuick) quickUrls.push(u);
+    else otherUrls.push(u);
+  }
+  let changed = false;
+  if (opts?.awaitQuick !== false) {
+    changed = (await ensureMediaCached("products-quick", quickUrls)) || changed;
+  } else {
+    void ensureMediaCached("products-quick", quickUrls);
+  }
+  if (otherUrls.length) {
+    void ensureMediaCached("products-other", otherUrls);
+  }
+  return changed;
+}
+
+/** แคชรูปจากรายการสินค้าที่ sync เข้ามาใหม่เท่านั้น (เฉพาะที่ยังไม่มีในดิสก์) */
+export async function ensureProductImagesFromPull(
+  products: Array<{ imageUrl?: string | null }>,
+) {
+  if (!products.length) return false;
+  return ensureMediaCached(
+    "products-pull",
+    products.map((p) => p.imageUrl),
+    { fingerprint: false },
+  );
+}
+
+export function collectSettingsMediaUrls(
+  settings: BootstrapResponse["settings"] | null | undefined,
+): string[] {
+  if (!settings) return [];
+  const out: string[] = [];
+  if (settings.branding?.logoUrl) out.push(settings.branding.logoUrl);
+  if (settings.display?.bannerUrl) out.push(settings.display.bannerUrl);
+  if (settings.display?.panelUrl) out.push(settings.display.panelUrl);
+  for (const it of settings.customerAds?.items ?? []) {
+    if (it?.url) out.push(it.url);
+  }
+  return out;
+}
+
+export function resolveImage(url: string | null | undefined, fallback: string) {
+  if (!url) return fallback;
+  if (
+    url.startsWith("data:") ||
+    url.startsWith("appos-media:") ||
+    url.startsWith("blob:")
+  ) {
+    return url;
+  }
+  const abs = toAbsoluteMediaUrl(url);
+  if (abs) {
+    const local = mediaLocalByRemote.get(abs);
+    if (local) return local;
+  }
+  if (url.startsWith("http://") || url.startsWith("https://")) {
+    return url;
+  }
+  return `${API_BASE}${url.startsWith("/") ? "" : "/"}${url}`;
+}
+
+/**
+ * โฆษณาจอลูกค้า — วิดีโอควรใช้ HTTP ตอนออนไลน์
+ * (appos-media:// มักเล่นวิดีโอไม่นิ่ง / ไม่รองรับ range ดีพอ)
+ */
+export function resolveAdMediaUrl(
+  url: string,
+  type: "image" | "video",
+): string {
+  const abs = toAbsoluteMediaUrl(url);
+  const cached = abs ? mediaLocalByRemote.get(abs) : undefined;
+  if (type === "video") {
+    if (abs && (abs.startsWith("http://") || abs.startsWith("https://"))) {
+      return abs;
+    }
+    if (cached) return cached;
+    return resolveImage(url, "");
+  }
+  return resolveImage(url, "");
+}
+
+function mapApiProducts(products: ApiProduct[]): QuickProduct[] {
+  return products.map((p) => ({
+    id: p.id,
+    barcode: p.barcode,
+    productCode: p.productCode,
+    name: p.name,
+    unit: p.unit,
+    costPrice: p.costPrice ?? null,
+    price: p.price,
+    tone: "#495057",
+    image: resolveImage(p.imageUrl, PLACEHOLDER_IMAGE),
+    isQuick: Boolean(p.isQuick),
+    quickSort: p.quickSort ?? 999,
+    isOpenPrice: p.isOpenPrice ?? false,
+    openPriceMax: p.openPriceMax ?? 100,
+  }));
+}
+
+function toLocalProduct(
+  p: QuickProduct,
+  updatedAt = new Date().toISOString(),
+) {
+  return {
+    id: p.id,
+    barcode: p.barcode,
+    productCode: p.productCode ?? null,
+    name: p.name,
+    unit: p.unit,
+    costPrice: p.costPrice ?? null,
+    price: p.price,
+    isQuick: Boolean(p.isQuick),
+    quickSort: p.quickSort ?? 999,
+    imageUrl: typeof p.image === "string" ? p.image : null,
+    isOpenPrice: Boolean(p.isOpenPrice),
+    openPriceMax: p.openPriceMax ?? 100,
+    updatedAt,
+  };
+}
+
+function fromLocalProduct(p: {
+  id: string;
+  barcode: string;
+  productCode?: string | null;
+  name: string;
+  unit: string;
+  costPrice?: number | null;
+  price: number | null;
+  isQuick: boolean;
+  quickSort: number;
+  imageUrl?: string | null;
+  isOpenPrice: boolean;
+  openPriceMax: number;
+}): QuickProduct {
+  return {
+    id: p.id,
+    barcode: p.barcode,
+    productCode: p.productCode ?? undefined,
+    name: p.name,
+    unit: p.unit,
+    costPrice: p.costPrice ?? null,
+    price: p.price,
+    tone: "#495057",
+    image: resolveImage(p.imageUrl, PLACEHOLDER_IMAGE),
+    isQuick: Boolean(p.isQuick),
+    quickSort: p.quickSort ?? 999,
+    isOpenPrice: Boolean(p.isOpenPrice),
+    openPriceMax: p.openPriceMax ?? 100,
+  };
+}
+
+async function fetchJson<T>(url: string, timeoutMs = 3000): Promise<T> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as T;
+}
+
+async function postJson<T>(
+  url: string,
+  body: unknown,
+  timeoutMs = 4000,
+): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const data = (await res.json()) as { message?: string | string[] };
+      if (data?.message) {
+        detail = Array.isArray(data.message)
+          ? data.message.join(", ")
+          : String(data.message);
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(detail);
+  }
+  return (await res.json()) as T;
+}
+
+export async function getDeviceConfig(): Promise<DeviceConfig> {
+  if (window.apPos?.db) return window.apPos.db.device();
+  return {
+    branchId: "branch-002",
+    branchName: "สาขาเจ็ดเสมียน",
+    terminalId: "terminal-dev",
+    terminalName: "เครื่อง POS",
+  };
+}
+
+export async function setDeviceBranch(branch: {
+  id: string;
+  name: string;
+}): Promise<DeviceConfig> {
+  const patch = { branchId: branch.id, branchName: branch.name };
+  if (window.apPos?.db?.setDevice) {
+    return window.apPos.db.setDevice(patch);
+  }
+  return {
+    ...(await getDeviceConfig()),
+    ...patch,
+  };
+}
+
+export async function setDeviceTerminalName(
+  terminalName: string,
+): Promise<DeviceConfig> {
+  const patch = { terminalName: terminalName.trim() || "เครื่อง POS" };
+  if (window.apPos?.db?.setDevice) {
+    return window.apPos.db.setDevice(patch);
+  }
+  return {
+    ...(await getDeviceConfig()),
+    ...patch,
+  };
+}
+
+export async function setDeviceTerminal(terminal: {
+  id: string;
+  name: string;
+  setupDone?: boolean;
+}): Promise<DeviceConfig> {
+  const patch = {
+    terminalId: terminal.id,
+    terminalName: terminal.name.trim() || "เครื่อง POS",
+    ...(terminal.setupDone != null ? { setupDone: terminal.setupDone } : {}),
+  };
+  if (window.apPos?.db?.setDevice) {
+    return window.apPos.db.setDevice(patch);
+  }
+  return {
+    ...(await getDeviceConfig()),
+    ...patch,
+  };
+}
+
+export async function markDeviceSetupDone(): Promise<DeviceConfig> {
+  if (window.apPos?.db?.setDevice) {
+    return window.apPos.db.setDevice({ setupDone: true });
+  }
+  return {
+    ...(await getDeviceConfig()),
+    setupDone: true,
+  };
+}
+
+/** ดึงค่าใบเสร็จจากเครื่องที่ Admin ตั้ง → เก็บในเครื่องนี้ */
+export async function applyPrinterConfigFromTerminal(t: {
+  paperWidth?: "58mm" | "80mm";
+  autoPrint?: boolean;
+  printSilent?: boolean;
+  printerName?: string | null;
+  receiptFooterHours?: string | null;
+  receiptFooterPhones?: string | null;
+}) {
+  await savePrinterConfig({
+    paperWidth: t.paperWidth === "58mm" ? "58mm" : "80mm",
+    autoPrint: t.autoPrint !== false,
+    silent: t.printSilent !== false,
+    printerName: String(t.printerName ?? "").trim(),
+    ...(t.receiptFooterHours != null
+      ? { footerHours: String(t.receiptFooterHours).trim() }
+      : {}),
+    ...(t.receiptFooterPhones != null
+      ? { footerPhones: String(t.receiptFooterPhones).trim() }
+      : {}),
+  });
+}
+
+/** ผูกเครื่องนี้กับเครื่องที่ Admin สร้างไว้แล้วเท่านั้น */
+export async function claimThisTerminal(opts: {
+  id: string;
+  branchId: string;
+}): Promise<{
+  ok: true;
+  device: DeviceConfig;
+} | {
+  ok: false;
+  message: string;
+}> {
+  try {
+    const claimed = await postJson<{
+      id: string;
+      code: string;
+      name: string;
+      branchId: string;
+      paperWidth?: "58mm" | "80mm";
+      autoPrint?: boolean;
+      printSilent?: boolean;
+      printerName?: string | null;
+      receiptFooterHours?: string | null;
+      receiptFooterPhones?: string | null;
+    }>(`${API_BASE}/sync/terminals/claim`, {
+      id: opts.id,
+      branchId: opts.branchId,
+    });
+    const devicePatch = {
+      branchId: claimed.branchId || opts.branchId,
+      terminalId: claimed.id,
+      terminalName: claimed.name,
+      setupDone: true as const,
+    };
+    await applyPrinterConfigFromTerminal(claimed);
+    if (window.apPos?.db?.replaceDevice) {
+      const current = await getDeviceConfig();
+      const device = await window.apPos.db.replaceDevice({
+        branchId: devicePatch.branchId,
+        branchName: current.branchName,
+        terminalId: devicePatch.terminalId,
+        terminalName: devicePatch.terminalName,
+        setupDone: true,
+      });
+      return { ok: true, device };
+    }
+    const device = window.apPos?.db?.setDevice
+      ? await window.apPos.db.setDevice(devicePatch)
+      : {
+          ...(await getDeviceConfig()),
+          ...devicePatch,
+        };
+    return { ok: true, device };
+  } catch (e) {
+    const msg =
+      e instanceof Error ? e.message : "ยืนยันเครื่อง POS ไม่สำเร็จ";
+    const notFound =
+      msg.includes("ไม่พบ") ||
+      msg.includes("404") ||
+      msg.includes("สาขา") ||
+      msg.includes("ปิดใช้งาน");
+
+    // เครื่องไม่มีในระบบจริง — อย่าใช้ cache เก่า (เคยทำให้เลือกเครื่องผีได้)
+    if (notFound) {
+      if (window.apPos?.db?.setDevice) {
+        await window.apPos.db.setDevice({ setupDone: false });
+      }
+      return {
+        ok: false,
+        message:
+          msg.includes("สาขา") || msg.includes("ปิดใช้งาน")
+            ? msg
+            : "ไม่พบเครื่อง POS นี้ในระบบ — ไปสร้างที่ Admin (องค์กร → เครื่อง POS) แล้วเลือกลงทะเบียนใหม่",
+      };
+    }
+
+    // offline / เน็ตมีปัญหา — ใช้ cache ได้
+    const cached = await loadTerminals(opts.branchId);
+    const hit = cached.find((t) => t.id === opts.id && t.active !== false);
+    if (hit) {
+      await applyPrinterConfigFromTerminal(hit);
+      const device = window.apPos?.db?.setDevice
+        ? await window.apPos.db.setDevice({
+            branchId: opts.branchId,
+            terminalId: hit.id,
+            terminalName: hit.name,
+          })
+        : {
+            ...(await getDeviceConfig()),
+            branchId: opts.branchId,
+            terminalId: hit.id,
+            terminalName: hit.name,
+          };
+      return { ok: true, device };
+    }
+    return {
+      ok: false,
+      message: msg || "ยืนยันเครื่อง POS ไม่สำเร็จ (ตรวจเน็ตหรือสร้างเครื่องที่ Admin)",
+    };
+  }
+}
+
+/** @deprecated ใช้ claimThisTerminal แทน — ไม่สร้างเครื่องจากชื่อพิมพ์เอง */
+export async function registerThisTerminal(opts?: {
+  name?: string;
+  branchId?: string;
+  id?: string;
+}): Promise<DeviceConfig> {
+  const device = await getDeviceConfig();
+  const id = opts?.id ?? device.terminalId;
+  const branchId = opts?.branchId ?? device.branchId;
+  const result = await claimThisTerminal({ id, branchId });
+  if (result.ok) return result.device;
+  throw new Error(result.message);
+}
+
+export type SyncBranch = {
+  id: string;
+  code: string;
+  name: string;
+};
+
+export type SyncStaff = {
+  id: string;
+  code: string;
+  name: string;
+  pin: string;
+  role?: string;
+  commissionEnabled?: boolean;
+  commissionStartSales?: number;
+  commissionStepSales?: number;
+  commissionPerStep?: number;
+};
+
+export type SyncTerminal = {
+  id: string;
+  code: string;
+  name: string;
+  branchId: string;
+  active: boolean;
+  paperWidth?: "58mm" | "80mm";
+  autoPrint?: boolean;
+  printSilent?: boolean;
+  printerName?: string | null;
+  receiptFooterHours?: string | null;
+  receiptFooterPhones?: string | null;
+};
+
+const BRANCHES_META = "cached-branches";
+const STAFF_META = "cached-staff";
+const PROMOS_META = "cached-promos";
+const TERMINALS_META = "cached-terminals";
+
+export async function loadTerminals(branchId?: string): Promise<SyncTerminal[]> {
+  try {
+    const qs = branchId ? `?branchId=${encodeURIComponent(branchId)}` : "";
+    const data = await fetchJson<{ terminals: SyncTerminal[] }>(
+      `${API_BASE}/sync/terminals${qs}`,
+    );
+    const list = (data.terminals ?? []).filter((t) => t.active !== false);
+    if (window.apPos?.db) {
+      const allRaw = await window.apPos.db.getMeta(TERMINALS_META);
+      let all: SyncTerminal[] = [];
+      if (allRaw) {
+        try {
+          all = JSON.parse(allRaw) as SyncTerminal[];
+        } catch {
+          all = [];
+        }
+      }
+      const byId = new Map(all.map((t) => [t.id, t]));
+      if (branchId) {
+        // แทนที่เครื่องของสาขานี้ด้วยผลจาก API (แม้ list ว่าง — กัน cache ผี)
+        for (const [id, t] of byId) {
+          if (t.branchId === branchId) byId.delete(id);
+        }
+        for (const t of list) byId.set(t.id, t);
+      } else {
+        byId.clear();
+        for (const t of list) byId.set(t.id, t);
+      }
+      await window.apPos.db.setMeta(
+        TERMINALS_META,
+        JSON.stringify([...byId.values()]),
+      );
+    }
+    // สำเร็จจาก API แล้ว — ใช้ผลนี้เสมอ แม้ไม่มีเครื่อง
+    return list;
+  } catch {
+    // offline — ใช้ cache
+  }
+  if (window.apPos?.db) {
+    const raw = await window.apPos.db.getMeta(TERMINALS_META);
+    if (raw) {
+      try {
+        const all = JSON.parse(raw) as SyncTerminal[];
+        return branchId
+          ? all.filter((t) => t.branchId === branchId && t.active !== false)
+          : all.filter((t) => t.active !== false);
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return [];
+}
+
+export async function loadBranches(): Promise<SyncBranch[]> {
+  try {
+    const data = await fetchJson<{ branches: SyncBranch[] }>(
+      `${API_BASE}/sync/branches`,
+    );
+    const list = data.branches ?? [];
+    if (window.apPos?.db && list.length) {
+      await window.apPos.db.setMeta(BRANCHES_META, JSON.stringify(list));
+    }
+    if (list.length) return list;
+  } catch {
+    // offline — ใช้ cache
+  }
+  if (window.apPos?.db) {
+    const raw = await window.apPos.db.getMeta(BRANCHES_META);
+    if (raw) {
+      try {
+        return JSON.parse(raw) as SyncBranch[];
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return [];
+}
+
+export async function loadStaffDirectory(): Promise<SyncStaff[]> {
+  try {
+    const data = await fetchJson<{ staff: SyncStaff[] }>(
+      `${API_BASE}/sync/staff`,
+    );
+    const list = (data.staff ?? []).filter((s) => s.code !== "admin");
+    if (window.apPos?.db && list.length) {
+      await window.apPos.db.setMeta(STAFF_META, JSON.stringify(list));
+    }
+    if (list.length) return list;
+  } catch {
+    // offline
+  }
+  if (window.apPos?.db) {
+    const raw = await window.apPos.db.getMeta(STAFF_META);
+    if (raw) {
+      try {
+        return JSON.parse(raw) as SyncStaff[];
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return [];
+}
+
+/** ยอดขายรอบปิดแล้วของพนักงานวันนี้ (ไม่รวมรอบปัจจุบัน) */
+export async function fetchStaffDayPriorSales(
+  staffId: string,
+  excludeShiftId?: string,
+): Promise<number> {
+  if (!staffId) return 0;
+  try {
+    const qs = new URLSearchParams({ staffId });
+    if (excludeShiftId) qs.set("excludeShiftId", excludeShiftId);
+    const data = await fetchJson<{ priorGrossTotal?: number }>(
+      `${API_BASE}/sync/staff/day-sales?${qs.toString()}`,
+    );
+    const n = Number(data.priorGrossTotal);
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
+
+export async function loadCachedProducts(): Promise<QuickProduct[]> {
+  if (!window.apPos?.db) return [];
+  const rows = await window.apPos.db.listProducts();
+  return rows.map(fromLocalProduct);
+}
+
+export async function loadCachedMembers(): Promise<Member[]> {
+  if (!window.apPos?.db) return [];
+  const rows = await window.apPos.db.listMembers();
+  return rows.map((m) => ({
+    id: m.id,
+    code: m.code,
+    name: m.name,
+    phone: m.phone ?? "",
+    points: m.points,
+  }));
+}
+
+export async function saveCachedMembers(members: Member[]) {
+  if (!window.apPos?.db) return;
+  await window.apPos.db.upsertMembers(
+    members.map((m) => ({
+      ...m,
+      updatedAt: new Date().toISOString(),
+    })),
+  );
+}
+
+export async function enqueueSale(payload: SyncedSalePayload) {
+  if (!window.apPos?.db) return;
+  await window.apPos.db.saveSale(payload);
+}
+
+/** บันทึก local แล้ว push พื้นหลัง — ไม่รอเน็ตตอนจบบิล */
+export async function enqueueSaleAndSync(payload: SyncedSalePayload) {
+  await enqueueSale(payload);
+  void syncPushOutbox().catch(() => {
+    // offline / API พัง — ค้างใน outbox แล้วค่อย sync รอบถัดไป
+  });
+}
+
+export async function enqueueShift(payload: SyncedShiftPayload) {
+  if (!window.apPos?.db?.enqueueShift) return;
+  await window.apPos.db.enqueueShift(payload);
+}
+
+export async function enqueueShiftAndSync(
+  payload: SyncedShiftPayload,
+  opts?: { awaitPush?: boolean; pushTimeoutMs?: number },
+) {
+  await enqueueShift(payload);
+  if (opts?.awaitPush) {
+    // ปิดรอบ: รอส่งให้จบ กันพนักงานปิดเครื่องแล้วข้อมูลไม่ขึ้น
+    await syncPushOutbox({ timeoutMs: opts.pushTimeoutMs ?? 30_000 });
+    return;
+  }
+  void syncPushOutbox().catch(() => undefined);
+}
+
+export async function enqueueAudit(payload: SyncedAuditPayload) {
+  if (!window.apPos?.db?.saveAudit) return;
+  await window.apPos.db.saveAudit(payload);
+}
+
+export async function enqueueAuditAndSync(payload: SyncedAuditPayload) {
+  await enqueueAudit(payload);
+  void syncPushOutbox().catch(() => undefined);
+}
+
+export async function loadLocalAudits(
+  shiftId: string,
+): Promise<SyncedAuditPayload[]> {
+  if (!window.apPos?.db?.listAuditsByShift) return [];
+  const rows = await window.apPos.db.listAuditsByShift(shiftId);
+  return rows as SyncedAuditPayload[];
+}
+
+export async function syncPullMasterData() {
+  const since = (await window.apPos?.db?.getMeta("sync-cursor")) ?? "";
+  const url = since
+    ? `${API_BASE}/sync/changes?since=${encodeURIComponent(since)}`
+    : `${API_BASE}/sync/bootstrap`;
+  // bootstrap ครั้งแรกอาจใหญ่ — เปิดรอบรออัปเดตก่อนขาย
+  const data = await fetchJson<BootstrapResponse>(url, since ? 15_000 : 60_000);
+
+  if (window.apPos?.db) {
+    if (data.products.length || data.removedProductIds.length || !since) {
+      const mapped = data.products.map((api) => {
+        const local = toLocalProduct(
+          mapApiProducts([api])[0]!,
+          api.updatedAt ?? new Date().toISOString(),
+        );
+        // เก็บ URL ต้นทางจาก API — resolve เป็น cache ตอนอ่าน
+        return { ...local, imageUrl: api.imageUrl };
+      });
+      if (!since) {
+        // bootstrap: แทนที่ด้วยชุดจากส่วนกลาง
+        const current = await window.apPos.db.listProducts();
+        if (current.length) {
+          await window.apPos.db.removeProducts(current.map((x) => x.id));
+        }
+      }
+      if (mapped.length) await window.apPos.db.upsertProducts(mapped);
+      if (data.removedProductIds?.length) {
+        await window.apPos.db.removeProducts(data.removedProductIds);
+      }
+    }
+
+    if (data.members.length || data.removedMemberIds.length || !since) {
+      if (!since) {
+        const current = await window.apPos.db.listMembers();
+        if (current.length) {
+          await window.apPos.db.removeMembers(current.map((x) => x.id));
+        }
+      }
+      if (data.members.length) {
+        await window.apPos.db.upsertMembers(
+          data.members.map((m) => ({
+            ...m,
+            updatedAt: (m as Member & { updatedAt?: string }).updatedAt ??
+              new Date().toISOString(),
+          })),
+        );
+      }
+      if (data.removedMemberIds?.length) {
+        await window.apPos.db.removeMembers(data.removedMemberIds);
+      }
+    }
+
+    // promos + settings (cache in meta)
+    if (data.promos || data.removedPromoIds?.length || !since) {
+      let cached: BootstrapResponse["promos"] = [];
+      if (since) {
+        const raw = await window.apPos.db.getMeta(PROMOS_META);
+        if (raw) {
+          try {
+            cached = JSON.parse(raw) as BootstrapResponse["promos"];
+          } catch {
+            cached = [];
+          }
+        }
+      }
+      const map = new Map((cached ?? []).map((p) => [p.id, p]));
+      for (const p of data.promos ?? []) map.set(p.id, p);
+      for (const id of data.removedPromoIds ?? []) map.delete(id);
+      if (!since && data.promos) {
+        // bootstrap replaces
+        await window.apPos.db.setMeta(
+          PROMOS_META,
+          JSON.stringify(data.promos),
+        );
+      } else {
+        await window.apPos.db.setMeta(
+          PROMOS_META,
+          JSON.stringify([...map.values()]),
+        );
+      }
+    }
+
+    if (data.settings) {
+      await window.apPos.db.setMeta(
+        "cached-settings",
+        JSON.stringify(data.settings),
+      );
+    }
+
+    if (data.cursor) await window.apPos.db.setMeta("sync-cursor", data.cursor);
+  }
+
+  // สื่อ: ดาวน์โหลดเฉพาะ URL ใหม่/ที่ขาด — ไม่ดึงซ้ำทุกรอบ sync
+  if (data.settings) {
+    void ensureSettingsMediaCached(data.settings);
+  }
+  if (data.products.length) {
+    void ensureProductImagesFromPull(data.products);
+  }
+
+  return data;
+}
+
+export async function loadCachedPromos(): Promise<
+  NonNullable<BootstrapResponse["promos"]>
+> {
+  if (window.apPos?.db) {
+    const raw = await window.apPos.db.getMeta(PROMOS_META);
+    if (raw) {
+      try {
+        return JSON.parse(raw) as NonNullable<BootstrapResponse["promos"]>;
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return [];
+}
+
+export async function loadCachedSettings(): Promise<
+  BootstrapResponse["settings"] | null
+> {
+  if (window.apPos?.db) {
+    const raw = await window.apPos.db.getMeta("cached-settings");
+    if (raw) {
+      try {
+        return JSON.parse(raw) as BootstrapResponse["settings"];
+      } catch {
+        // ignore
+      }
+    }
+  }
+  return null;
+}
+
+/** ดึง settings จาก API โดยตรง — ใช้บนจอ 2 ถ้า cache/IPC ว่าง */
+export async function fetchSettingsFromApi(): Promise<
+  BootstrapResponse["settings"] | null
+> {
+  try {
+    return await fetchJson<BootstrapResponse["settings"]>(
+      `${API_BASE}/sync/settings`,
+    );
+  } catch {
+    return null;
+  }
+}
+
+export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
+  if (!window.apPos?.db) return { accepted: 0 };
+  const outbox = (await window.apPos.db.listOutbox()) as SyncEnvelope[];
+  if (!outbox.length) return { accepted: 0 };
+
+  const timeoutMs = opts?.timeoutMs ?? 8_000;
+  const sales = outbox.filter((e) => e.type === "sale");
+  const shifts = outbox.filter((e) => e.type === "shift");
+  const audits = outbox.filter((e) => e.type === "audit");
+  const acceptedIds: string[] = [];
+
+  if (sales.length) {
+    try {
+      const data = await postJson<{ accepted: number; acceptedIds: string[] }>(
+        `${API_BASE}/sync/sales`,
+        { sales },
+        timeoutMs,
+      );
+      acceptedIds.push(...(data.acceptedIds ?? []));
+    } catch {
+      // keep sales in outbox
+    }
+  }
+
+  if (audits.length) {
+    try {
+      const data = await postJson<{ accepted: string[] }>(
+        `${API_BASE}/sync/audits`,
+        { audits: audits.map((e) => e.payload) },
+        timeoutMs,
+      );
+      const ids = data.accepted ?? [];
+      for (const auditId of ids) {
+        const env = audits.find((e) => e.payload.id === auditId);
+        if (env) acceptedIds.push(env.id);
+      }
+    } catch {
+      // keep audits in outbox
+    }
+  }
+
+  if (shifts.length) {
+    try {
+      const data = await postJson<{ accepted: string[] }>(
+        `${API_BASE}/sync/shifts`,
+        { shifts: shifts.map((e) => e.payload) },
+        timeoutMs,
+      );
+      const ids = data.accepted ?? [];
+      for (const shiftId of ids) {
+        const env = shifts.find((e) => e.payload.id === shiftId);
+        if (env) acceptedIds.push(env.id);
+      }
+    } catch {
+      // keep shifts in outbox
+    }
+  }
+
+  if (acceptedIds.length) {
+    await window.apPos.db.ackOutbox(acceptedIds);
+  }
+  return { accepted: acceptedIds.length, acceptedIds };
+}
+
+export async function pendingOutboxCount() {
+  if (!window.apPos?.db) return 0;
+  return window.apPos.db.outboxCount();
+}

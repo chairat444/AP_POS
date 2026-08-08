@@ -35,7 +35,9 @@ export const sales = sqliteTable("sales", {
   billNo: text("bill_no").notNull(),
   branchId: text("branch_id").notNull(),
   terminalId: text("terminal_id").notNull(),
+  shiftId: text("shift_id"),
   customerId: text("customer_id"),
+  customerName: text("customer_name"),
   subtotal: real("subtotal").notNull(),
   discount: real("discount").notNull().default(0),
   pointsRedeemed: integer("points_redeemed").notNull().default(0),
@@ -52,12 +54,21 @@ export const saleLines = sqliteTable("sale_lines", {
   id: text("id").primaryKey(),
   saleId: text("sale_id").notNull(),
   barcode: text("barcode").notNull(),
+  productCode: text("product_code"),
   name: text("name").notNull(),
   qty: real("qty").notNull(),
   unit: text("unit").notNull(),
   unitPrice: real("unit_price").notNull(),
   discount: real("discount").notNull().default(0),
   lineTotal: real("line_total").notNull(),
+});
+
+export const salePayments = sqliteTable("sale_payments", {
+  id: text("id").primaryKey(),
+  saleId: text("sale_id").notNull(),
+  method: text("method").notNull(),
+  amount: real("amount").notNull(),
+  tendered: real("tendered"),
 });
 
 export const syncOutbox = sqliteTable("sync_outbox", {
@@ -80,4 +91,30 @@ export const shifts = sqliteTable("shifts", {
   closeCash: real("close_cash"),
   status: text("status").notNull().default("open"),
   syncedAt: text("synced_at"),
+});
+
+/** ประวัติยกเลิกรายการ/บิล — persist ทันทีกันไฟดับ */
+export const shiftAudits = sqliteTable("shift_audits", {
+  id: text("id").primaryKey(),
+  shiftId: text("shift_id").notNull(),
+  branchId: text("branch_id").notNull(),
+  terminalId: text("terminal_id").notNull(),
+  staffId: text("staff_id"),
+  staffName: text("staff_name").notNull(),
+  type: text("type").notNull(),
+  barcode: text("barcode"),
+  productName: text("product_name"),
+  qty: real("qty"),
+  amount: real("amount").notNull(),
+  billTotalBefore: real("bill_total_before"),
+  itemCountBefore: integer("item_count_before"),
+  createdAt: text("created_at").notNull(),
+  syncedAt: text("synced_at"),
+});
+
+/** Key-value meta เช่น sync cursor, device config */
+export const meta = sqliteTable("meta", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedAt: text("updated_at").notNull(),
 });

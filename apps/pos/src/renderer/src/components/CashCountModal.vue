@@ -248,7 +248,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
                 ? isEditingFloat
                   ? "บันทึกการแก้ไข"
                   : "บันทึก"
-                : "ปิดรอบ"
+                : "ส่งข้อมูลแล้วปิดรอบ"
             }}
           </button>
         </div>

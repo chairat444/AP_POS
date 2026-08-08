@@ -6,14 +6,9 @@ export type Member = {
   points: number;
 };
 
-export const DEMO_MEMBERS: Member[] = [
-  { id: "m1", code: "C00001", name: "คุณสมชาย ใจดี", phone: "0812345678", points: 500 },
-  { id: "m2", code: "C00002", name: "คุณสมหญิง รักหมู", phone: "0898765432", points: 120 },
-  { id: "m3", code: "C00003", name: "คุณวิชัย ตลาดสด", phone: "0811112222", points: 0 },
-  { id: "m4", code: "C00004", name: "คุณมาลี สาขาหลุมดิน", phone: "0823456789", points: 85 },
-  { id: "m5", code: "C00005", name: "คุณประยุทธ์ กินเก่ง", phone: "0834567890", points: 1500 },
-  { id: "m6", code: "C00006", name: "คุณนภา เบอร์เก่า", phone: "0912345678", points: 40 },
-];
+/** Offline fallback only — empty so demo members never reappear after migrate. */
+export const DEMO_MEMBERS: Member[] = [];
+
 
 export function searchMembers(query: string, members: Member[]): Member[] {
   const q = query.trim().toLowerCase();

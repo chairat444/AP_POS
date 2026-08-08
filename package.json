@@ -4,10 +4,21 @@
   "version": "0.1.0",
   "description": "AP หมูสด POS — Electron + Vue + NestJS (offline-first)",
   "scripts": {
+    "dev": "sh -c 'trap \"kill 0\" INT TERM EXIT; pnpm dev:api & pnpm dev:admin & pnpm dev:pos & wait'",
     "dev:pos": "pnpm --filter @ap-pos/pos dev",
-    "dev:api": "pnpm --filter @ap-pos/api start:dev",
+    "dev:api": "pnpm build:shared && pnpm build:db && pnpm --filter @ap-pos/api start:dev",
+    "dev:admin": "pnpm --filter @ap-pos/admin dev",
     "build": "pnpm -r run build",
-    "typecheck": "pnpm -r run typecheck"
+    "build:db": "pnpm --filter @ap-pos/db build",
+    "build:shared": "pnpm --filter @ap-pos/shared build",
+    "typecheck": "pnpm -r run typecheck",
+    "db:studio:pg": "pnpm --filter @ap-pos/db db:studio:pg",
+    "seed:export": "pnpm --filter @ap-pos/pos seed:export",
+    "dist:pos": "pnpm --filter @ap-pos/pos dist",
+    "dist:pos:win": "pnpm --filter @ap-pos/pos dist:win",
+    "dist:pos:mac": "pnpm --filter @ap-pos/pos dist:mac",
+    "dist:pos:win:fresh": "pnpm seed:export && pnpm dist:pos:win",
+    "dist:pos:mac:fresh": "pnpm seed:export && pnpm dist:pos:mac"
   },
   "engines": {
     "node": ">=20"

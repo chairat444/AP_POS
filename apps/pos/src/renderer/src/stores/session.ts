@@ -1,9 +1,54 @@
 import { defineStore } from "pinia";
 import { computed, ref } from "vue";
+import {
+  calcDailyCommission,
+  type CommissionResult,
+} from "@ap-pos/shared";
 import { DEMO_STAFF, type StaffUser } from "../data/demo-staff";
 import type { DenomCount } from "../data/cash-denoms";
 import { sumDenomCounts } from "../data/cash-denoms";
+import {
+  claimThisTerminal,
+  enqueueAuditAndSync,
+  enqueueShiftAndSync,
+  fetchStaffDayPriorSales,
+  getDeviceConfig,
+  loadStaffDirectory,
+  markDeviceSetupDone,
+  setDeviceBranch,
+  setDeviceTerminal,
+  type SyncBranch,
+  type SyncStaff,
+  type SyncedShiftPayload,
+} from "../services/sync";
 import type { PaymentMethod } from "./cart";
+
+let cachedDevice: {
+  branchId: string;
+  branchName: string;
+  terminalId: string;
+  terminalName?: string;
+  setupDone?: boolean;
+} = {
+  branchId: "branch-002",
+  branchName: "สาขาเจ็ดเสมียน",
+  terminalId: "terminal-dev",
+  terminalName: "เครื่อง POS",
+  setupDone: false,
+};
+
+void getDeviceConfig().then((d) => {
+  cachedDevice = d;
+});
+
+function deviceSync() {
+  return cachedDevice;
+}
+
+function branchCodeOf(device: { branchId: string; branchName?: string }) {
+  const raw = device.branchId.replace(/^branch-/i, "");
+  return raw.toUpperCase() || "001";
+}
 
 export type ShiftSale = {
   id: string;
@@ -94,6 +139,17 @@ export const useSessionStore = defineStore("session", () => {
   const cashCounts = ref<CashCountRecord[]>([]);
   const billSeq = ref(0);
   const statusMessage = ref("");
+  const staffDirectory = ref<SyncStaff[]>(
+    DEMO_STAFF.map((s) => ({
+      id: s.id,
+      code: s.code,
+      name: s.name,
+      pin: s.pin,
+    })),
+  );
+  const device = ref(cachedDevice);
+  /** ปิดรอบแล้วกำลังออกจากแอป — ห้ามโชว์หน้าล็อกอิน */
+  const exiting = ref(false);
 
   const isOpen = computed(() => Boolean(staff.value && shiftId.value));
 
@@ -172,22 +228,213 @@ export const useSessionStore = defineStore("session", () => {
   });
 
   function nextBillNo() {
+    const d = deviceSync();
     billSeq.value += 1;
     const n = String(billSeq.value).padStart(6, "0");
-    return `S2607-001-${n}`;
+    const day = new Date().toISOString().slice(2, 10).replace(/-/g, "");
+    return `S${day}-${branchCodeOf(d)}-${n}`;
   }
 
-  /** เปิดรอบเร็ว — นับเงินทอนทีหลังได้ */
-  function loginAndOpen(codeOrPin: string, floatCash = 0): boolean {
+  function previewBillNo() {
+    const d = deviceSync();
+    const n = String(billSeq.value + 1).padStart(6, "0");
+    const day = new Date().toISOString().slice(2, 10).replace(/-/g, "");
+    return `S${day}-${branchCodeOf(d)}-${n}`;
+  }
+
+  async function refreshStaffDirectory() {
+    staffDirectory.value = await loadStaffDirectory();
+    return staffDirectory.value;
+  }
+
+  async function selectBranch(branch: SyncBranch) {
+    const next = await setDeviceBranch({ id: branch.id, name: branch.name });
+    cachedDevice = next;
+    device.value = next;
+    return next;
+  }
+
+  async function selectTerminal(terminal: {
+    id: string;
+    name: string;
+    setupDone?: boolean;
+  }) {
+    const next = await setDeviceTerminal(terminal);
+    cachedDevice = next;
+    device.value = next;
+    return next;
+  }
+
+  async function applyDeviceConfig(next: {
+    branchId: string;
+    branchName: string;
+    terminalId: string;
+    terminalName?: string;
+    setupDone?: boolean;
+  }) {
+    const payload = {
+      branchId: next.branchId,
+      branchName: next.branchName,
+      terminalId: next.terminalId,
+      terminalName: next.terminalName ?? "เครื่อง POS",
+      setupDone: Boolean(next.setupDone),
+    };
+    if (window.apPos?.db?.replaceDevice) {
+      const saved = await window.apPos.db.replaceDevice(payload);
+      cachedDevice = saved;
+      device.value = saved;
+      return saved;
+    }
+    if (window.apPos?.db?.setDevice) {
+      const saved = await window.apPos.db.setDevice(payload);
+      // บังคับค่าใน memory ให้ตรงที่ต้องการ แม้ main เก่ายังไม่รองรับบางฟิลด์
+      const forced = {
+        ...saved,
+        ...payload,
+      };
+      cachedDevice = forced;
+      device.value = forced;
+      // backup ผ่าน meta โดยตรง
+      if (window.apPos.db.setMeta) {
+        await window.apPos.db.setMeta(
+          "device-config",
+          JSON.stringify(forced),
+        );
+      }
+      return forced;
+    }
+    cachedDevice = payload;
+    device.value = payload;
+    return payload;
+  }
+
+  async function completeDeviceSetup() {
+    const next = await markDeviceSetupDone();
+    cachedDevice = next;
+    device.value = next;
+    return next;
+  }
+
+  async function resetDeviceSetup() {
+    const next = window.apPos?.db?.setDevice
+      ? await window.apPos.db.setDevice({ setupDone: false })
+      : { ...(await getDeviceConfig()), setupDone: false };
+    cachedDevice = next;
+    device.value = next;
+    return next;
+  }
+
+  async function refreshDevice() {
+    const d = await getDeviceConfig();
+    cachedDevice = d;
+    device.value = d;
+    return d;
+  }
+
+  function buildShiftPayload(
+    status: "open" | "closed",
+    extra: Partial<SyncedShiftPayload> = {},
+  ): SyncedShiftPayload | null {
+    if (!shiftId.value || !staff.value || !openedAt.value) return null;
+    const d = deviceSync();
+    const snap = summary.value;
+    return {
+      id: shiftId.value,
+      branchId: d.branchId,
+      terminalId: d.terminalId,
+      terminalName: d.terminalName ?? "เครื่อง POS",
+      staffId: staff.value.id,
+      staffCode: staff.value.code,
+      staffName: staff.value.name,
+      openedAt: openedAt.value,
+      closedAt: extra.closedAt ?? null,
+      openCash: openCash.value,
+      closeCash: extra.closeCash ?? null,
+      expectedCash: extra.expectedCash ?? snap.expectedCash,
+      variance: extra.variance ?? null,
+      status,
+      billCount: snap.billCount,
+      grossTotal: snap.grossTotal,
+      closeNote: extra.closeNote ?? null,
+      summary: {
+        byMethod: snap.byMethod,
+        cashTendered: snap.cashTendered,
+        cashChange: snap.cashChange,
+        cashInTotal: snap.cashInTotal,
+        cashOutTotal: snap.cashOutTotal,
+        pointsRedeemed: snap.pointsRedeemed,
+        pointsEarned: snap.pointsEarned,
+        voidLineCount: snap.voidLineCount,
+        voidLineAmount: snap.voidLineAmount,
+        voidBillCount: snap.voidBillCount,
+        voidBillAmount: snap.voidBillAmount,
+        floatCounted: snap.floatCounted,
+        audits: audits.value,
+      },
+      cashMoves: cashMoves.value.map((m) => ({ ...m })),
+      cashCounts: cashCounts.value.map((c) => ({ ...c })),
+      ...extra,
+    };
+  }
+
+  function pushShiftSnapshot(
+    status: "open" | "closed",
+    extra: Partial<SyncedShiftPayload> = {},
+  ) {
+    const payload = buildShiftPayload(status, extra);
+    if (!payload) return Promise.resolve();
+    return enqueueShiftAndSync(payload);
+  }
+
+  /** เปิดรอบเร็ว — นับเงินทอนทีหลังได้ · พนักงานใช้ได้ทุกสาขา */
+  async function loginAndOpen(
+    codeOrPin: string,
+    floatCash = 0,
+  ): Promise<boolean> {
     const raw = codeOrPin.trim();
+    const directory = staffDirectory.value.length
+      ? staffDirectory.value
+      : DEMO_STAFF;
     const found =
-      DEMO_STAFF.find((s) => s.pin === raw) ??
-      DEMO_STAFF.find((s) => s.code === raw);
+      directory.find((s) => s.pin === raw) ??
+      directory.find((s) => s.code === raw);
     if (!found) {
       statusMessage.value = "รหัสพนักงานหรือ PIN ไม่ถูกต้อง";
       return false;
     }
-    staff.value = found;
+
+    try {
+      const claimed = await claimThisTerminal({
+        id: deviceSync().terminalId,
+        branchId: deviceSync().branchId,
+      });
+      if (!claimed.ok) {
+        statusMessage.value = claimed.message;
+        exiting.value = false;
+        // บังคับกลับไปลงทะเบียนใหม่
+        const reset = await resetDeviceSetup();
+        cachedDevice = reset;
+        device.value = reset;
+        return false;
+      }
+      cachedDevice = claimed.device;
+      device.value = claimed.device;
+    } catch (e) {
+      statusMessage.value =
+        e instanceof Error ? e.message : "ยืนยันเครื่อง POS ไม่สำเร็จ";
+      return false;
+    }
+
+    staff.value = {
+      id: found.id,
+      code: found.code,
+      name: found.name,
+      pin: found.pin,
+      commissionEnabled: Boolean(found.commissionEnabled),
+      commissionStartSales: found.commissionStartSales,
+      commissionStepSales: found.commissionStepSales,
+      commissionPerStep: found.commissionPerStep,
+    };
     shiftId.value = uid();
     openedAt.value = new Date().toISOString();
     openCash.value = Math.max(0, floatCash);
@@ -198,9 +445,11 @@ export const useSessionStore = defineStore("session", () => {
     cashMoves.value = [];
     cashCounts.value = [];
     billSeq.value = 0;
+    const branchLabel = deviceSync().branchName || deviceSync().branchId;
     statusMessage.value = floatCounted.value
-      ? `เปิดรอบ: ${found.name} · ทอนเริ่ม ${openCash.value.toFixed(0)}฿`
-      : `เปิดรอบ: ${found.name} · นับเงินทอนทีหลังได้`;
+      ? `เปิดรอบ: ${found.name} · ${branchLabel} · ทอนเริ่ม ${openCash.value.toFixed(0)}฿`
+      : `เปิดรอบ: ${found.name} · ${branchLabel} · นับเงินทอนทีหลังได้`;
+    pushShiftSnapshot("open");
     return true;
   }
 
@@ -224,7 +473,7 @@ export const useSessionStore = defineStore("session", () => {
   function recordAudit(
     input: Omit<AuditEvent, "id" | "at" | "staffId" | "staffName">,
   ) {
-    if (!staff.value) return null;
+    if (!staff.value || !shiftId.value) return null;
     const event: AuditEvent = {
       id: uid(),
       at: new Date().toISOString(),
@@ -233,6 +482,25 @@ export const useSessionStore = defineStore("session", () => {
       ...input,
     };
     audits.value = [...audits.value, event];
+
+    const d = deviceSync();
+    void enqueueAuditAndSync({
+      id: event.id,
+      shiftId: shiftId.value,
+      branchId: d.branchId,
+      terminalId: d.terminalId,
+      staffId: event.staffId,
+      staffName: event.staffName,
+      type: event.type,
+      at: event.at,
+      barcode: event.barcode ?? null,
+      productName: event.productName ?? null,
+      qty: event.qty ?? null,
+      amount: event.amount,
+      billTotalBefore: event.billTotalBefore,
+      itemCountBefore: event.itemCountBefore,
+    }).catch(() => undefined);
+
     return event;
   }
 
@@ -253,7 +521,7 @@ export const useSessionStore = defineStore("session", () => {
     };
     cashCounts.value = [...cashCounts.value, rec];
     statusMessage.value = `บันทึกเงินทอนเริ่มรอบ ${total.toFixed(0)} บาท`;
-    // TODO: แจ้งเตือน LINE/Discord
+    pushShiftSnapshot("open");
     return rec;
   }
 
@@ -284,10 +552,42 @@ export const useSessionStore = defineStore("session", () => {
       input.direction === "out"
         ? `นำเงินออก ${amount.toFixed(0)}฿ (${move.reason})`
         : `นำเงินเข้า ${amount.toFixed(0)}฿ (${move.reason})`;
+    pushShiftSnapshot("open");
     return move;
   }
 
-  function closeShift(closeCount?: {
+  function markExiting() {
+    exiting.value = true;
+  }
+
+  /**
+   * ค่าคอมรายวันตอนปิดรอบ = ยอดรอบปิดแล้ววันนี้ + ยอดรอบนี้
+   * ออฟไลน์: ใช้แค่ยอดรอบนี้
+   */
+  async function getCloseCommission(): Promise<CommissionResult | null> {
+    const s = staff.value;
+    if (!s) return null;
+    const fromDir = staffDirectory.value.find((x) => x.id === s.id);
+    const enabled = Boolean(
+      fromDir?.commissionEnabled ?? s.commissionEnabled,
+    );
+    if (!enabled) return null;
+    const prior = await fetchStaffDayPriorSales(
+      s.id,
+      shiftId.value ?? undefined,
+    );
+    const daySales = round2(prior + summary.value.grossTotal);
+    return calcDailyCommission(daySales, {
+      enabled: true,
+      startSales:
+        fromDir?.commissionStartSales ?? s.commissionStartSales ?? 8000,
+      stepSales: fromDir?.commissionStepSales ?? s.commissionStepSales ?? 1000,
+      amountPerStep:
+        fromDir?.commissionPerStep ?? s.commissionPerStep ?? 100,
+    });
+  }
+
+  async function closeShift(closeCount?: {
     total: number;
     denoms: DenomCount[];
     note?: string;
@@ -297,13 +597,14 @@ export const useSessionStore = defineStore("session", () => {
     const variance =
       counted == null ? null : round2(counted - snap.expectedCash);
     const closeNote = closeCount?.note?.trim() ?? "";
+    const closedAt = new Date().toISOString();
 
     if (closeCount && staff.value) {
       cashCounts.value = [
         ...cashCounts.value,
         {
           id: uid(),
-          at: new Date().toISOString(),
+          at: closedAt,
           staffId: staff.value.id,
           staffName: staff.value.name,
           purpose: "close",
@@ -313,10 +614,39 @@ export const useSessionStore = defineStore("session", () => {
       ];
     }
 
+    // สร้าง payload ก่อนเคลียร์ state — sync ทำพื้นหลัง อย่าบล็อกการปิดแอป
+    const commission = await getCloseCommission().catch(() => null);
+    const payload = buildShiftPayload("closed", {
+      closedAt,
+      closeCash: counted,
+      expectedCash: snap.expectedCash,
+      variance,
+      closeNote,
+      billCount: snap.billCount,
+      grossTotal: snap.grossTotal,
+    });
+    if (payload && commission) {
+      const base =
+        payload.summary && typeof payload.summary === "object"
+          ? (payload.summary as Record<string, unknown>)
+          : {};
+      payload.summary = {
+        ...base,
+        commission: {
+          daySales: commission.daySales,
+          amount: commission.amount,
+          steps: commission.steps,
+          startSales: commission.startSales,
+          stepSales: commission.stepSales,
+          amountPerStep: commission.amountPerStep,
+        },
+      };
+    }
+
     const closed = {
       staffName: staff.value?.name ?? "-",
       openedAt: openedAt.value,
-      closedAt: new Date().toISOString(),
+      closedAt,
       openCash: openCash.value,
       closeCash: counted,
       variance,
@@ -324,6 +654,7 @@ export const useSessionStore = defineStore("session", () => {
       cashMoves: cashMoves.value.map((m) => ({ ...m })),
       cashCounts: cashCounts.value.map((c) => ({ ...c })),
       audits: audits.value.map((a) => ({ ...a })),
+      commission,
       ...snap,
     };
 
@@ -342,7 +673,21 @@ export const useSessionStore = defineStore("session", () => {
       variance == null
         ? "ปิดรอบเรียบร้อย"
         : `ปิดรอบแล้ว · นับได้ ${counted?.toFixed(0)} ต่าง ${variance >= 0 ? "+" : ""}${variance.toFixed(0)}${closeNote ? ` · ${closeNote}` : ""}`;
-    // TODO: แจ้งเตือน LINE สรุปรอบ
+
+    // ส่งรอบปิดขึ้นเซิร์ฟเวอร์ก่อนออก — ถ้าออฟไลน์ค้าง outbox ไว้รอบถัดไป
+    if (payload) {
+      await enqueueShiftAndSync(payload, {
+        awaitPush: true,
+        pushTimeoutMs: 30_000,
+      }).catch(() => undefined);
+    }
+    try {
+      if (window.apPos?.db?.purgeSyncedSales) {
+        await window.apPos.db.purgeSyncedSales();
+      }
+    } catch {
+      // ignore
+    }
     return closed;
   }
 
@@ -358,14 +703,27 @@ export const useSessionStore = defineStore("session", () => {
     cashMoves,
     cashCounts,
     isOpen,
+    exiting,
     summary,
     statusMessage,
+    staffDirectory,
+    device,
+    refreshStaffDirectory,
+    selectBranch,
+    selectTerminal,
+    applyDeviceConfig,
+    completeDeviceSetup,
+    resetDeviceSetup,
+    refreshDevice,
+    markExiting,
+    getCloseCommission,
     loginAndOpen,
     recordSale,
     recordAudit,
     saveFloatCount,
     recordCashMove,
     nextBillNo,
+    previewBillNo,
     closeShift,
   };
 });

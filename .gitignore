@@ -17,3 +17,9 @@ coverage
 !.vscode/extensions.json
 apps/api/data
 apps/api/uploads
+apps/pos/resources/seed/offline-snapshot.json
+apps/pos/resources/seed/media-index.json
+apps/pos/resources/seed/media/
+.nuxt
+.output
+.venv-migrate/

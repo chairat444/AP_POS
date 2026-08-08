@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from "vue";
 import { useMembersStore } from "../stores/members";
 import type { Member } from "../data/demo-members";
 
-const props = defineProps<{
+defineProps<{
   currentId?: string | null;
   currentName?: string;
   currentPoints?: number;

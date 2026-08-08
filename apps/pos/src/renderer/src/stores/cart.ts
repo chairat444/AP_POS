@@ -3,26 +3,37 @@ import { computed, ref } from "vue";
 import {
   applyBundlePromos,
   earnPoints,
+  maxRedeemablePoints,
   parseBarcode,
   recalcLine,
+  redeemDiscountBaht,
   summarizeCart,
   validateCashTender,
   type AppliedPromo,
   type BundlePromo,
   type CartLine,
+  type CartPaymentLine,
   type CartSnapshot,
 } from "@ap-pos/shared";
 import { DEMO_PRODUCTS, type QuickProduct } from "../data/demo-products";
-import { fetchCatalogProducts } from "../services/catalog";
+import { enqueueSaleAndSync, getDeviceConfig, loadCachedProducts } from "../services/sync";
+import {
+  loadPrinterConfig,
+  paymentLabel,
+  printReceipt,
+  type ReceiptPayload,
+} from "../services/receipt";
 import { useMembersStore } from "./members";
 import { useSessionStore } from "./session";
+import { useSettingsStore } from "./settings";
 
 export type { QuickProduct };
 export type PaymentMethod = "cash" | "transfer" | "government" | "points";
 
 export type PaymentEntry = {
+  /** points ไม่ใช้เป็นวิธีชำระแล้ว — คง type ไว้กันของเก่าในหน่วยความจำ */
   method: PaymentMethod;
-  /** จำนวนที่นับเข้ายอดบิล (บาท) — แต้มใช้ 1:1 */
+  /** จำนวนที่นับเข้ายอดบิล (บาท) */
   amount: number;
   /** เงินสดที่รับมา (ถ้ารับเกินจะมีทอน) */
   tendered?: number;
@@ -34,28 +45,14 @@ export type HeldBill = {
   heldAt: string;
   lines: CartLine[];
   manualDiscount: number;
+  pointsDiscount: number;
   memberId: string | null;
   memberName: string;
   memberPoints: number;
 };
 
-/** Demo: ผักกาดขาว / น้ำจิ้ม ชิ้นละ 35 → 3 ชิ้น 100 บาท (ลด 5) */
-const DEMO_PROMOS: BundlePromo[] = [
-  {
-    id: "promo-cabbage-3for100",
-    productCode: "00007",
-    buyQty: 3,
-    payAmount: 100,
-    label: "ผักกาดขาว 3 ชิ้น 100 บาท",
-  },
-  {
-    id: "promo-sauce-3for100",
-    productCode: "00011",
-    buyQty: 3,
-    payAmount: 100,
-    label: "น้ำจิ้มซีฟู้ด 3 ขวด 100 บาท",
-  },
-];
+/** ไม่มีโปรโมชัน demo ในเครื่อง */
+const DEMO_PROMOS: BundlePromo[] = [];
 
 function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -64,11 +61,13 @@ function uid() {
 export const useCartStore = defineStore("cart", () => {
   const lines = ref<CartLine[]>([]);
   const manualDiscount = ref(0);
+  /** ส่วนลดจากใช้แต้ม (บาท) — นับเป็นส่วนลดท้ายบิล ไม่ใช่วิธีชำระ */
+  const pointsDiscount = ref(0);
   const paid = ref(0);
   const statusMessage = ref("พร้อมขาย");
   const quickProducts = ref<QuickProduct[]>(DEMO_PRODUCTS);
   const catalogSource = ref<"api" | "local">("local");
-  const promos = ref(DEMO_PROMOS);
+  const promos = ref<BundlePromo[]>([...DEMO_PROMOS]);
   const revision = ref(0);
   const lastPaymentMethod = ref<PaymentMethod | null>(null);
   const memberId = ref<string | null>(null);
@@ -82,10 +81,84 @@ export const useCartStore = defineStore("cart", () => {
   const lastPointsEarned = ref(0);
   /** เงินทอนบิลล่าสุด — โชว์ที่หน้ารายการจนกว่าจะมีสินค้าบิลใหม่ */
   const lastChange = ref(0);
+  /** รายการบิลล่าสุดค้างบนจอลูกค้าหลังชำระ */
+  const lastReceipt = ref<{
+    lines: CartLine[];
+    itemCount: number;
+    subtotal: number;
+    discount: number;
+    total: number;
+    memberName: string;
+    memberPoints: number;
+    pointsUsable: number;
+    pointsToEarn: number;
+  } | null>(null);
+  let lastChangeClearTimer: ReturnType<typeof setTimeout> | null = null;
+  const RECEIPT_HOLD_MS = 3 * 60_000; // ค้างจอลูกค้า 3 นาที หรือจนมีบิลใหม่
+
+  /** สถานะชำระที่ส่งไปจอลูกค้า */
+  const payProgress = ref<{
+    active: boolean;
+    paid: number;
+    remaining: number;
+    change: number;
+    lines: CartPaymentLine[];
+  } | null>(null);
 
   function clearLastChange() {
-    if (lastChange.value === 0) return;
+    if (lastChangeClearTimer != null) {
+      clearTimeout(lastChangeClearTimer);
+      lastChangeClearTimer = null;
+    }
+    const had =
+      lastChange.value !== 0 || lastReceipt.value != null;
     lastChange.value = 0;
+    lastReceipt.value = null;
+    if (!had) return;
+  }
+
+  function holdPaidReceipt(
+    change: number,
+    receipt: NonNullable<typeof lastReceipt.value>,
+  ) {
+    if (lastChangeClearTimer != null) {
+      clearTimeout(lastChangeClearTimer);
+      lastChangeClearTimer = null;
+    }
+    lastReceipt.value = receipt;
+    lastChange.value = change;
+    lastChangeClearTimer = setTimeout(() => {
+      lastChangeClearTimer = null;
+      lastChange.value = 0;
+      lastReceipt.value = null;
+      publish();
+    }, RECEIPT_HOLD_MS);
+  }
+
+  function setPayProgress(next: {
+    paid: number;
+    remaining: number;
+    change: number;
+    lines: CartPaymentLine[];
+  } | null) {
+    if (!next) {
+      if (!payProgress.value?.active) return;
+      payProgress.value = null;
+      publish();
+      return;
+    }
+    payProgress.value = {
+      active: true,
+      paid: next.paid,
+      remaining: next.remaining,
+      change: next.change,
+      lines: next.lines.map((l) => ({ ...l })),
+    };
+    publish();
+  }
+
+  function clearPayProgress() {
+    setPayProgress(null);
   }
 
   function isQuickTileProduct(p: QuickProduct): boolean {
@@ -123,44 +196,138 @@ export const useCartStore = defineStore("cart", () => {
   );
 
   const billDiscount = computed(() =>
-    round2(promoResult.value.promoDiscount + Math.max(0, manualDiscount.value)),
+    round2(
+      promoResult.value.promoDiscount +
+        Math.max(0, manualDiscount.value) +
+        Math.max(0, pointsDiscount.value),
+    ),
   );
 
   const summary = computed(() =>
     summarizeCart(lines.value, billDiscount.value, paid.value),
   );
 
-  /** แต้มที่จะได้จากยอดสุทธิ (ยังไม่หักแต้มที่ใช้) — UI ชำระจะหัก redeem เอง */
-  const pointsToEarnPreview = computed(() =>
-    earnPoints(summary.value.total),
-  );
+  /** จำนวนแต้มที่ใช้เป็นส่วนลดบิลนี้ */
+  const pointsRedeemedPts = computed(() => {
+    const settings = useSettingsStore();
+    const rate = settings.pointsConfig.bahtPerRedeemPoint || 1;
+    if (rate <= 0 || pointsDiscount.value <= 0) return 0;
+    return Math.round(pointsDiscount.value / rate);
+  });
 
-  const snapshot = computed<CartSnapshot>(() => ({
-    ...summary.value,
-    // จอลูกค้า / หลังชำระ — ใช้ทอนบิลล่าสุด (summary.change หลังเคลียร์บิลเป็น 0)
-    change: lastChange.value,
-    memberName: memberName.value,
-    memberPoints: memberPoints.value,
-  }));
+  /** แต้มที่จะได้ — คิดจากยอดก่อนหักส่วนลดแต้ม (ใช้แต้มแล้วได้แต้มไม่หด) */
+  const pointsToEarnPreview = computed(() => {
+    const settings = useSettingsStore();
+    const earnBase = round2(
+      summary.value.total + Math.max(0, pointsDiscount.value),
+    );
+    return earnPoints(earnBase, settings.pointsConfig);
+  });
+
+  const snapshot = computed<CartSnapshot>(() => {
+    // หลังจบบิล — ค้างรายการบนจอลูกค้าเฉพาะตอนตะกร้าว่าง (ยังไม่เริ่มบิลใหม่)
+    if (
+      lastReceipt.value &&
+      !payProgress.value?.active &&
+      lines.value.length === 0
+    ) {
+      const r = lastReceipt.value;
+      return {
+        lines: r.lines.map((l) => ({ ...l })),
+        itemCount: r.itemCount,
+        subtotal: r.subtotal,
+        discount: r.discount,
+        total: r.total,
+        change: lastChange.value,
+        memberName: r.memberName,
+        memberPoints: r.memberPoints,
+        pointsUsable: r.pointsUsable,
+        pointsToEarn: r.pointsToEarn,
+        pointsDiscount: 0,
+        paying: false,
+        paid: 0,
+        remaining: 0,
+        paymentLines: [],
+        postPaid: true,
+      };
+    }
+    const usable = Math.max(
+      0,
+      memberPoints.value - pointsRedeemedPts.value,
+    );
+    return {
+      ...summary.value,
+      // จอลูกค้า / หลังชำระ — ใช้ทอนบิลล่าสุด (summary.change หลังเคลียร์บิลเป็น 0)
+      change: payProgress.value?.active
+        ? payProgress.value.change
+        : lastChange.value,
+      memberName: memberName.value,
+      memberPoints: memberPoints.value,
+      pointsUsable: memberId.value ? usable : 0,
+      pointsToEarn: memberId.value ? pointsToEarnPreview.value : 0,
+      pointsDiscount: Math.max(0, pointsDiscount.value),
+      paying: Boolean(payProgress.value?.active),
+      paid: payProgress.value?.paid ?? 0,
+      remaining: payProgress.value?.remaining ?? 0,
+      paymentLines: payProgress.value?.lines ?? [],
+      postPaid: false,
+    };
+  });
 
   function bump() {
     revision.value += 1;
   }
 
   function publish() {
-    window.apPos?.publishCart(snapshot.value);
+    const s = snapshot.value;
+    // ต้อง clone เป็น plain object — Vue proxy ส่ง IPC ไม่ครบ ทำให้จอลูกค้าว่าง
+    const plain: CartSnapshot = {
+      lines: s.lines.map((l) => ({
+        id: l.id,
+        barcode: l.barcode,
+        productCode: l.productCode,
+        name: l.name,
+        qty: l.qty,
+        unit: l.unit,
+        unitPrice: l.unitPrice,
+        discount: l.discount,
+        lineTotal: l.lineTotal,
+      })),
+      itemCount: s.itemCount,
+      subtotal: s.subtotal,
+      discount: s.discount,
+      total: s.total,
+      change: s.change,
+      memberName: s.memberName,
+      memberPoints: s.memberPoints,
+      pointsUsable: s.pointsUsable,
+      pointsToEarn: s.pointsToEarn,
+      pointsDiscount: s.pointsDiscount,
+      paying: s.paying,
+      paid: s.paid,
+      remaining: s.remaining,
+      paymentLines: (s.paymentLines ?? []).map((l) => ({ ...l })),
+      postPaid: Boolean(s.postPaid),
+    };
+    window.apPos?.publishCart(plain);
   }
 
   async function loadCatalog() {
-    const products = await fetchCatalogProducts();
+    const products = await loadCachedProducts();
+    setCatalog(products, "local");
+  }
+
+  function setCatalog(products: QuickProduct[], source: "api" | "local") {
     quickProducts.value = products;
-    catalogSource.value = products.some((p) => p.id.startsWith("p-000") || p.id === "p-misc")
-      ? "api"
-      : "local";
+    catalogSource.value = source;
     statusMessage.value =
-      catalogSource.value === "api"
+      source === "api"
         ? `โหลดสินค้า ${products.length} · ด่วน ${products.filter((p) => p.isQuick).length} รายการ`
         : `ใช้สินค้า offline ${products.length} รายการ`;
+  }
+
+  function setPromos(next: BundlePromo[]) {
+    promos.value = next.map((p) => ({ ...p }));
   }
 
   function setPendingQty(qty: number) {
@@ -269,23 +436,32 @@ export const useCartStore = defineStore("cart", () => {
     }
 
     const parsed = parseBarcode(text);
-    if (parsed.kind === "priceEmbedded") {
-      if (!parsed.validCheckDigit) {
-        pendingQty.value = 1;
-        statusMessage.value = "บาร์โค้ดราคา: check digit ไม่ถูกต้อง";
+    if (parsed.kind === "priceEmbedded" && parsed.validCheckDigit) {
+      // ระบบเก่าเก็บบาร์สินค้าเป็น 6 หลัก (เช่น 900009) ไม่ใช่บาร์เต็ม 13 หลัก
+      const product =
+        quickProducts.value.find((p) => p.barcode === parsed.productBarcode) ??
+        quickProducts.value.find(
+          (p) => p.productCode === parsed.productBarcode,
+        ) ??
+        null;
+      if (product) {
+        if (product.isOpenPrice) {
+          statusMessage.value = `พิมพ์ราคา 1-${product.openPriceMax ?? 100} แล้ว Enter`;
+          return;
+        }
+        addLine({
+          // เก็บบาร์เต็ม 13 หลักที่สแกน (เผื่อตรวจย้อนหลัง) · สินค้าหาจากบาร์ 6 หลัก
+          barcode: parsed.barcode,
+          productCode: product.productCode ?? parsed.productBarcode,
+          name: product.name,
+          unit: product.unit,
+          unitPrice: parsed.price,
+        });
         return;
       }
-      const product =
-        quickProducts.value.find((p) => p.productCode === parsed.productCode) ??
-        null;
-      addLine({
-        barcode: parsed.barcode,
-        productCode: parsed.productCode,
-        name: product?.name ?? `สินค้า ${parsed.productCode}`,
-        unit: product?.unit ?? "กก.",
-        unitPrice: parsed.price,
-      });
-      return;
+      // ไม่เจอสินค้าจากบาร์ 6 หลัก → ลองหาแบบบาร์เต็ม (มาตรฐาน)
+    } else if (parsed.kind === "priceEmbedded" && !parsed.validCheckDigit) {
+      // อาจเป็น EAN ปกติขึ้นต้น 9 — ลองหาแบบมาตรฐานต่อ
     }
 
     const product = quickProducts.value.find((p) => p.barcode === parsed.barcode);
@@ -339,7 +515,7 @@ export const useCartStore = defineStore("cart", () => {
         (p) =>
           p.name.toLowerCase().includes(q) ||
           p.barcode.includes(q) ||
-          p.productCode.includes(q),
+          (p.productCode ?? "").includes(q),
       )
       .slice(0, 8);
   }
@@ -400,6 +576,7 @@ export const useCartStore = defineStore("cart", () => {
 
     lines.value = [];
     manualDiscount.value = 0;
+    pointsDiscount.value = 0;
     paid.value = 0;
     lastPaymentMethod.value = null;
     pendingQty.value = 1;
@@ -417,16 +594,62 @@ export const useCartStore = defineStore("cart", () => {
     publish();
   }
 
+  /**
+   * ใช้แต้มเป็นส่วนลดท้ายบิล (บาท)
+   * pts = จำนวนแต้ม · แปลงเป็นบาทตาม bahtPerRedeemPoint
+   */
+  function setPointsRedeem(pts: number): { ok: true } | { ok: false; reason: string } {
+    const settings = useSettingsStore();
+    const config = settings.pointsConfig;
+    const want = Math.max(0, Math.floor(pts));
+    if (!memberId.value) {
+      return { ok: false, reason: "เลือกสมาชิกก่อนใช้แต้ม" };
+    }
+    if (want <= 0) {
+      pointsDiscount.value = 0;
+      publish();
+      return { ok: true };
+    }
+    const beforePoints = round2(
+      promoResult.value.promoDiscount + Math.max(0, manualDiscount.value),
+    );
+    const payable = round2(
+      Math.max(0, summarizeCart(lines.value, beforePoints, 0).total),
+    );
+    const maxPts = maxRedeemablePoints(payable, memberPoints.value, config);
+    if (want > maxPts) {
+      return {
+        ok: false,
+        reason:
+          maxPts <= 0
+            ? "ใช้แต้มไม่ได้ (ยอดเป็น 0 หรือแต้มไม่พอ)"
+            : `ใช้ได้สูงสุด ${maxPts} แต้ม`,
+      };
+    }
+    pointsDiscount.value = round2(redeemDiscountBaht(want, config));
+    publish();
+    return { ok: true };
+  }
+
+  function clearPointsDiscount() {
+    if (pointsDiscount.value === 0) return;
+    pointsDiscount.value = 0;
+    publish();
+  }
+
   function setPaid(amount: number) {
     paid.value = amount;
     publish();
   }
 
   function setMember(member: { id: string; name: string; points: number }) {
+    // เลิกค้างบิลเก่าบนจอลูกค้า — ไม่งั้นจะโชว์แต้มคนก่อนหน้า
+    clearLastChange();
     memberId.value = member.id;
     memberName.value = member.name;
     memberPoints.value = Math.max(0, Math.floor(member.points));
     statusMessage.value = `สมาชิก: ${member.name} (${memberPoints.value} แต้ม)`;
+    bump();
     publish();
   }
 
@@ -434,6 +657,7 @@ export const useCartStore = defineStore("cart", () => {
     memberId.value = null;
     memberName.value = "ลูกค้าทั่วไป";
     memberPoints.value = 0;
+    pointsDiscount.value = 0;
     publish();
   }
 
@@ -448,6 +672,7 @@ export const useCartStore = defineStore("cart", () => {
       heldAt: new Date().toISOString(),
       lines: lines.value.map((l) => ({ ...l })),
       manualDiscount: manualDiscount.value,
+      pointsDiscount: pointsDiscount.value,
       memberId: memberId.value,
       memberName: memberName.value,
       memberPoints: memberPoints.value,
@@ -455,6 +680,7 @@ export const useCartStore = defineStore("cart", () => {
     heldBills.value = [...heldBills.value, bill];
     lines.value = [];
     manualDiscount.value = 0;
+    pointsDiscount.value = 0;
     paid.value = 0;
     pendingQty.value = 1;
     clearMember();
@@ -476,6 +702,7 @@ export const useCartStore = defineStore("cart", () => {
     clearLastChange();
     lines.value = bill.lines.map((l) => ({ ...l }));
     manualDiscount.value = bill.manualDiscount;
+    pointsDiscount.value = bill.pointsDiscount ?? 0;
     if (bill.memberId) {
       memberId.value = bill.memberId;
       memberName.value = bill.memberName;
@@ -508,26 +735,41 @@ export const useCartStore = defineStore("cart", () => {
   /**
    * ชำระแบบผสมได้หลายวิธี
    * - เงินสดรับเกินได้ (ทอน)
-   * - โอน / รัฐ / แต้ม ห้ามเกินยอดคงเหลือ
+   * - โอน / รัฐ ห้ามเกินยอดคงเหลือ
+   * - แต้มเป็นส่วนลดท้ายบิลแล้ว (pointsDiscount) ไม่ใส่ใน payments
    */
-  function completePayment(payments: PaymentEntry[]): boolean {
-    const total = summary.value.total;
+  async function completePayment(payments: PaymentEntry[]): Promise<boolean> {
     if (!lines.value.length) {
       statusMessage.value = "ไม่มีรายการให้ชำระ";
       return false;
     }
-    if (!payments.length) {
+
+    // ย้าย points ที่หลงมาใน payments → ส่วนลด (กันของเก่า)
+    for (const p of payments) {
+      if (p.method !== "points") continue;
+      pointsDiscount.value = round2(pointsDiscount.value + p.amount);
+    }
+    const settings = useSettingsStore();
+    const rate = settings.pointsConfig.bahtPerRedeemPoint || 1;
+    const pointsUsed = Math.max(
+      0,
+      Math.round(pointsDiscount.value / (rate || 1)),
+    );
+    const moneyPayments = payments.filter((p) => p.method !== "points");
+    // refresh total after folding stray points
+    const payable = summary.value.total;
+
+    if (!moneyPayments.length && payable > 1e-9) {
       statusMessage.value = "ยังไม่ได้ใส่การชำระ";
       return false;
     }
 
     let covered = 0;
     let cashTendered = 0;
-    let pointsUsed = 0;
     const normalized: PaymentEntry[] = [];
 
-    for (const p of payments) {
-      const remaining = round2(total - covered);
+    for (const p of moneyPayments) {
+      const remaining = round2(payable - covered);
       if (remaining <= 1e-9) break;
 
       if (p.method === "cash") {
@@ -553,48 +795,48 @@ export const useCartStore = defineStore("cart", () => {
         return false;
       }
       if (amount > remaining + 1e-9) {
-        statusMessage.value =
-          p.method === "points"
-            ? "ใช้แต้มเกินยอดคงเหลือไม่ได้"
-            : "ชำระเกินยอดคงเหลือไม่ได้ (ยกเว้นเงินสด)";
+        statusMessage.value = "ชำระเกินยอดคงเหลือไม่ได้ (ยกเว้นเงินสด)";
         return false;
-      }
-      if (p.method === "points") {
-        const pts = Math.floor(amount);
-        if (pts > memberPoints.value) {
-          statusMessage.value = "แต้มไม่พอ";
-          return false;
-        }
-        pointsUsed += pts;
       }
       covered = round2(covered + amount);
       normalized.push({ method: p.method, amount });
     }
 
-    if (covered + 1e-9 < total) {
-      statusMessage.value = `ชำระยังไม่ครบ ขาด ${(total - covered).toFixed(2)} บาท`;
+    if (covered + 1e-9 < payable) {
+      statusMessage.value = `ชำระยังไม่ครบ ขาด ${(payable - covered).toFixed(2)} บาท`;
       return false;
     }
 
-    const change = round2(Math.max(0, cashTendered - normalized
-      .filter((p) => p.method === "cash")
-      .reduce((s, p) => s + p.amount, 0)));
+    if (pointsUsed > memberPoints.value) {
+      statusMessage.value = "แต้มไม่พอ";
+      return false;
+    }
 
-    // แต้มที่ได้จากยอดหลังหักแต้มที่ใช้ (ใช้รอบหน้า)
-    const netForEarn = Math.max(0, total - pointsUsed);
-    const earned = earnPoints(netForEarn);
+    const change = round2(
+      Math.max(
+        0,
+        cashTendered -
+          normalized
+            .filter((p) => p.method === "cash")
+            .reduce((s, p) => s + p.amount, 0),
+      ),
+    );
+
+    // ได้แต้มจากยอดก่อนหักส่วนลดแต้ม (ใช้แต้มแล้วไม่ลดแต้มที่ได้)
+    const earnBase = round2(payable + Math.max(0, pointsDiscount.value));
+    const earned = earnPoints(earnBase, settings.pointsConfig);
     lastPointsEarned.value = earned;
 
     const members = useMembersStore();
     if (memberId.value) {
-      members.adjustPoints(memberId.value, -pointsUsed + earned);
+      await members.adjustPoints(memberId.value, -pointsUsed + earned);
       const updated = members.findById(memberId.value);
       if (updated) memberPoints.value = updated.points;
     }
 
     const session = useSessionStore();
     const sale = session.recordSale({
-      total,
+      total: payable,
       payments: normalized.map((p) => ({ method: p.method, amount: p.amount })),
       cashTendered,
       change,
@@ -602,29 +844,151 @@ export const useCartStore = defineStore("cart", () => {
       pointsEarned: earned,
       memberName: memberName.value,
     });
+    const device = await getDeviceConfig();
+    await enqueueSaleAndSync({
+      id: sale.id,
+      billNo: sale.billNo,
+      branchId: device.branchId,
+      terminalId: device.terminalId,
+      shiftId: session.shiftId,
+      customerId: memberId.value,
+      customerName: memberName.value,
+      subtotal: summary.value.subtotal,
+      discount: billDiscount.value,
+      total: payable,
+      paid: cashTendered || payable,
+      change,
+      pointsRedeemed: pointsUsed,
+      pointsEarned: earned,
+      createdAt: sale.at,
+      payments: normalized.map((p) => ({ ...p })),
+      lines: lines.value.map((line) => ({ ...line })),
+    });
 
-    paid.value = cashTendered || total;
+    paid.value = cashTendered || payable;
     lastPaymentMethod.value = normalized[normalized.length - 1]?.method ?? null;
 
-    const parts = normalized
-      .map((p) => {
+    const parts = [
+      ...normalized.map((p) => {
         if (p.method === "cash") return `สด ${p.amount.toFixed(2)}`;
         if (p.method === "transfer") return `โอน ${p.amount.toFixed(2)}`;
-        if (p.method === "government") return `รัฐ ${p.amount.toFixed(2)}`;
-        return `แต้ม ${Math.floor(p.amount)}`;
-      })
-      .join(" + ");
+        return `รัฐ ${p.amount.toFixed(2)}`;
+      }),
+      ...(pointsUsed > 0
+        ? [`ส่วนลดแต้ม ${pointsDiscount.value.toFixed(2)}`]
+        : []),
+    ].join(" + ");
 
     statusMessage.value =
-      `บิล ${sale.billNo} ชำระแล้ว (${parts})` +
+      `บิล ${sale.billNo} ชำระแล้ว (${parts || "0"})` +
       (change > 0 ? ` ทอน ${change.toFixed(2)}` : "") +
       (earned > 0 ? ` · ได้ ${earned} แต้ม (ใช้รอบหน้า)` : "");
-
-    // พิมพ์สลิป / เปิดลิ้นชัก — ยังไม่ต่อฮาร์ดแวร์จริง
-    // window.apPos?.openDrawer?.(); window.apPos?.printReceipt?.(sale);
-
-    lastChange.value = change;
     const doneMsg = statusMessage.value;
+
+    // ค้างรายการ + เงินทอนบนจอลูกค้า (ก่อนเคลียร์บิลแคชเชียร์)
+    const snap = summary.value;
+    const receiptLines = lines.value.map((l) => ({ ...l }));
+    const receiptPromos = appliedPromos.value.map((p) => ({ ...p }));
+    const receiptPointsDisc = pointsDiscount.value;
+    const receiptMemberName = memberName.value;
+    const member = memberId.value
+      ? members.findById(memberId.value)
+      : null;
+    const pointsBalanceAfter = memberPoints.value;
+
+    holdPaidReceipt(change, {
+      lines: receiptLines,
+      itemCount: snap.itemCount,
+      subtotal: snap.subtotal,
+      discount: snap.discount,
+      total: payable,
+      memberName: receiptMemberName,
+      memberPoints: pointsBalanceAfter,
+      pointsUsable: pointsBalanceAfter,
+      pointsToEarn: earned,
+    });
+
+    // พิมพ์ใบเสร็จ (ไม่บล็อกการเคลียร์บิล)
+    void (async () => {
+      try {
+        const printer = await loadPrinterConfig();
+        if (!printer.autoPrint) return;
+        const brand = useSettingsStore();
+        const payload: ReceiptPayload = {
+          storeName: brand.storeName || "AP หมูสด",
+          branchName: device.branchName || "",
+          tagline: brand.storeTagline || "มาตรฐาน สะอาด ปลอดภัย",
+          billNo: sale.billNo,
+          at: sale.at,
+          lines: receiptLines.map((l) => {
+            const promo = receiptPromos.find(
+              (p) => p.productCode && p.productCode === l.productCode,
+            );
+            return {
+              name: l.name,
+              qty: l.qty,
+              unit: l.unit,
+              unitPrice: l.unitPrice,
+              lineTotal: l.lineTotal,
+              discount: l.discount,
+              promoHint: promo?.label ?? null,
+            };
+          }),
+          itemCount: snap.itemCount,
+          subtotal: snap.subtotal,
+          promoDiscount: receiptPromos.reduce((s, p) => s + p.discount, 0),
+          promos: receiptPromos.map((p) => ({
+            label: p.label,
+            discount: p.discount,
+          })),
+          pointsDiscount: receiptPointsDisc,
+          total: payable,
+          payments: normalized.map((p) => {
+            if (
+              p.method === "cash" &&
+              p.tendered != null &&
+              p.tendered > p.amount
+            ) {
+              return {
+                method: p.method,
+                label: paymentLabel(p.method),
+                amount: p.tendered,
+              };
+            }
+            return {
+              method: p.method,
+              label: paymentLabel(p.method),
+              amount: p.amount,
+            };
+          }),
+          change,
+          memberCode: member?.code ?? null,
+          memberName: receiptMemberName,
+          pointsEarned: earned,
+          pointsBalance: pointsBalanceAfter,
+          paperWidth: printer.paperWidth,
+          footerHours: printer.footerHours,
+          footerPhones: printer.footerPhones,
+          appVersion: "AP Version 0.1.0",
+        };
+        const result = await printReceipt(payload, {
+          silent: printer.silent,
+          preview: !printer.silent,
+          deviceName: printer.printerName || undefined,
+        });
+        if (!result.ok) {
+          statusMessage.value = `${doneMsg} · พิมพ์ไม่สำเร็จ${
+            result.message ? `: ${result.message}` : ""
+          }`;
+        } else if (result.message) {
+          statusMessage.value = `${doneMsg} · ${result.message}`;
+        }
+      } catch {
+        /* ไม่ให้พิมพ์พังแล้วขายไม่ได้ */
+      }
+    })();
+
+    payProgress.value = null;
     clearBill({ reason: "paid" });
     statusMessage.value = doneMsg;
     publish();
@@ -634,6 +998,7 @@ export const useCartStore = defineStore("cart", () => {
   return {
     lines,
     manualDiscount,
+    pointsDiscount,
     paid,
     statusMessage,
     quickProducts,
@@ -654,9 +1019,12 @@ export const useCartStore = defineStore("cart", () => {
     appliedPromos,
     billDiscount,
     summary,
+    pointsRedeemedPts,
     pointsToEarnPreview,
     snapshot,
     loadCatalog,
+    setCatalog,
+    setPromos,
     scan,
     addQuick,
     addOpenPrice,
@@ -668,6 +1036,8 @@ export const useCartStore = defineStore("cart", () => {
     removeAt,
     clearBill,
     setManualDiscount,
+    setPointsRedeem,
+    clearPointsDiscount,
     setPaid,
     setMember,
     clearMember,
@@ -676,6 +1046,8 @@ export const useCartStore = defineStore("cart", () => {
     deleteHeldBill,
     clearHeldBills,
     completePayment,
+    setPayProgress,
+    clearPayProgress,
     publish,
   };
 });

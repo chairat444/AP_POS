@@ -13,8 +13,13 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 import { extname, join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { ProductsService } from "./products.service";
-import type { SetQuickBoardDto, UpsertProductDto } from "./product.types";
+import type {
+  BulkPriceRow,
+  SetQuickBoardDto,
+  UpsertProductDto,
+} from "./product.types";
 
 @Controller("products")
 export class ProductsController {
@@ -30,9 +35,19 @@ export class ProductsController {
     return this.products.listQuick();
   }
 
+  @Get("next-code")
+  nextCode() {
+    return this.products.nextProductCode();
+  }
+
   @Put("quick-board")
   setQuickBoard(@Body() body: SetQuickBoardDto) {
     return this.products.setQuickBoard(body.productIds ?? []);
+  }
+
+  @Post("bulk-prices")
+  bulkPrices(@Body() body: { rows?: BulkPriceRow[] }) {
+    return this.products.bulkUpdatePrices(body.rows ?? []);
   }
 
   @Get(":id")
@@ -59,19 +74,38 @@ export class ProductsController {
   @UseInterceptors(
     FileInterceptor("file", {
       storage: diskStorage({
-        destination: join(process.cwd(), "uploads", "products"),
+        destination: (_req, _file, cb) => {
+          const dir = join(process.cwd(), "uploads", "products");
+          mkdirSync(dir, { recursive: true });
+          cb(null, dir);
+        },
         filename: (_req, file, cb) => {
           const safe = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${extname(file.originalname) || ".jpg"}`;
           cb(null, safe);
         },
       }),
       limits: { fileSize: 5 * 1024 * 1024 },
+      fileFilter: (_req, file, cb) => {
+        if (!file.mimetype.startsWith("image/")) {
+          cb(new Error("รองรับเฉพาะไฟล์รูป"), false);
+          return;
+        }
+        cb(null, true);
+      },
     }),
   )
   uploadImage(
     @Param("id") id: string,
     @UploadedFile() file: Express.Multer.File,
   ) {
+    if (!file) {
+      return this.products.get(id);
+    }
     return this.products.setImage(id, file.filename);
+  }
+
+  @Delete(":id/image")
+  clearImage(@Param("id") id: string) {
+    return this.products.clearImage(id);
   }
 }

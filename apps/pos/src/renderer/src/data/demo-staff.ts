@@ -2,11 +2,13 @@ export type StaffUser = {
   id: string;
   code: string;
   name: string;
-  /** PIN 4 หลักสำหรับเดโม่ */
+  /** PIN 4 หลัก */
   pin: string;
+  commissionEnabled?: boolean;
+  commissionStartSales?: number;
+  commissionStepSales?: number;
+  commissionPerStep?: number;
 };
 
-export const DEMO_STAFF: StaffUser[] = [
-  { id: "s1", code: "01", name: "พนักงาน A", pin: "1234" },
-  { id: "s2", code: "02", name: "พนักงาน B", pin: "5678" },
-];
+/** ไม่มีพนักงาน demo — โหลดจาก sync / API เท่านั้น */
+export const DEMO_STAFF: StaffUser[] = [];
