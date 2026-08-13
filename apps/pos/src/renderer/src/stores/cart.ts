@@ -180,6 +180,25 @@ export const useCartStore = defineStore("cart", () => {
       .sort((a, b) => (a.quickSort ?? 999) - (b.quickSort ?? 999)),
   );
 
+  /** ดัชนีค้นหาบาร์โค้ด/รหัส — O(1) ตอนยิงสแกน */
+  const productByBarcode = computed(() => {
+    const m = new Map<string, QuickProduct>();
+    for (const p of quickProducts.value) {
+      const b = (p.barcode ?? "").trim();
+      if (b) m.set(b, p);
+    }
+    return m;
+  });
+
+  const productByCode = computed(() => {
+    const m = new Map<string, QuickProduct>();
+    for (const p of quickProducts.value) {
+      const c = (p.productCode ?? "").trim();
+      if (c) m.set(c, p);
+    }
+    return m;
+  });
+
   const openPriceProduct = computed(
     () =>
       quickProducts.value.find((p) => p.isOpenPrice) ??
@@ -312,6 +331,20 @@ export const useCartStore = defineStore("cart", () => {
     window.apPos?.publishCart(plain);
   }
 
+  /** ส่งจอลูกค้าหลัง paint — ไม่บล็อกการโผล่รายการตอนยิงบาร์โค้ด */
+  let publishRaf = 0;
+  function publishSoon() {
+    if (publishRaf) return;
+    publishRaf = requestAnimationFrame(() => {
+      publishRaf = 0;
+      try {
+        publish();
+      } catch {
+        /* ignore */
+      }
+    });
+  }
+
   async function loadCatalog() {
     const products = await loadCachedProducts();
     setCatalog(products, "local");
@@ -372,7 +405,7 @@ export const useCartStore = defineStore("cart", () => {
         ? `เพิ่ม: ${line.name} x${qty} @ ${line.unitPrice.toFixed(2)}`
         : `เพิ่ม: ${line.name} ${line.unitPrice.toFixed(2)}`;
     bump();
-    publish();
+    publishSoon();
   }
 
   function addOpenPrice(amount: number) {
@@ -396,7 +429,10 @@ export const useCartStore = defineStore("cart", () => {
     });
   }
 
-  function scan(raw: string) {
+  function scan(raw: string): {
+    ok: boolean;
+    notice?: { tone: "error" | "warn"; title: string; detail?: string };
+  } {
     let text = raw.trim();
     let forcedQty: number | null = null;
 
@@ -408,7 +444,7 @@ export const useCartStore = defineStore("cart", () => {
       if (Number.isFinite(n) && n > 0) {
         if (!rest) {
           setPendingQty(n);
-          return;
+          return { ok: true };
         }
         forcedQty = Math.min(999, Math.floor(n));
         text = rest;
@@ -426,12 +462,19 @@ export const useCartStore = defineStore("cart", () => {
       const amount = Number(text);
       if (Number.isFinite(amount) && amount > 0 && amount <= max) {
         addOpenPrice(Math.round(amount * 100) / 100);
-        return;
+        return { ok: true };
       }
       if (Number.isFinite(amount) && amount > max) {
         pendingQty.value = 1;
         statusMessage.value = `ราคาเบ็ดเตล็ดต้องไม่เกิน ${max} บาท`;
-        return;
+        return {
+          ok: false,
+          notice: {
+            tone: "warn",
+            title: "ราคาเบ็ดเตล็ดเกินกำหนด",
+            detail: `สูงสุด ${max} บาท`,
+          },
+        };
       }
     }
 
@@ -439,15 +482,20 @@ export const useCartStore = defineStore("cart", () => {
     if (parsed.kind === "priceEmbedded" && parsed.validCheckDigit) {
       // ระบบเก่าเก็บบาร์สินค้าเป็น 6 หลัก (เช่น 900009) ไม่ใช่บาร์เต็ม 13 หลัก
       const product =
-        quickProducts.value.find((p) => p.barcode === parsed.productBarcode) ??
-        quickProducts.value.find(
-          (p) => p.productCode === parsed.productBarcode,
-        ) ??
+        productByBarcode.value.get(parsed.productBarcode) ??
+        productByCode.value.get(parsed.productBarcode) ??
         null;
       if (product) {
         if (product.isOpenPrice) {
           statusMessage.value = `พิมพ์ราคา 1-${product.openPriceMax ?? 100} แล้ว Enter`;
-          return;
+          return {
+            ok: false,
+            notice: {
+              tone: "warn",
+              title: "สินค้าเปิดราคา",
+              detail: `พิมพ์ราคา 1-${product.openPriceMax ?? 100} แล้ว Enter`,
+            },
+          };
         }
         addLine({
           // เก็บบาร์เต็ม 13 หลักที่สแกน (เผื่อตรวจย้อนหลัง) · สินค้าหาจากบาร์ 6 หลัก
@@ -457,27 +505,48 @@ export const useCartStore = defineStore("cart", () => {
           unit: product.unit,
           unitPrice: parsed.price,
         });
-        return;
+        return { ok: true };
       }
       // ไม่เจอสินค้าจากบาร์ 6 หลัก → ลองหาแบบบาร์เต็ม (มาตรฐาน)
     } else if (parsed.kind === "priceEmbedded" && !parsed.validCheckDigit) {
       // อาจเป็น EAN ปกติขึ้นต้น 9 — ลองหาแบบมาตรฐานต่อ
     }
 
-    const product = quickProducts.value.find((p) => p.barcode === parsed.barcode);
+    const product = productByBarcode.value.get(parsed.barcode);
     if (!product) {
       pendingQty.value = 1;
       statusMessage.value = `ไม่พบสินค้า: ${parsed.barcode}`;
-      return;
+      return {
+        ok: false,
+        notice: {
+          tone: "error",
+          title: "ไม่พบสินค้า",
+          detail: parsed.barcode,
+        },
+      };
     }
     if (product.isOpenPrice) {
       statusMessage.value = `พิมพ์ราคา 1-${product.openPriceMax ?? 100} แล้ว Enter`;
-      return;
+      return {
+        ok: false,
+        notice: {
+          tone: "warn",
+          title: "สินค้าเปิดราคา",
+          detail: `พิมพ์ราคา 1-${product.openPriceMax ?? 100} แล้ว Enter`,
+        },
+      };
     }
     if (product.price == null) {
       pendingQty.value = 1;
       statusMessage.value = `${product.name} ต้องใช้บาร์โค้ดราคา`;
-      return;
+      return {
+        ok: false,
+        notice: {
+          tone: "warn",
+          title: "ต้องใช้บาร์โค้ดราคา",
+          detail: product.name,
+        },
+      };
     }
     addLine({
       barcode: product.barcode,
@@ -486,6 +555,7 @@ export const useCartStore = defineStore("cart", () => {
       unit: product.unit,
       unitPrice: product.price,
     });
+    return { ok: true };
   }
 
   function addQuick(product: QuickProduct) {
@@ -822,9 +892,11 @@ export const useCartStore = defineStore("cart", () => {
       ),
     );
 
-    // ได้แต้มจากยอดก่อนหักส่วนลดแต้ม (ใช้แต้มแล้วไม่ลดแต้มที่ได้)
+    // ได้แต้มเฉพาะสมาชิก — ลูกค้าทั่วไปไม่สะสม / ไม่โชว์ข้อความ
     const earnBase = round2(payable + Math.max(0, pointsDiscount.value));
-    const earned = earnPoints(earnBase, settings.pointsConfig);
+    const earned = memberId.value
+      ? earnPoints(earnBase, settings.pointsConfig)
+      : 0;
     lastPointsEarned.value = earned;
 
     const members = useMembersStore();

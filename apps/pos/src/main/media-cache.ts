@@ -15,7 +15,15 @@ import { pathToFileURL } from "node:url";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 
-const API_BASE = process.env.VITE_API_BASE ?? "http://localhost:3000";
+let runtimeApiBase = (
+  process.env.VITE_API_BASE ?? "http://localhost:3000"
+).replace(/\/$/, "");
+
+/** renderer ตั้ง URL API จริง — อย่าใช้ localhost ที่ bake ตอน build */
+export function setApiBase(url: string) {
+  const t = String(url ?? "").trim().replace(/\/$/, "");
+  if (/^https?:\/\//i.test(t)) runtimeApiBase = t;
+}
 const SCHEME = "appos-media";
 const INDEX_FILE = "index.json";
 
@@ -63,7 +71,7 @@ export function toAbsoluteMediaUrl(url: string): string | null {
     abs = t;
   } else {
     const path = t.startsWith("/") ? t : `/${t}`;
-    abs = `${API_BASE.replace(/\/$/, "")}${path}`;
+    abs = `${runtimeApiBase}${path}`;
   }
   try {
     const u = new URL(abs);

@@ -36,8 +36,8 @@ const commissionLoading = ref(false);
 const hasVoids = computed(
   () => summary.value.voidLineCount > 0 || summary.value.voidBillCount > 0,
 );
-const recentAudits = computed(() => audits.value.slice(-4).reverse());
-const recentMoves = computed(() => cashMoves.value.slice(-4).reverse());
+const recentAudits = computed(() => audits.value.slice(-2).reverse());
+const recentMoves = computed(() => cashMoves.value.slice(-2).reverse());
 
 async function refreshCommission() {
   if (!open.value) return;
@@ -68,7 +68,7 @@ async function printClosedReport(
 ) {
   if (!closed) return;
   try {
-    await printShiftCloseReport(closed, {
+    const printJob = printShiftCloseReport(closed, {
       storeName: storeName.value || "AP หมูสด",
       branchName: device.value.branchName || "",
       terminalName: device.value.terminalName || "เครื่อง POS",
@@ -77,6 +77,11 @@ async function printClosedReport(
       preview: false,
       silent: true,
     });
+    // กันพิมพ์ค้างแล้วไม่ปิดแอป
+    await Promise.race([
+      printJob,
+      new Promise<void>((resolve) => setTimeout(resolve, 8_000)),
+    ]);
   } catch {
     // พิมพ์พังก็ปิดรอบต่อได้
   }
@@ -89,13 +94,11 @@ async function shutdownAfterClose() {
   } catch {
     // ignore
   }
-  if (window.apPos?.quit) {
-    try {
-      await window.apPos.quit();
-      return;
-    } catch {
-      // fall through
-    }
+  try {
+    // อย่า await ค้าง — ส่งคำสั่งปิดแล้วจบ
+    void window.apPos?.quit?.();
+  } catch {
+    // fall through
   }
   emit("closed");
 }
@@ -189,138 +192,141 @@ function auditLabel(type: string) {
 
 <template>
   <div v-if="open" class="pay-overlay">
-    <div class="pay-modal pay-modal-compact" @click.stop>
+    <div class="pay-modal pay-modal-compact close-shift-modal" @click.stop>
       <header class="pay-head">
         <h2>ปิดรอบการขาย</h2>
         <span class="pay-esc-hint">Esc ปิด</span>
       </header>
 
-      <div
-        v-if="commissionLoading"
-        class="shift-commission shift-commission--loading"
-      >
-        กำลังคำนวณค่าคอม...
-      </div>
-      <div
-        v-else-if="commission?.enabled"
-        class="shift-commission"
-        :class="{ 'shift-commission--earned': commission.amount > 0 }"
-      >
-        <div class="shift-commission-label">ค่าคอมมิชชั่นวันนี้</div>
-        <div class="shift-commission-amount">
-          {{ money(commission.amount) }}
-          <small>บาท</small>
-        </div>
-        <div class="shift-commission-meta">
-          ยอดขายวันนี้ {{ money(commission.daySales) }}฿
-          <template v-if="commission.amount > 0">
-            · ได้ {{ commission.steps }} ขั้น
-          </template>
-          <template v-else-if="commission.nextTierAt != null">
-            · เริ่มได้คอมที่ {{ money(commission.nextTierAt) }}฿
-          </template>
+      <div class="close-shift-body">
+        <div
+          v-if="commissionLoading"
+          class="shift-commission shift-commission--loading"
+        >
+          กำลังคำนวณค่าคอม...
         </div>
         <div
-          v-if="commission.nextTierAt != null && commission.amount > 0"
-          class="shift-commission-next"
+          v-else-if="commission?.enabled"
+          class="shift-commission"
+          :class="{ 'shift-commission--earned': commission.amount > 0 }"
         >
-          ขั้นถัดไป {{ money(commission.nextTierAt) }}฿ → คอม
-          {{ money(commission.nextTierAmount ?? 0) }}฿
+          <div class="shift-commission-label">ค่าคอมมิชชั่นวันนี้</div>
+          <div class="shift-commission-amount">
+            {{ money(commission.amount) }}
+            <small>บาท</small>
+          </div>
+          <div class="shift-commission-meta">
+            ยอดขายวันนี้ {{ money(commission.daySales) }}฿
+            <template v-if="commission.amount > 0">
+              · ได้ {{ commission.steps }} ขั้น
+            </template>
+            <template v-else-if="commission.nextTierAt != null">
+              · เริ่มได้คอมที่ {{ money(commission.nextTierAt) }}฿
+            </template>
+          </div>
+          <div
+            v-if="commission.nextTierAt != null && commission.amount > 0"
+            class="shift-commission-next"
+          >
+            ขั้นถัดไป {{ money(commission.nextTierAt) }}฿ → คอม
+            {{ money(commission.nextTierAmount ?? 0) }}฿
+          </div>
         </div>
-      </div>
 
-      <div v-if="!floatCounted" class="pay-warn">
-        ยังไม่ได้นับเงินทอนเริ่มรอบ — ยอดคาดในลิ้นชักอาจไม่ตรง
-      </div>
+        <div v-if="!floatCounted" class="pay-warn">
+          ยังไม่ได้นับเงินทอนเริ่มรอบ — ยอดคาดในลิ้นชักอาจไม่ตรง
+        </div>
 
-      <div class="shift-summary-grid">
-        <div class="shift-cell">
-          <span>พนักงาน</span>
-          <strong>{{ staff?.name ?? "-" }}</strong>
+        <div class="shift-summary-grid">
+          <div class="shift-cell">
+            <span>พนักงาน</span>
+            <strong>{{ staff?.name ?? "-" }}</strong>
+          </div>
+          <div class="shift-cell">
+            <span>เปิดรอบ</span>
+            <strong>{{ fmt(openedAt) }}</strong>
+          </div>
+          <div class="shift-cell">
+            <span>เงินทอนเริ่ม</span>
+            <strong>
+              {{ floatCounted ? openCash.toFixed(0) : "ยังไม่นับ" }}
+            </strong>
+          </div>
+          <div class="shift-cell">
+            <span>จำนวนบิล</span>
+            <strong>{{ summary.billCount }}</strong>
+          </div>
+          <div class="shift-cell shift-cell-wide shift-total">
+            <span>ยอดขายรวม (รอบนี้)</span>
+            <strong>{{ summary.grossTotal.toFixed(2) }}</strong>
+          </div>
+          <div class="shift-cell">
+            <span>ขายเงินสด</span>
+            <strong>{{ summary.byMethod.cash.toFixed(0) }}</strong>
+          </div>
+          <div class="shift-cell">
+            <span>เงินโอน</span>
+            <strong>{{ summary.byMethod.transfer.toFixed(0) }}</strong>
+          </div>
+          <div class="shift-cell">
+            <span>เงินสวัสดิการ</span>
+            <strong>{{ summary.byMethod.government.toFixed(0) }}</strong>
+          </div>
+          <div class="shift-cell">
+            <span>นำเงินเข้า</span>
+            <strong>+{{ summary.cashInTotal.toFixed(0) }}</strong>
+          </div>
+          <div class="shift-cell">
+            <span>นำเงินออก</span>
+            <strong>-{{ summary.cashOutTotal.toFixed(0) }}</strong>
+          </div>
+          <div class="shift-cell shift-cell-wide shift-expected">
+            <span>เงินในลิ้นชัก (ระบบคาด)</span>
+            <strong>{{ summary.expectedCash.toFixed(0) }}</strong>
+          </div>
+          <div class="shift-cell" :class="{ 'shift-alert': summary.voidLineCount > 0 }">
+            <span>ยกเลิกรายการ</span>
+            <strong>
+              {{ summary.voidLineCount }} / {{ summary.voidLineAmount.toFixed(0) }}฿
+            </strong>
+          </div>
+          <div class="shift-cell" :class="{ 'shift-alert': summary.voidBillCount > 0 }">
+            <span>ยกเลิกบิล</span>
+            <strong>
+              {{ summary.voidBillCount }} / {{ summary.voidBillAmount.toFixed(0) }}฿
+            </strong>
+          </div>
         </div>
-        <div class="shift-cell">
-          <span>เปิดรอบ</span>
-          <strong>{{ fmt(openedAt) }}</strong>
-        </div>
-        <div class="shift-cell">
-          <span>เงินทอนเริ่ม</span>
-          <strong>
-            {{ floatCounted ? openCash.toFixed(0) : "ยังไม่นับ" }}
-          </strong>
-        </div>
-        <div class="shift-cell">
-          <span>จำนวนบิล</span>
-          <strong>{{ summary.billCount }}</strong>
-        </div>
-        <div class="shift-cell shift-cell-wide shift-total">
-          <span>ยอดขายรวม (รอบนี้)</span>
-          <strong>{{ summary.grossTotal.toFixed(2) }}</strong>
-        </div>
-        <div class="shift-cell">
-          <span>ขายเงินสด</span>
-          <strong>{{ summary.byMethod.cash.toFixed(0) }}</strong>
-        </div>
-        <div class="shift-cell">
-          <span>เงินโอน</span>
-          <strong>{{ summary.byMethod.transfer.toFixed(0) }}</strong>
-        </div>
-        <div class="shift-cell">
-          <span>เงินสวัสดิการ</span>
-          <strong>{{ summary.byMethod.government.toFixed(0) }}</strong>
-        </div>
-        <div class="shift-cell">
-          <span>นำเงินเข้า</span>
-          <strong>+{{ summary.cashInTotal.toFixed(0) }}</strong>
-        </div>
-        <div class="shift-cell">
-          <span>นำเงินออก</span>
-          <strong>-{{ summary.cashOutTotal.toFixed(0) }}</strong>
-        </div>
-        <div class="shift-cell shift-cell-wide shift-expected">
-          <span>เงินในลิ้นชัก (ระบบคาด)</span>
-          <strong>{{ summary.expectedCash.toFixed(0) }}</strong>
-        </div>
-        <div class="shift-cell" :class="{ 'shift-alert': summary.voidLineCount > 0 }">
-          <span>ยกเลิกรายการ</span>
-          <strong>
-            {{ summary.voidLineCount }} / {{ summary.voidLineAmount.toFixed(0) }}฿
-          </strong>
-        </div>
-        <div class="shift-cell" :class="{ 'shift-alert': summary.voidBillCount > 0 }">
-          <span>ยกเลิกบิล</span>
-          <strong>
-            {{ summary.voidBillCount }} / {{ summary.voidBillAmount.toFixed(0) }}฿
-          </strong>
-        </div>
-      </div>
 
-      <div v-if="recentMoves.length" class="shift-moves-box">
-        <div class="shift-moves-head">เงินเข้า–ออกล่าสุด</div>
-        <div v-for="m in recentMoves" :key="m.id" class="shift-audit-row">
-          <span>
-            {{ fmt(m.at) }} · {{ m.direction === "out" ? "ออก" : "เข้า" }} ·
-            {{ m.reason }}
-          </span>
-          <strong :class="m.direction === 'out' ? 'move-out' : 'move-in'">
-            {{ m.direction === "out" ? "-" : "+" }}{{ m.amount.toFixed(0) }}
-          </strong>
+        <div v-if="recentMoves.length" class="shift-moves-box">
+          <div class="shift-moves-head">เงินเข้า–ออกล่าสุด</div>
+          <div v-for="m in recentMoves" :key="m.id" class="shift-audit-row">
+            <span>
+              {{ fmt(m.at) }} · {{ m.direction === "out" ? "ออก" : "เข้า" }} ·
+              {{ m.reason }}
+            </span>
+            <strong :class="m.direction === 'out' ? 'move-out' : 'move-in'">
+              {{ m.direction === "out" ? "-" : "+" }}{{ m.amount.toFixed(0) }}
+            </strong>
+          </div>
         </div>
-      </div>
 
-      <div v-if="hasVoids" class="shift-audit-box">
-        <div class="shift-audit-head">ประวัติยกเลิกล่าสุด</div>
-        <div v-for="a in recentAudits" :key="a.id" class="shift-audit-row">
-          <span>
-            {{ fmt(a.at) }} · {{ auditLabel(a.type) }}
-            <template v-if="a.productName"> · {{ a.productName }}</template>
-          </span>
-          <strong>-{{ a.amount.toFixed(0) }}</strong>
+        <div v-if="hasVoids" class="shift-audit-box">
+          <div class="shift-audit-head">ประวัติยกเลิกล่าสุด</div>
+          <div v-for="a in recentAudits" :key="a.id" class="shift-audit-row">
+            <span>
+              {{ fmt(a.at) }} · {{ auditLabel(a.type) }}
+              <template v-if="a.productName"> · {{ a.productName }}</template>
+            </span>
+            <strong>-{{ a.amount.toFixed(0) }}</strong>
+          </div>
         </div>
-      </div>
 
-      <p class="pay-note pay-note-compact">
-        แนะนำให้นับเงินแล้วปิด · พิมพ์ใบปิดรอบอัตโนมัติก่อนปิดแอป
-      </p>
+        <p class="pay-note pay-note-compact">
+          บันทึกในเครื่องก่อน · เช็ค API 3 รอบ ถ้าติดจะส่งให้เสร็จก่อนปิด ·
+          ไม่ติดปิดได้ ส่งตอนเปิดรอบวันใหม่
+        </p>
+      </div>
 
       <footer class="open-shift-actions close-shift-actions">
         <button

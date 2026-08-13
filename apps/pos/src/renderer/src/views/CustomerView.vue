@@ -114,6 +114,12 @@ const displayPointsUsable = computed(() =>
   Math.max(0, Math.floor(Number(cart.value.pointsUsable) || 0)),
 );
 
+/** ส่วนลดที่ใช้ได้ (บาท) = แต้มคงเหลือ × อัตราแลก */
+const displayUsableDiscount = computed(() => {
+  const rate = Number(settings.pointsConfig.bahtPerRedeemPoint) || 1;
+  return Math.max(0, displayPointsUsable.value * rate);
+});
+
 const paymentLines = computed(() => cart.value.paymentLines ?? []);
 const paidAmount = computed(() => Number(cart.value.paid) || 0);
 const remainingAmount = computed(() => Number(cart.value.remaining) || 0);
@@ -660,8 +666,12 @@ onUnmounted(() => {
           <strong class="cust-member__name">{{ memberLabel }}</strong>
           <template v-if="isNamedMember">
             <div class="cust-member__usable">
-              <em>{{ isPostPaid ? "แต้มคงเหลือ" : "แต้มใช้ได้" }}</em>
-              <strong>{{ formatInt(displayPointsUsable) }}</strong>
+              <em>{{ isPostPaid ? "แต้มคงเหลือ" : "ส่วนลดที่ใช้ได้" }}</em>
+              <strong>{{
+                isPostPaid
+                  ? formatInt(displayPointsUsable)
+                  : formatMoney(displayUsableDiscount)
+              }}</strong>
             </div>
             <span class="cust-member__earn">
               {{ isPostPaid ? "ได้บิลนี้" : "แต้มบิลนี้" }}

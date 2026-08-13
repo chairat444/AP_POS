@@ -1,8 +1,10 @@
 {
   "name": "@ap-pos/pos",
   "productName": "AP POS",
-  "description": "AP หมูสด POS (offline-first)",
-  "author": "AP หมูสด",
+  "description": "ระบบขายหน้าร้าน AP หมูสด (POS)",
+  "author": {
+    "name": "AP หมูสด"
+  },
   "version": "0.1.0",
   "private": true,
   "main": "./out/main/index.js",
@@ -16,7 +18,7 @@
     "postinstall": "node ./scripts/brand-electron.mjs",
     "seed:export": "node ./scripts/export-offline-seed.mjs",
     "dist": "pnpm build && electron-builder --config electron-builder.yml",
-    "dist:win": "pnpm build && electron-builder --config electron-builder.yml --win",
+    "dist:win": "node ./scripts/dist-win.mjs",
     "dist:mac": "pnpm build && electron-builder --config electron-builder.yml --mac",
     "dist:dir": "pnpm build && electron-builder --config electron-builder.yml --dir"
   },

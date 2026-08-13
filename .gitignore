@@ -23,3 +23,14 @@ apps/pos/resources/seed/media/
 .nuxt
 .output
 .venv-migrate/
+
+# Local caches / generated files
+.chrome-tmp/
+.pnpm-store/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+
+# Local uploads and temporary archives
+uploads/
+*.zip

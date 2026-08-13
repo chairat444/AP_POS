@@ -78,6 +78,7 @@ export type ApPosDbBridge = {
 export type ApPosMediaBridge = {
   /** absolute remote URL → appos-media://... */
   index: () => Promise<Record<string, string>>;
+  setApiBase: (url: string) => Promise<boolean>;
   resolve: (url: string) => Promise<string | null>;
   cache: (urls: string[]) => Promise<Record<string, string>>;
 };
@@ -107,6 +108,7 @@ export type ApPosBridge = {
   quit(): Promise<boolean>;
   setShiftOpen(open: boolean): void;
   setCustomerScreenEnabled(enabled: boolean): void;
+  openExternal(url: string): Promise<{ ok: boolean; message?: string }>;
   onCartUpdate(handler: (snapshot: CartSnapshot) => void): () => void;
   onSettingsUpdate(handler: (snapshot: unknown) => void): () => void;
   onPosHotkey(handler: (payload: PosHotkeyPayload) => void): () => void;

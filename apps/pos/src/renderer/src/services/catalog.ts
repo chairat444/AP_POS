@@ -1,7 +1,5 @@
 import { PLACEHOLDER_IMAGE, type QuickProduct } from "../data/demo-products";
-import { resolveImage } from "./sync";
-
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
+import { getApiBase, resolveImage } from "./sync";
 
 export type CatalogProduct = QuickProduct;
 
@@ -30,6 +28,7 @@ function mapApiProduct(p: ApiProduct, fallbackImage: string): CatalogProduct {
     costPrice: p.costPrice ?? null,
     price: p.price,
     tone: "#495057",
+    imageUrl: p.imageUrl ?? null,
     image: resolveImage(p.imageUrl, fallbackImage),
     isQuick: Boolean(p.isQuick),
     quickSort: p.quickSort ?? 999,
@@ -44,7 +43,7 @@ function mapApiProduct(p: ApiProduct, fallbackImage: string): CatalogProduct {
  */
 export async function fetchCatalogProducts(): Promise<CatalogProduct[]> {
   try {
-    const res = await fetch(`${API_BASE}/products`, {
+    const res = await fetch(`${getApiBase()}/products`, {
       signal: AbortSignal.timeout(2500),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -57,4 +56,4 @@ export async function fetchCatalogProducts(): Promise<CatalogProduct[]> {
   }
 }
 
-export { API_BASE };
+export { getApiBase as API_BASE };

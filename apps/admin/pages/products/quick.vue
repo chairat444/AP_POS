@@ -25,6 +25,10 @@ const dragIndex = ref<number | null>(null);
 const addQ = ref("");
 const boardQ = ref("");
 
+/** รวมคำขอบันทึกติด ๆ กัน (ลากวางหลายครั้ง) */
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let saveSeq = 0;
+
 const eligible = computed(() =>
   all.value.filter((p) => p.price != null && !p.isOpenPrice && p.active !== false),
 );
@@ -62,7 +66,6 @@ const available = computed(() => {
 async function load() {
   pending.value = true;
   error.value = "";
-  message.value = "";
   try {
     const data = await get<{ products: Product[] }>("/products");
     all.value = data.products ?? [];
@@ -96,6 +99,7 @@ function onDrop(index: number, e: DragEvent) {
   const [item] = next.splice(from, 1);
   next.splice(index, 0, item);
   board.value = next;
+  scheduleSave("เรียงลำดับแล้ว · กำลังบันทึก…");
 }
 
 async function removeAt(index: number) {
@@ -104,36 +108,57 @@ async function removeAt(index: number) {
   const ok = await askConfirm({
     title: "เอาออกจากแผงด่วน",
     message: `เอา 「${item.name}」 ออกจากแผงสินค้าด่วน?`,
-    detail: "ยังไม่บันทึกจนกว่าจะกดบันทึกลำดับ",
+    detail: "ระบบจะอัปเดตแผงบน POS อัตโนมัติหลังบันทึก",
     confirmLabel: "เอาออก",
   });
   if (!ok) return;
   board.value = board.value.filter((_, i) => i !== index);
+  scheduleSave("เอาออกแล้ว · กำลังบันทึก…");
 }
 
 function addProduct(p: Product) {
   if (boardIds.value.has(p.id)) return;
   board.value = [...board.value, p];
+  scheduleSave(`เพิ่ม 「${p.name}」 · กำลังบันทึก…`);
 }
 
-async function save() {
+/** บันทึกแผงขึ้น API — เรียกอัตโนมัติหลังเรียง/เพิ่ม/เอาออก */
+async function persistBoard() {
+  const seq = ++saveSeq;
   saving.value = true;
   error.value = "";
-  message.value = "";
   try {
     await put("/products/quick-board", {
       productIds: board.value.map((p) => p.id),
     });
-    message.value = "บันทึกลำดับสินค้าด่วนแล้ว";
-    await load();
+    if (seq !== saveSeq) return;
+    message.value = "อัปเดตแผงสินค้าด่วนแล้ว · POS จะดึงรอบ sync ถัดไป";
+    const data = await get<{ products: Product[] }>("/products");
+    if (seq !== saveSeq) return;
+    all.value = data.products ?? [];
   } catch (e) {
+    if (seq !== saveSeq) return;
     error.value = e instanceof Error ? e.message : "บันทึกไม่สำเร็จ";
+    message.value = "";
   } finally {
-    saving.value = false;
+    if (seq === saveSeq) saving.value = false;
   }
 }
 
+function scheduleSave(pendingMsg?: string) {
+  if (pendingMsg) message.value = pendingMsg;
+  error.value = "";
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    void persistBoard();
+  }, 350);
+}
+
 onMounted(load);
+onBeforeUnmount(() => {
+  if (saveTimer) clearTimeout(saveTimer);
+});
 </script>
 
 <template>
@@ -141,19 +166,17 @@ onMounted(load);
     <div class="ui-page-head">
       <div>
         <h1 class="ui-page-title">สินค้าด่วน</h1>
-        <p class="ui-page-sub">ลากวางเพื่อจัดลำดับบนจอ POS · เฉพาะสินค้าที่มีราคาคงที่</p>
+        <p class="ui-page-sub">
+          ลากเรียงหรือกดเพิ่ม — บันทึกอัตโนมัติ · เฉพาะสินค้าที่มีราคาคงที่
+        </p>
       </div>
       <div class="ui-page-head__actions">
+        <span v-if="saving" class="qb-save-status">กำลังบันทึก…</span>
+        <span v-else-if="message && !error" class="qb-save-status qb-save-status--ok">
+          บันทึกอัตโนมัติ
+        </span>
         <button type="button" class="ui-btn ui-btn--ghost" :disabled="pending" @click="load">
           {{ pending ? "กำลังโหลด..." : "รีเฟรช" }}
-        </button>
-        <button
-          type="button"
-          class="ui-btn ui-btn--primary"
-          :disabled="saving"
-          @click="save"
-        >
-          {{ saving ? "กำลังบันทึก..." : "บันทึกลำดับ" }}
         </button>
       </div>
     </div>
@@ -261,6 +284,7 @@ onMounted(load);
             <button
               type="button"
               class="ui-btn ui-btn--primary qb-row__add-btn"
+              :disabled="saving"
               @click="addProduct(p)"
             >
               เพิ่ม
@@ -284,6 +308,17 @@ onMounted(load);
   .qb-layout {
     grid-template-columns: 1fr;
   }
+}
+
+.qb-save-status {
+  align-self: center;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: #64748b;
+}
+
+.qb-save-status--ok {
+  color: #047857;
 }
 
 .qb-panel {

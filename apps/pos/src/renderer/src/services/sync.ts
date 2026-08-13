@@ -5,7 +5,35 @@ import { PLACEHOLDER_IMAGE, type QuickProduct } from "../data/demo-products";
 import type { PaymentEntry } from "../stores/cart";
 import { savePrinterConfig } from "./receipt";
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:3000";
+const DEFAULT_API_BASE = (
+  import.meta.env.VITE_API_BASE ?? "http://localhost:3000"
+).replace(/\/$/, "");
+const API_BASE_META = "pos-api-base";
+const ADMIN_URL_META = "pos-admin-url";
+
+/** URL API ที่ใช้จริง — ตั้งจากหน้า config ได้ (ค่าเริ่มจาก build) */
+let runtimeApiBase = DEFAULT_API_BASE;
+let runtimeAdminUrl = "";
+
+export function getApiBase() {
+  return runtimeApiBase || DEFAULT_API_BASE;
+}
+
+/** Admin URL — ถ้าไม่ตั้ง จะเดาจาก API (พอร์ต 3000→3100) */
+export function getAdminUrl() {
+  if (runtimeAdminUrl) return runtimeAdminUrl;
+  try {
+    const u = new URL(getApiBase());
+    if (u.port === "3000" || u.port === "") u.port = "3100";
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+export function getDefaultApiBase() {
+  return DEFAULT_API_BASE;
+}
 
 /** bump เมื่อ media cache พร้อม — ให้ computed ที่อ่าน epoch รีเรนเดอร์ */
 export const mediaCacheEpoch = ref(0);
@@ -184,7 +212,7 @@ function toAbsoluteMediaUrl(url: string): string | null {
   if (t.startsWith("http://") || t.startsWith("https://")) {
     abs = t;
   } else {
-    abs = `${API_BASE}${t.startsWith("/") ? "" : "/"}${t}`;
+    abs = `${getApiBase()}${t.startsWith("/") ? "" : "/"}${t}`;
   }
   try {
     const u = new URL(abs);
@@ -236,6 +264,8 @@ export async function ensureMediaCached(
   opts?: { fingerprint?: boolean },
 ): Promise<boolean> {
   if (!window.apPos?.media?.cache) return false;
+  // ออฟไลน์ที่รู้แล้ว — อย่าพยายามดาวน์โหลด (กันค้างตอนเปิดแอป)
+  if (isApiOfflineKnown()) return false;
   const list = [
     ...new Set(
       urls.filter((u): u is string => Boolean(u && String(u).trim())),
@@ -249,7 +279,7 @@ export async function ensureMediaCached(
   for (const u of list) {
     const abs = toAbsoluteMediaUrl(u);
     if (!abs) continue;
-    if (!mediaLocalByRemote.has(abs)) missing.push(u);
+    if (!mediaLocalByRemote.has(abs)) missing.push(abs);
   }
 
   const useFp = opts?.fingerprint !== false;
@@ -377,7 +407,7 @@ export function resolveImage(url: string | null | undefined, fallback: string) {
   if (url.startsWith("http://") || url.startsWith("https://")) {
     return url;
   }
-  return `${API_BASE}${url.startsWith("/") ? "" : "/"}${url}`;
+  return `${getApiBase()}${url.startsWith("/") ? "" : "/"}${url}`;
 }
 
 /**
@@ -410,6 +440,7 @@ function mapApiProducts(products: ApiProduct[]): QuickProduct[] {
     costPrice: p.costPrice ?? null,
     price: p.price,
     tone: "#495057",
+    imageUrl: p.imageUrl ?? null,
     image: resolveImage(p.imageUrl, PLACEHOLDER_IMAGE),
     isQuick: Boolean(p.isQuick),
     quickSort: p.quickSort ?? 999,
@@ -432,7 +463,7 @@ function toLocalProduct(
     price: p.price,
     isQuick: Boolean(p.isQuick),
     quickSort: p.quickSort ?? 999,
-    imageUrl: typeof p.image === "string" ? p.image : null,
+    imageUrl: p.imageUrl ?? (typeof p.image === "string" ? p.image : null),
     isOpenPrice: Boolean(p.isOpenPrice),
     openPriceMax: p.openPriceMax ?? 100,
     updatedAt,
@@ -462,6 +493,7 @@ function fromLocalProduct(p: {
     costPrice: p.costPrice ?? null,
     price: p.price,
     tone: "#495057",
+    imageUrl: p.imageUrl ?? null,
     image: resolveImage(p.imageUrl, PLACEHOLDER_IMAGE),
     isQuick: Boolean(p.isQuick),
     quickSort: p.quickSort ?? 999,
@@ -470,8 +502,50 @@ function fromLocalProduct(p: {
   };
 }
 
+/** กัน fetch ค้างบน Windows เมื่อโฮสต์ไม่ถึง — ไม่พึ่ง AbortSignal.timeout อย่างเดียว */
+async function raceTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  fallback: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await raceTimeout(
+      fetch(url, { ...init, signal: ctrl.signal }),
+      timeoutMs + 250,
+      null as unknown as Response,
+    );
+    if (!res) {
+      ctrl.abort();
+      throw new Error("timeout");
+    }
+    return res;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function fetchJson<T>(url: string, timeoutMs = 3000): Promise<T> {
-  const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+  const res = await fetchWithTimeout(url, undefined, timeoutMs);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return (await res.json()) as T;
 }
@@ -481,12 +555,15 @@ async function postJson<T>(
   body: unknown,
   timeoutMs = 4000,
 ): Promise<T> {
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(timeoutMs),
-  });
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    timeoutMs,
+  );
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {
@@ -604,6 +681,32 @@ export async function claimThisTerminal(opts: {
   ok: false;
   message: string;
 }> {
+  // ออฟไลน์ที่รู้แล้ว — ใช้แคชทันที อย่ารอ claim API
+  if (isApiOfflineKnown()) {
+    const cached = await loadTerminalsFromCache(opts.branchId);
+    const hit = cached.find((t) => t.id === opts.id && t.active !== false);
+    if (hit) {
+      await applyPrinterConfigFromTerminal(hit);
+      const device = window.apPos?.db?.setDevice
+        ? await window.apPos.db.setDevice({
+            branchId: opts.branchId,
+            terminalId: hit.id,
+            terminalName: hit.name,
+          })
+        : {
+            ...(await getDeviceConfig()),
+            branchId: opts.branchId,
+            terminalId: hit.id,
+            terminalName: hit.name,
+          };
+      return { ok: true, device };
+    }
+    return {
+      ok: false,
+      message: "ออฟไลน์ และไม่พบเครื่องนี้ในแคช — ต้องเชื่อมต่อ API ครั้งหนึ่งก่อน",
+    };
+  }
+
   try {
     const claimed = await postJson<{
       id: string;
@@ -616,10 +719,11 @@ export async function claimThisTerminal(opts: {
       printerName?: string | null;
       receiptFooterHours?: string | null;
       receiptFooterPhones?: string | null;
-    }>(`${API_BASE}/sync/terminals/claim`, {
+    }>(`${getApiBase()}/sync/terminals/claim`, {
       id: opts.id,
       branchId: opts.branchId,
-    });
+    }, 2_500);
+    markApiOnline();
     const devicePatch = {
       branchId: claimed.branchId || opts.branchId,
       terminalId: claimed.id,
@@ -669,7 +773,8 @@ export async function claimThisTerminal(opts: {
     }
 
     // offline / เน็ตมีปัญหา — ใช้ cache ได้
-    const cached = await loadTerminals(opts.branchId);
+    markApiOffline();
+    const cached = await loadTerminalsFromCache(opts.branchId);
     const hit = cached.find((t) => t.id === opts.id && t.active !== false);
     if (hit) {
       await applyPrinterConfigFromTerminal(hit);
@@ -745,12 +850,51 @@ const STAFF_META = "cached-staff";
 const PROMOS_META = "cached-promos";
 const TERMINALS_META = "cached-terminals";
 
+async function loadTerminalsFromCache(branchId?: string): Promise<SyncTerminal[]> {
+  if (!window.apPos?.db) return [];
+  const raw = await window.apPos.db.getMeta(TERMINALS_META);
+  if (!raw) return [];
+  try {
+    const all = JSON.parse(raw) as SyncTerminal[];
+    return branchId
+      ? all.filter((t) => t.branchId === branchId && t.active !== false)
+      : all.filter((t) => t.active !== false);
+  } catch {
+    return [];
+  }
+}
+
+async function loadBranchesFromCache(): Promise<SyncBranch[]> {
+  if (!window.apPos?.db) return [];
+  const raw = await window.apPos.db.getMeta(BRANCHES_META);
+  if (!raw) return [];
+  try {
+    return JSON.parse(raw) as SyncBranch[];
+  } catch {
+    return [];
+  }
+}
+
+async function loadStaffFromCache(): Promise<SyncStaff[]> {
+  if (!window.apPos?.db) return [];
+  const raw = await window.apPos.db.getMeta(STAFF_META);
+  if (!raw) return [];
+  try {
+    return (JSON.parse(raw) as SyncStaff[]).filter((s) => s.code !== "admin");
+  } catch {
+    return [];
+  }
+}
+
 export async function loadTerminals(branchId?: string): Promise<SyncTerminal[]> {
+  if (isApiOfflineKnown()) return loadTerminalsFromCache(branchId);
   try {
     const qs = branchId ? `?branchId=${encodeURIComponent(branchId)}` : "";
     const data = await fetchJson<{ terminals: SyncTerminal[] }>(
-      `${API_BASE}/sync/terminals${qs}`,
+      `${getApiBase()}/sync/terminals${qs}`,
+      2_500,
     );
+    markApiOnline();
     const list = (data.terminals ?? []).filter((t) => t.active !== false);
     if (window.apPos?.db) {
       const allRaw = await window.apPos.db.getMeta(TERMINALS_META);
@@ -764,7 +908,6 @@ export async function loadTerminals(branchId?: string): Promise<SyncTerminal[]> 
       }
       const byId = new Map(all.map((t) => [t.id, t]));
       if (branchId) {
-        // แทนที่เครื่องของสาขานี้ด้วยผลจาก API (แม้ list ว่าง — กัน cache ผี)
         for (const [id, t] of byId) {
           if (t.branchId === branchId) byId.delete(id);
         }
@@ -778,77 +921,49 @@ export async function loadTerminals(branchId?: string): Promise<SyncTerminal[]> 
         JSON.stringify([...byId.values()]),
       );
     }
-    // สำเร็จจาก API แล้ว — ใช้ผลนี้เสมอ แม้ไม่มีเครื่อง
     return list;
   } catch {
-    // offline — ใช้ cache
+    markApiOffline();
   }
-  if (window.apPos?.db) {
-    const raw = await window.apPos.db.getMeta(TERMINALS_META);
-    if (raw) {
-      try {
-        const all = JSON.parse(raw) as SyncTerminal[];
-        return branchId
-          ? all.filter((t) => t.branchId === branchId && t.active !== false)
-          : all.filter((t) => t.active !== false);
-      } catch {
-        // ignore
-      }
-    }
-  }
-  return [];
+  return loadTerminalsFromCache(branchId);
 }
 
 export async function loadBranches(): Promise<SyncBranch[]> {
+  if (isApiOfflineKnown()) return loadBranchesFromCache();
   try {
     const data = await fetchJson<{ branches: SyncBranch[] }>(
-      `${API_BASE}/sync/branches`,
+      `${getApiBase()}/sync/branches`,
+      2_500,
     );
+    markApiOnline();
     const list = data.branches ?? [];
     if (window.apPos?.db && list.length) {
       await window.apPos.db.setMeta(BRANCHES_META, JSON.stringify(list));
     }
     if (list.length) return list;
   } catch {
-    // offline — ใช้ cache
+    markApiOffline();
   }
-  if (window.apPos?.db) {
-    const raw = await window.apPos.db.getMeta(BRANCHES_META);
-    if (raw) {
-      try {
-        return JSON.parse(raw) as SyncBranch[];
-      } catch {
-        // ignore
-      }
-    }
-  }
-  return [];
+  return loadBranchesFromCache();
 }
 
 export async function loadStaffDirectory(): Promise<SyncStaff[]> {
+  if (isApiOfflineKnown()) return loadStaffFromCache();
   try {
     const data = await fetchJson<{ staff: SyncStaff[] }>(
-      `${API_BASE}/sync/staff`,
+      `${getApiBase()}/sync/staff`,
+      2_500,
     );
+    markApiOnline();
     const list = (data.staff ?? []).filter((s) => s.code !== "admin");
     if (window.apPos?.db && list.length) {
       await window.apPos.db.setMeta(STAFF_META, JSON.stringify(list));
     }
     if (list.length) return list;
   } catch {
-    // offline
+    markApiOffline();
   }
-  if (window.apPos?.db) {
-    const raw = await window.apPos.db.getMeta(STAFF_META);
-    if (raw) {
-      try {
-        return JSON.parse(raw) as SyncStaff[];
-      } catch {
-        // ignore
-      }
-    }
-  }
-  return [];
+  return loadStaffFromCache();
 }
 
 /** ยอดขายรอบปิดแล้วของพนักงานวันนี้ (ไม่รวมรอบปัจจุบัน) */
@@ -861,7 +976,8 @@ export async function fetchStaffDayPriorSales(
     const qs = new URLSearchParams({ staffId });
     if (excludeShiftId) qs.set("excludeShiftId", excludeShiftId);
     const data = await fetchJson<{ priorGrossTotal?: number }>(
-      `${API_BASE}/sync/staff/day-sales?${qs.toString()}`,
+      `${getApiBase()}/sync/staff/day-sales?${qs.toString()}`,
+      1_500,
     );
     const n = Number(data.priorGrossTotal);
     return Number.isFinite(n) ? n : 0;
@@ -916,17 +1032,193 @@ export async function enqueueShift(payload: SyncedShiftPayload) {
   await window.apPos.db.enqueueShift(payload);
 }
 
+/** เช็คว่า API ถึงได้จริง (ไม่ใช่แค่ Wi‑Fi ติด) */
+export async function isApiReachable(timeoutMs = 800): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return false;
+  }
+  try {
+    const ok = await raceTimeout(
+      fetchJson(`${getApiBase()}/sync/settings`, timeoutMs).then(() => true),
+      timeoutMs + 300,
+      false,
+    );
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+/** วนเช็ค API หลายรอบ — ใช้ตอนปิดรอบ / เปิดแอป */
+export async function probeApiOnline(opts?: {
+  attempts?: number;
+  timeoutMs?: number;
+  gapMs?: number;
+}): Promise<boolean> {
+  const attempts = Math.max(1, opts?.attempts ?? 3);
+  const timeoutMs = opts?.timeoutMs ?? 800;
+  const gapMs = opts?.gapMs ?? 250;
+  for (let i = 0; i < attempts; i++) {
+    if (await isApiReachable(timeoutMs)) return true;
+    if (i < attempts - 1 && gapMs > 0) {
+      await new Promise<void>((r) => setTimeout(r, gapMs));
+    }
+  }
+  return false;
+}
+
+export function markApiOnlineCacheCleared() {
+  apiOnlineCached = null;
+}
+
+export async function loadPosNetworkConfig() {
+  if (!window.apPos?.db?.getMeta) return;
+  try {
+    const api = await window.apPos.db.getMeta(API_BASE_META);
+    const admin = await window.apPos.db.getMeta(ADMIN_URL_META);
+    if (api?.trim()) runtimeApiBase = api.trim().replace(/\/$/, "");
+    if (admin?.trim()) runtimeAdminUrl = admin.trim().replace(/\/$/, "");
+  } catch {
+    /* ignore */
+  }
+  void window.apPos?.media?.setApiBase?.(getApiBase());
+}
+
+export async function savePosNetworkConfig(opts: {
+  apiBase: string;
+  adminUrl?: string;
+}) {
+  const api = opts.apiBase.trim().replace(/\/$/, "");
+  const admin = (opts.adminUrl ?? "").trim().replace(/\/$/, "");
+  if (!/^https?:\/\//i.test(api)) {
+    throw new Error("URL API ต้องขึ้นต้นด้วย http:// หรือ https://");
+  }
+  if (admin && !/^https?:\/\//i.test(admin)) {
+    throw new Error("URL Admin ต้องขึ้นต้นด้วย http:// หรือ https://");
+  }
+  runtimeApiBase = api;
+  runtimeAdminUrl = admin;
+  if (window.apPos?.db?.setMeta) {
+    await window.apPos.db.setMeta(API_BASE_META, api);
+    await window.apPos.db.setMeta(ADMIN_URL_META, admin);
+  }
+  void window.apPos?.media?.setApiBase?.(api);
+  apiOnlineCached = null;
+}
+
+/**
+ * สถานะ API ล่าสุด — null = ยังไม่เช็ค
+ * เปิดแอปเช็คครั้งแรกก่อนโชว์ UI เพื่อกันกระตุกตอนออฟไลน์
+ */
+let apiOnlineCached: boolean | null = null;
+
+export function getApiOnline(): boolean | null {
+  return apiOnlineCached;
+}
+
+export function isApiOnlineKnown(): boolean {
+  return apiOnlineCached === true;
+}
+
+export function isApiOfflineKnown(): boolean {
+  return apiOnlineCached === false;
+}
+
+export async function refreshApiOnline(opts?: {
+  attempts?: number;
+  timeoutMs?: number;
+  gapMs?: number;
+}): Promise<boolean> {
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    apiOnlineCached = false;
+    return false;
+  }
+  const online = await probeApiOnline({
+    attempts: opts?.attempts ?? 2,
+    timeoutMs: opts?.timeoutMs ?? 700,
+    gapMs: opts?.gapMs ?? 200,
+  });
+  apiOnlineCached = online;
+  return online;
+}
+
+function markApiOnline() {
+  apiOnlineCached = true;
+}
+
+function markApiOffline() {
+  apiOnlineCached = false;
+}
+
+/** ดัน outbox จนว่างหรือครบรอบ — ใช้ตอนปิดรอบเมื่อออนไลน์ */
+export async function flushOutbox(opts?: {
+  timeoutMs?: number;
+  maxRounds?: number;
+}): Promise<{ ok: boolean; pending: number }> {
+  const timeoutMs = opts?.timeoutMs ?? 12_000;
+  const maxRounds = opts?.maxRounds ?? 3;
+  for (let i = 0; i < maxRounds; i++) {
+    await syncPushOutbox({ timeoutMs });
+    const pending = await pendingOutboxCount();
+    if (pending === 0) return { ok: true, pending: 0 };
+  }
+  return { ok: false, pending: await pendingOutboxCount() };
+}
+
+/**
+ * ปิดรอบ / บันทึก shift:
+ * 1) บันทึก SQLite เสมอ
+ * 2) วนเช็ค API 3 รอบ
+ * 3) API ไม่ติด → จบ (ค้าง outbox ปิดระบบได้)
+ * 4) API ติด → ส่ง outbox ให้เสร็จก่อนค่อยจบ
+ */
 export async function enqueueShiftAndSync(
   payload: SyncedShiftPayload,
-  opts?: { awaitPush?: boolean; pushTimeoutMs?: number },
+  opts?: {
+    /** ปิดรอบ: เช็ค API แล้วค่อยตัดสินใจรอส่ง */
+    awaitIfOnline?: boolean;
+    /** จำนวนรอบเช็ค API (ค่าเริ่มต้น 3) */
+    probeAttempts?: number;
+    probeTimeoutMs?: number;
+    pushTimeoutMs?: number;
+    /** เวลารอส่งสูงสุดเมื่อ API ใช้ได้ (ms) */
+    onlineDeadlineMs?: number;
+  },
 ) {
+  // 1) บันทึกในเครื่องก่อนเสมอ
   await enqueueShift(payload);
-  if (opts?.awaitPush) {
-    // ปิดรอบ: รอส่งให้จบ กันพนักงานปิดเครื่องแล้วข้อมูลไม่ขึ้น
-    await syncPushOutbox({ timeoutMs: opts.pushTimeoutMs ?? 30_000 });
+
+  if (!opts?.awaitIfOnline) {
+    void syncPushOutbox().catch(() => undefined);
     return;
   }
-  void syncPushOutbox().catch(() => undefined);
+
+  // 2) วนเช็ค API ~3 รอบ
+  const online = await probeApiOnline({
+    attempts: opts.probeAttempts ?? 3,
+    timeoutMs: opts.probeTimeoutMs ?? 800,
+    gapMs: 250,
+  });
+
+  // 3) API ไม่ทำงาน = ออฟไลน์ → ข้อมูลอยู่ใน SQLite แล้ว พร้อมปิดระบบ
+  if (!online) return;
+
+  // 4) API ใช้ได้ → ส่งให้เสร็จก่อนปิด
+  const timeoutMs = opts.pushTimeoutMs ?? 12_000;
+  const deadlineMs = opts.onlineDeadlineMs ?? 45_000;
+  await raceTimeout(
+    (async () => {
+      const deadline = Date.now() + deadlineMs;
+      while (Date.now() < deadline) {
+        const result = await flushOutbox({ timeoutMs, maxRounds: 1 });
+        if (result.ok) return;
+        // ระหว่างส่ง API ดับ → เลิกรอ ค้าง SQLite ปิดได้
+        if (!(await isApiReachable(700))) return;
+      }
+    })(),
+    deadlineMs + 1_500,
+    undefined,
+  );
 }
 
 export async function enqueueAudit(payload: SyncedAuditPayload) {
@@ -948,12 +1240,22 @@ export async function loadLocalAudits(
 }
 
 export async function syncPullMasterData() {
+  if (isApiOfflineKnown()) {
+    throw new Error("API offline");
+  }
   const since = (await window.apPos?.db?.getMeta("sync-cursor")) ?? "";
   const url = since
-    ? `${API_BASE}/sync/changes?since=${encodeURIComponent(since)}`
-    : `${API_BASE}/sync/bootstrap`;
+    ? `${getApiBase()}/sync/changes?since=${encodeURIComponent(since)}`
+    : `${getApiBase()}/sync/bootstrap`;
   // bootstrap ครั้งแรกอาจใหญ่ — เปิดรอบรออัปเดตก่อนขาย
-  const data = await fetchJson<BootstrapResponse>(url, since ? 15_000 : 60_000);
+  let data: BootstrapResponse;
+  try {
+    data = await fetchJson<BootstrapResponse>(url, since ? 15_000 : 60_000);
+    markApiOnline();
+  } catch (e) {
+    markApiOffline();
+    throw e;
+  }
 
   if (window.apPos?.db) {
     if (data.products.length || data.removedProductIds.length || !since) {
@@ -1088,7 +1390,7 @@ export async function fetchSettingsFromApi(): Promise<
 > {
   try {
     return await fetchJson<BootstrapResponse["settings"]>(
-      `${API_BASE}/sync/settings`,
+      `${getApiBase()}/sync/settings`,
     );
   } catch {
     return null;
@@ -1097,6 +1399,7 @@ export async function fetchSettingsFromApi(): Promise<
 
 export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
   if (!window.apPos?.db) return { accepted: 0 };
+  if (isApiOfflineKnown()) return { accepted: 0 };
   const outbox = (await window.apPos.db.listOutbox()) as SyncEnvelope[];
   if (!outbox.length) return { accepted: 0 };
 
@@ -1109,7 +1412,7 @@ export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
   if (sales.length) {
     try {
       const data = await postJson<{ accepted: number; acceptedIds: string[] }>(
-        `${API_BASE}/sync/sales`,
+        `${getApiBase()}/sync/sales`,
         { sales },
         timeoutMs,
       );
@@ -1122,7 +1425,7 @@ export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
   if (audits.length) {
     try {
       const data = await postJson<{ accepted: string[] }>(
-        `${API_BASE}/sync/audits`,
+        `${getApiBase()}/sync/audits`,
         { audits: audits.map((e) => e.payload) },
         timeoutMs,
       );
@@ -1139,7 +1442,7 @@ export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
   if (shifts.length) {
     try {
       const data = await postJson<{ accepted: string[] }>(
-        `${API_BASE}/sync/shifts`,
+        `${getApiBase()}/sync/shifts`,
         { shifts: shifts.map((e) => e.payload) },
         timeoutMs,
       );

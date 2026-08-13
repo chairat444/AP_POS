@@ -1,9 +1,17 @@
 appId: th.ap.pos
 productName: AP POS
 copyright: Copyright © AP หมูสด
+executableName: AP POS
 directories:
   output: release
   buildResources: build
+# รายละเอียดใน Properties ของไฟล์ .exe (Windows)
+extraMetadata:
+  name: ap-pos
+  productName: AP POS
+  description: ระบบขายหน้าร้าน AP หมูสด (POS)
+  author:
+    name: AP หมูสด
 files:
   - out/**/*
   - package.json
@@ -16,22 +24,30 @@ extraResources:
       - "**/*"
   - from: resources/icon.png
     to: icon.png
+  - from: build/icon.ico
+    to: icon.ico
 win:
   target:
     - target: nsis
       arch:
         - x64
-  icon: build/icon.png
+  # ต้องเป็น .ico — และต้องเปิด signAndEditExecutable เพื่อให้ rcedit ฝัง icon + ชื่อแอป
+  icon: icon.ico
   artifactName: ${productName}-Setup-${version}.${ext}
-  # ไม่ sign — กัน error symlink winCodeSign บน Windows ที่ไม่มี Developer Mode
-  signAndEditExecutable: false
+  # true = ฝัง icon / File Description / Product Name ลง .exe (ไม่ใช่แค่ไอคอนตัวติดตั้ง)
+  # ไม่เซ็นโค้ด — ตั้ง CSC_IDENTITY_AUTO_DISCOVERY=false ตอน build
+  signAndEditExecutable: true
   forceCodeSigning: false
+  verifyUpdateCodeSignature: false
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: AP POS
+  installerIcon: icon.ico
+  uninstallerIcon: icon.ico
+  installerHeaderIcon: icon.ico
   installerLanguages:
     - th_TH
     - en_US

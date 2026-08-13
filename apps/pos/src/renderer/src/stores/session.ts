@@ -674,11 +674,14 @@ export const useSessionStore = defineStore("session", () => {
         ? "ปิดรอบเรียบร้อย"
         : `ปิดรอบแล้ว · นับได้ ${counted?.toFixed(0)} ต่าง ${variance >= 0 ? "+" : ""}${variance.toFixed(0)}${closeNote ? ` · ${closeNote}` : ""}`;
 
-    // ส่งรอบปิดขึ้นเซิร์ฟเวอร์ก่อนออก — ถ้าออฟไลน์ค้าง outbox ไว้รอบถัดไป
+    // ปิดรอบ: บันทึก SQLite → เช็ค API 3 รอบ → ส่งถ้าติด / ปิดเลยถ้าไม่ติด
     if (payload) {
       await enqueueShiftAndSync(payload, {
-        awaitPush: true,
-        pushTimeoutMs: 30_000,
+        awaitIfOnline: true,
+        probeAttempts: 3,
+        probeTimeoutMs: 800,
+        pushTimeoutMs: 12_000,
+        onlineDeadlineMs: 45_000,
       }).catch(() => undefined);
     }
     try {

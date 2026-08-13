@@ -6,6 +6,7 @@ import {
   Menu,
   nativeImage,
   screen,
+  shell,
   systemPreferences,
 } from "electron";
 import { existsSync } from "node:fs";
@@ -43,14 +44,18 @@ let lastSettingsSnapshot: unknown = null;
 let shiftOpen = false;
 /** ปิดรอบแล้ว อนุญาตออกจากแอป */
 let forceQuit = false;
+/** ตั้งค่าจาก Admin/renderer ว่าต้องการใช้จอลูกค้า (จะเปิดจริงเมื่อมีจอ 2) */
+let customerScreenWanted = true;
 
 function resolveAppIcon(): string | undefined {
   const candidates = [
-    join(__dirname, "../../resources/icon.icns"),
+    join(__dirname, "../../build/icon.ico"),
     join(__dirname, "../../build/icon.png"),
+    join(__dirname, "../../resources/icon.icns"),
     join(__dirname, "../../resources/icon.png"),
-    join(process.resourcesPath, "icon.icns"),
+    join(process.resourcesPath, "icon.ico"),
     join(process.resourcesPath, "icon.png"),
+    join(process.resourcesPath, "icon.icns"),
   ];
   return candidates.find((p) => existsSync(p));
 }
@@ -205,7 +210,25 @@ function setupIpc() {
     setCustomerScreenEnabled(Boolean(enabled));
   });
 
+  ipcMain.handle("shell:open-external", async (_e, url: string) => {
+    const raw = String(url ?? "").trim();
+    if (!/^https?:\/\//i.test(raw)) return { ok: false, message: "URL ไม่ถูกต้อง" };
+    try {
+      await shell.openExternal(raw);
+      return { ok: true };
+    } catch (e) {
+      return {
+        ok: false,
+        message: e instanceof Error ? e.message : "เปิดลิงก์ไม่สำเร็จ",
+      };
+    }
+  });
+
   ipcMain.handle("media:index", async () => mediaCache.getMediaIndex());
+  ipcMain.handle("media:set-api-base", async (_e, url: string) => {
+    mediaCache.setApiBase(String(url ?? ""));
+    return true;
+  });
   ipcMain.handle("media:resolve", async (_e, url: string) => {
     return mediaCache.resolveCached(url) ?? null;
   });
@@ -257,15 +280,15 @@ function setupIpc() {
 }
 
 function shouldBlockQuit() {
-  return shiftOpen && !forceQuit;
+  // อนุญาตปิดแอปได้เสมอ (แม้รอบยังเปิด — ข้อมูลค้างในเครื่อง)
+  return false;
 }
 
 function setShiftOpen(open: boolean) {
   shiftOpen = open;
   for (const win of BrowserWindow.getAllWindows()) {
     try {
-      // ยังไม่เปิดรอบ → กดปิดหน้าต่างได้ · เปิดรอบแล้ว → ปิดไม่ได้
-      win.setClosable(!open || forceQuit);
+      win.setClosable(true);
     } catch {
       // ignore
     }
@@ -493,6 +516,9 @@ function createWindows() {
 
   cashierWindow.on("closed", () => {
     cashierWindow = null;
+    // ปิดจอลูกค้าแล้วออกจากแอป — กด X ที่หน้าต่างหลักได้เสมอ
+    closeCustomerWindow();
+    if (!forceQuit) app.quit();
   });
 
   // จอลูกค้าเปิดตามตั้งค่าจาก Admin (ค่าเริ่มต้นเปิด)
@@ -557,13 +583,18 @@ function fitWindowToDisplay(
   if (!win.isMaximized()) win.maximize();
 }
 
-function ensureCustomerWindow() {
+function ensureCustomerWindow(): BrowserWindow | null {
+  const target = resolveCustomerDisplay();
+  if (!target) {
+    closeCustomerWindow();
+    return null;
+  }
+
   if (customerWindow && !customerWindow.isDestroyed()) {
-    fitWindowToDisplay(customerWindow, resolveCustomerDisplay());
+    fitWindowToDisplay(customerWindow, target);
     return customerWindow;
   }
 
-  const target = resolveCustomerDisplay();
   const iconPath = resolveAppIcon();
   customerWindow = new BrowserWindow({
     x: target.workArea.x,
@@ -593,8 +624,7 @@ function ensureCustomerWindow() {
 
   hardenWindowsChrome(customerWindow);
   blockWindowClose(customerWindow);
-  // ตามสถานะรอบขายปัจจุบัน
-  customerWindow.setClosable(!shiftOpen || forceQuit);
+  customerWindow.setClosable(true);
 
   customerWindow.once("ready-to-show", () => {
     if (!customerWindow || customerWindow.isDestroyed()) return;
@@ -614,22 +644,42 @@ function ensureCustomerWindow() {
   return customerWindow;
 }
 
-function resolveCustomerDisplay() {
+/** มีจอที่ไม่ใช่จอหลัก (จอ 2) ต่ออยู่จริงหรือไม่ */
+function hasSecondaryDisplay(): boolean {
+  const displays = screen.getAllDisplays();
+  if (displays.length < 2) return false;
+  const primary = screen.getPrimaryDisplay();
+  return displays.some((d) => d.id !== primary.id);
+}
+
+/** จอสำหรับลูกค้า — ต้องเป็นจอที่ไม่ใช่จอหลักเท่านั้น */
+function resolveCustomerDisplay(): Electron.Display | null {
   const displays = screen.getAllDisplays();
   const primary = screen.getPrimaryDisplay();
-  return displays.find((d) => d.id !== primary.id) ?? primary;
+  return displays.find((d) => d.id !== primary.id) ?? null;
+}
+
+/** เปิด/ปิดจอลูกค้าตามตั้งค่า + การต่อจอจริง */
+function syncCustomerScreen() {
+  if (forceQuit || !customerScreenWanted || !hasSecondaryDisplay()) {
+    closeCustomerWindow();
+    return;
+  }
+  const target = resolveCustomerDisplay();
+  if (!target) {
+    closeCustomerWindow();
+    return;
+  }
+  const win = ensureCustomerWindow();
+  if (win && !win.isDestroyed()) {
+    fitWindowToDisplay(win, target);
+    if (!win.isVisible()) win.showInactive();
+  }
 }
 
 function setCustomerScreenEnabled(enabled: boolean) {
-  if (enabled && !forceQuit) {
-    const win = ensureCustomerWindow();
-    if (!win.isDestroyed()) {
-      fitWindowToDisplay(win, resolveCustomerDisplay());
-      if (!win.isVisible()) win.showInactive();
-    }
-    return;
-  }
-  closeCustomerWindow();
+  customerScreenWanted = Boolean(enabled);
+  syncCustomerScreen();
 }
 
 app.whenReady().then(async () => {
@@ -642,6 +692,10 @@ app.whenReady().then(async () => {
     console.error("[ap-pos] SQLite init failed — continuing without local DB", err);
   }
   createWindows();
+  // เสียบ/ถอดจอ 2 — เปิดหรือปิดจอลูกค้าตามสถานะจริง
+  screen.on("display-added", () => syncCustomerScreen());
+  screen.on("display-removed", () => syncCustomerScreen());
+  screen.on("display-metrics-changed", () => syncCustomerScreen());
   if (process.platform === "darwin") registerDarwinStolenKeys();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindows();

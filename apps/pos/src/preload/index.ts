@@ -68,6 +68,12 @@ contextBridge.exposeInMainWorld("apPos", {
   setCustomerScreenEnabled(enabled: boolean) {
     ipcRenderer.send("app:customer-screen", enabled);
   },
+  openExternal(url: string) {
+    return ipcRenderer.invoke("shell:open-external", url) as Promise<{
+      ok: boolean;
+      message?: string;
+    }>;
+  },
   onCartUpdate(handler: (snapshot: CartSnapshot) => void) {
     const listener = (_: unknown, snapshot: CartSnapshot) => handler(snapshot);
     ipcRenderer.on("cart:update", listener);
@@ -91,6 +97,8 @@ contextBridge.exposeInMainWorld("apPos", {
   media: {
     index: () =>
       ipcRenderer.invoke("media:index") as Promise<Record<string, string>>,
+    setApiBase: (url: string) =>
+      ipcRenderer.invoke("media:set-api-base", url) as Promise<boolean>,
     resolve: (url: string) =>
       ipcRenderer.invoke("media:resolve", url) as Promise<string | null>,
     cache: (urls: string[]) =>

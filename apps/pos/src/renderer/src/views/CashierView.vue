@@ -17,12 +17,14 @@ import HoldRecallModal from "../components/HoldRecallModal.vue";
 import ConfirmModal from "../components/ConfirmModal.vue";
 import StaffAlert from "../components/StaffAlert.vue";
 import SaleSummaryModal from "../components/SaleSummaryModal.vue";
+import PosConfigModal from "../components/PosConfigModal.vue";
 import {
   applyPrinterConfigFromTerminal,
   cacheLocalProductImages,
   ensureProductImagesFromPull,
   ensureSettingsMediaCached,
   getDeviceConfig,
+  isApiOfflineKnown,
   loadCachedMembers,
   loadCachedProducts,
   loadCachedPromos,
@@ -31,6 +33,7 @@ import {
   loadTerminals,
   mediaCacheEpoch,
   pendingOutboxCount,
+  refreshApiOnline,
   resolveImage,
   syncPullMasterData,
   syncPushOutbox,
@@ -69,9 +72,9 @@ const brandLogoSrc = computed(() => {
 });
 
 /** รูปสินค้าด่วน — อ่าน cache ใหม่เมื่อ mediaCacheEpoch เปลี่ยน */
-function productThumb(url: string | null | undefined) {
+function productThumb(p: { imageUrl?: string | null; image?: string }) {
   void mediaCacheEpoch.value;
-  return resolveImage(url, PLACEHOLDER_IMAGE);
+  return resolveImage(p.imageUrl || p.image, PLACEHOLDER_IMAGE);
 }
 
 function onThumbError(e: Event) {
@@ -121,6 +124,8 @@ const memberOpenBlockUntil = ref(0);
 const productSearchOpen = ref(false);
 const holdOpen = ref(false);
 const summaryOpen = ref(false);
+const configOpen = ref(false);
+const pulling = ref(false);
 const holdMode = ref<"hold" | "recall">("hold");
 const confirmOpen = ref(false);
 const confirmKind = ref<"bill" | "line">("bill");
@@ -130,9 +135,59 @@ const alertOpen = ref(false);
 const alertTitle = ref("แจ้งเตือน");
 const alertMessage = ref("");
 const alertHint = ref("");
-let syncTimer: number | undefined;
-let unsubCloseBlocked: (() => void) | undefined;
 
+/** toast สั้น ๆ — ไม่บังคับกด ไม่แย่งโฟกัสช่องสแกน */
+const scanToast = ref<{
+  id: number;
+  tone: "error" | "warn";
+  title: string;
+  detail?: string;
+} | null>(null);
+let scanToastTimer: number | undefined;
+
+function dismissScanToast() {
+  if (scanToastTimer) window.clearTimeout(scanToastTimer);
+  scanToastTimer = undefined;
+  scanToast.value = null;
+}
+
+function softScanBeep() {
+  try {
+    const Ctx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.value = 420;
+    gain.gain.value = 0.04;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+    osc.stop(ctx.currentTime + 0.13);
+    window.setTimeout(() => void ctx.close(), 200);
+  } catch {
+    /* เงียบได้ */
+  }
+}
+
+function showScanToast(
+  tone: "error" | "warn",
+  title: string,
+  detail?: string,
+) {
+  dismissScanToast();
+  scanToast.value = { id: Date.now(), tone, title, detail };
+  if (tone === "error") softScanBeep();
+  scanToastTimer = window.setTimeout(() => {
+    scanToast.value = null;
+    scanToastTimer = undefined;
+  }, 2400);
+}
 watch(exiting, (v) => {
   if (v) openShiftOpen.value = false;
 });
@@ -145,7 +200,40 @@ watch(
   { immediate: true },
 );
 
+/** โหลดข้อมูลจากเซิร์ฟเวอร์ — ใช้ตอนเปิดรอบ และปุ่มโหลด (เมื่อไม่มีรายการค้าง) */
+async function pullMasterNow(opts?: { quiet?: boolean }) {
+  if (lines.value.length > 0) {
+    if (!opts?.quiet) {
+      showAlert(
+        "โหลดข้อมูลไม่ได้",
+        "ยังมีรายการขายค้างอยู่บนจอ",
+        "ชำระเงินหรือยกเลิกบิลก่อน แล้วค่อยโหลดข้อมูลใหม่",
+      );
+    }
+    return;
+  }
+  if (pulling.value) return;
+  pulling.value = true;
+  if (!opts?.quiet) statusMessage.value = "กำลังโหลดข้อมูล…";
+  try {
+    await runBackgroundSync();
+    if (!opts?.quiet) {
+      statusMessage.value = isApiOfflineKnown()
+        ? "ออฟไลน์ · ใช้ข้อมูลในเครื่อง"
+        : "โหลดข้อมูลแล้ว";
+    }
+  } finally {
+    pulling.value = false;
+  }
+}
+
 async function runBackgroundSync() {
+  // ออฟไลน์ที่รู้แล้ว — โพรบสั้น ๆ ถ้ายังไม่ติด ข้าม pull/push ทั้งก้อน (กัน UI กระตุก)
+  if (isApiOfflineKnown()) {
+    const online = await refreshApiOnline({ attempts: 1, timeoutMs: 600 });
+    if (!online) return;
+  }
+
   try {
     const pull = await syncPullMasterData();
     await Promise.all([
@@ -220,6 +308,18 @@ async function runBackgroundSync() {
     }
     // ส่งไปจอ 2 ทุกครั้งหลัง sync — กันโฆษณาค้างเวอร์ชันเก่า
     settings.publishSettingsToCustomer();
+  } catch {
+    // offline — ใช้สื่อจากดิสก์ที่มีอยู่แล้ว ไม่ดึงซ้ำ
+    try {
+      await loadMediaIndex();
+      cart.setCatalog(await loadCachedProducts(), cart.catalogSource);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // push แยกจาก pull — ปิดรอบออฟไลน์ค้าง outbox ไว้ ส่งตอนเน็ตกลับ / เปิดรอบวันใหม่
+  try {
     await syncPushOutbox();
     if (window.apPos?.db?.purgeSyncedSales) {
       await window.apPos.db.purgeSyncedSales();
@@ -229,13 +329,7 @@ async function runBackgroundSync() {
       statusMessage.value = `มีบิลรอ sync ${pending} รายการ`;
     }
   } catch {
-    // offline — ใช้สื่อจากดิสก์ที่มีอยู่แล้ว ไม่ดึงซ้ำ
-    try {
-      await loadMediaIndex();
-      cart.setCatalog(await loadCachedProducts(), cart.catalogSource);
-    } catch {
-      /* ignore */
-    }
+    /* ยังออฟไลน์ — ค้าง outbox ต่อ */
   }
 }
 
@@ -263,7 +357,8 @@ const anyModalOpen = computed(
     holdOpen.value ||
     summaryOpen.value ||
     confirmOpen.value ||
-    alertOpen.value,
+    alertOpen.value ||
+    configOpen.value,
 );
 
 const confirmTitle = computed(() =>
@@ -308,6 +403,7 @@ type ActionBtn = {
   label: string;
   hint: string;
   tone: string;
+  disabled?: boolean;
   run: () => void;
 };
 
@@ -399,24 +495,12 @@ function onConfirmCancel() {
 }
 
 function scrollCartToBottom() {
-  const run = () => {
-    const scroller = cartScroller.value;
-    if (!scroller) return;
-    scroller.scrollTop = 0;
-    scroller.scrollTop = scroller.scrollHeight;
-    const last = scroller.querySelector("tbody tr:last-child") as HTMLElement | null;
-    if (last && !last.querySelector("td.empty")) {
-      const delta =
-        last.getBoundingClientRect().bottom - scroller.getBoundingClientRect().bottom;
-      if (delta > 0) scroller.scrollTop += delta + 8;
-    }
-  };
+  // ครั้งเดียวหลัง paint — เดิม nextTick+rAF+timeout ซ้ำทำให้กระตุกตอนยิงบาร์โค้ด
   void nextTick(() => {
-    run();
     requestAnimationFrame(() => {
-      run();
-      setTimeout(run, 16);
-      setTimeout(run, 100);
+      const scroller = cartScroller.value;
+      if (!scroller) return;
+      scroller.scrollTop = scroller.scrollHeight;
     });
   });
 }
@@ -549,6 +633,17 @@ const primaryActions = computed<ActionBtn[]>(() => [
   },
 ]);
 
+const pullDataAction = computed<ActionBtn>(() => ({
+  id: "pull-data",
+  label: pulling.value ? "กำลังโหลด…" : "โหลดข้อมูล",
+  hint: "",
+  tone: "tone-soft",
+  disabled: pulling.value || lines.value.length > 0,
+  run: () => {
+    void pullMasterNow();
+  },
+}));
+
 const closeShiftAction = computed<ActionBtn>(() => ({
   id: "close-shift",
   label: "ปิดรอบ",
@@ -577,9 +672,10 @@ const closeShiftAction = computed<ActionBtn>(() => ({
   },
 }));
 
-/** ปุ่มฟังก์ชันแถวล่าง — 3×3 รวมปิดรอบขนาดเท่ากัน */
+/** ปุ่มฟังก์ชันแถวล่าง — สรุป → โหลดข้อมูล → ปิดรอบ */
 const funcActions = computed<ActionBtn[]>(() => [
   ...primaryActions.value,
+  pullDataAction.value,
   closeShiftAction.value,
 ]);
 
@@ -596,6 +692,10 @@ function runAction(id: string) {
   if (id === "search") {
     if (!requireShift()) return;
     productSearchOpen.value = true;
+    return;
+  }
+  if (id === "pull-data") {
+    void pullMasterNow();
     return;
   }
   if (id === "close-shift") {
@@ -646,25 +746,36 @@ function onScanSubmit() {
     const raw = scanBuffer.value.trim();
     // กด Enter → เคลียร์เลขบาร์ทันที (เช่น พิมพ์ 25 แล้ว Enter)
     clearScanBuffer();
-    focusScan();
-    if (!raw) return;
+    if (!raw) {
+      focusScan();
+      return;
+    }
 
     // คูณรายการล่าสุด: กดปุ่มคูณแล้วพิมพ์จำนวนอย่างเดียว
     if (/^\*\d+$/.test(raw) || raw === "*") {
       const n = Number(raw.replace(/^\*/, ""));
       if (Number.isFinite(n) && n > 0) cart.multiplyLast(n);
-      scrollCartToBottom();
+      focusScan();
       return;
     }
 
     // 3* อย่างเดียว → ตั้ง pending แล้วรอสแกน
     if (/^\d+\*$/.test(raw)) {
       cart.scan(raw);
+      focusScan();
       return;
     }
 
-    cart.scan(raw);
-    scrollCartToBottom();
+    const result = cart.scan(raw);
+    if (result.notice) {
+      showScanToast(
+        result.notice.tone,
+        result.notice.title,
+        result.notice.detail,
+      );
+    }
+    // scroll / ไฮไลต์ทำใน watch หลัง lines อัปเดต — ไม่เลื่อนซ้ำตรงนี้
+    focusScan();
   } finally {
     scanSubmitting = false;
   }
@@ -798,8 +909,10 @@ onMounted(() => {
       loadCachedPromos(),
       loadCachedSettings(),
     ]);
-    // ครั้งแรกของรอบเปิดแอป — เติมเฉพาะที่ขาด / URL เปลี่ยน
-    await ensureSettingsMediaCached(cachedSettings);
+    // ครั้งแรก — แคชสื่อเฉพาะตอนออนไลน์ (ออฟไลน์ใช้ที่มีในเครื่อง)
+    if (!isApiOfflineKnown()) {
+      await ensureSettingsMediaCached(cachedSettings);
+    }
     if (promos.length) {
       cart.setPromos(
         promos.map((p) => ({
@@ -841,34 +954,42 @@ onMounted(() => {
     await cart.loadCatalog();
     cart.publish();
     if (isOpen.value && !anyModalOpen.value) focusScan();
-    // เติมรูปด่วนที่ยังไม่มีในดิสก์เท่านั้น (ข้ามถ้ารายการเดิมครบแล้ว)
-    const changed = await cacheLocalProductImages({ awaitQuick: true });
-    if (changed) {
-      cart.setCatalog(await loadCachedProducts(), cart.catalogSource);
+    // เติมรูปด่วนที่ขาด — เฉพาะตอนออนไลน์
+    if (!isApiOfflineKnown()) {
+      const changed = await cacheLocalProductImages({ awaitQuick: true });
+      if (changed) {
+        cart.setCatalog(await loadCachedProducts(), cart.catalogSource);
+      }
     }
   })();
-  void runBackgroundSync();
-  syncTimer = window.setInterval(() => {
-    void runBackgroundSync();
-  }, 15000);
-  unsubCloseBlocked = window.apPos?.onCloseBlocked?.(() => {
-    showAlert(
-      "ปิดแอปไม่ได้",
-      "ต้องปิดรอบขายก่อน ระบบถึงจะปิดได้",
-      "กดปุ่มปิดรอบ → ปิดรอบเลย หรือนับเงินแล้วปิด",
-    );
-  });
+  // pull เฉพาะตอนเปิดรอบ / กดโหลดข้อมูล — ไม่ดึงซ้ำทุก 15 วิ
+  if (isApiOfflineKnown()) {
+    statusMessage.value = "โหมดออฟไลน์ · ใช้ข้อมูลในเครื่อง";
+  }
 });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onKeydown, true);
-  if (syncTimer) window.clearInterval(syncTimer);
-  unsubCloseBlocked?.();
+  dismissScanToast();
 });
 </script>
 
 <template>
   <div class="cashier" @click="focusScan">
+    <div
+      v-if="scanToast"
+      class="scan-toast"
+      :class="`scan-toast--${scanToast.tone}`"
+      role="status"
+      @click.stop="dismissScanToast"
+    >
+      <span class="scan-toast__mark">!</span>
+      <div class="scan-toast__body">
+        <strong>{{ scanToast.title }}</strong>
+        <span v-if="scanToast.detail">{{ scanToast.detail }}</span>
+      </div>
+    </div>
+
     <div class="cashier-body">
       <section class="work">
         <form class="scan-bar" @submit.prevent="onScanSubmit">
@@ -955,20 +1076,20 @@ onUnmounted(() => {
               <button
                 v-for="p in pagedQuick"
                 :key="p.id"
+                v-memo="[p.id, p.imageUrl, p.image, p.price, p.name, mediaCacheEpoch]"
                 type="button"
                 class="quick-tile"
                 :title="p.name"
                 @click.stop="
-                  requireShift() &&
-                    (cart.addQuick(p), focusScan(), scrollCartToBottom())
+                  requireShift() && (cart.addQuick(p), focusScan())
                 "
               >
                 <span class="quick-thumb">
                   <img
                     class="quick-thumb__img"
-                    :src="productThumb(p.image)"
+                    :key="productThumb(p)"
+                    :src="productThumb(p)"
                     :alt="p.name"
-                    loading="lazy"
                     @error="onThumbError"
                   />
                 </span>
@@ -1019,6 +1140,12 @@ onUnmounted(() => {
               type="button"
               class="func-btn"
               :class="btn.tone"
+              :disabled="btn.disabled"
+              :title="
+                btn.id === 'pull-data' && lines.length > 0
+                  ? 'มีรายการค้าง — โหลดไม่ได้'
+                  : undefined
+              "
               @click.stop="btn.run()"
             >
               <span class="func-label">{{ btn.label }}</span>
@@ -1136,6 +1263,15 @@ onUnmounted(() => {
     </div>
 
     <footer class="status-bar">
+      <button
+        type="button"
+        class="status-config-btn"
+        title="ตั้งค่าเครื่อง / เปิด Admin"
+        aria-label="ตั้งค่าเครื่อง"
+        @click.stop="configOpen = true"
+      >
+        ⚙
+      </button>
       <span>AP Retail — Version 0.1.0</span>
       <span class="status-bar__device" :title="`${device.branchId} / ${device.terminalId}`">
         {{ device.branchName }} · {{ device.terminalName || "เครื่อง POS" }}
@@ -1192,5 +1328,6 @@ onUnmounted(() => {
       :hint="alertHint"
       @close="focusScan"
     />
+    <PosConfigModal v-model:open="configOpen" @saved="focusScan" />
   </div>
 </template>

@@ -11,6 +11,8 @@ export type QuickProduct = {
   price: number | null;
   tone: string;
   image: string;
+  /** URL ต้นทางจาก API — ใช้ resolve รูปสด ไม่ใช้ค่า image ที่แคชตอนโหลด */
+  imageUrl?: string | null;
   /** จากหลังบ้าน — เลือกเป็นสินค้าด่วนบนจอ POS */
   isQuick?: boolean;
   /** ลำดับบนจอสินค้าด่วน (น้อย = มาก่อน) */
