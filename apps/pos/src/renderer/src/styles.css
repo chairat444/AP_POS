@@ -21,10 +21,13 @@
   /* สินค้าด่วน 8×2 — ช่องใกล้สี่เหลี่ยมจัตุรัส ให้รูป cover เต็ม */
   --quick-band-h: clamp(220px, 34vh, 268px);
   --change-band-h: clamp(110px, 18vh, 160px);
-  font-family: "Be Vietnam Pro", "Sarabun", "Noto Sans Thai", sans-serif;
+  font-family: "Sarabun", "Noto Sans Thai", "Segoe UI", Tahoma, sans-serif;
   color: var(--ink);
   background: var(--bg);
-  font-size: 15px;
+  font-size: 16px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 * {
@@ -380,36 +383,71 @@ input {
   overflow-x: auto;
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5d1 transparent;
+}
+
+.cart-scroller::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.cart-scroller::-webkit-scrollbar-track {
+  margin: 4px 0;
+  background: transparent;
+  border-radius: 999px;
+}
+
+.cart-scroller::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #a8b5b0 0%, #8a9892 100%);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+  min-height: 36px;
+}
+
+.cart-scroller::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #0f766e 0%, #0d9488 100%);
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.cart-scroller::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 .cart-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .cart-table th,
 .cart-table td {
-  padding: 11px 12px;
-  border-bottom: 1px solid var(--line);
-  font-size: 0.9rem;
+  padding: 7px 10px;
+  border-bottom: 1px solid #e7e5e4;
+  font-size: 0.8rem;
   white-space: nowrap;
+  vertical-align: middle;
 }
 
 .cart-table th {
   position: sticky;
   top: 0;
-  background: #fafaf9;
-  color: var(--muted);
-  font-weight: 600;
-  font-size: 0.75rem;
-  letter-spacing: 0.03em;
+  z-index: 2;
+  padding: 9px 10px;
+  background: #1c1917;
+  color: #fafaf9;
+  font-weight: 750;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
-  z-index: 1;
-  border-bottom: 1px solid var(--line-strong);
+  border-bottom: 2px solid #0f766e;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.12);
 }
 
 .cart-table tbody tr:nth-child(even) {
-  background: #fcfcfb;
+  background: #fafaf9;
 }
 
 .cart-table tbody tr.selected {
@@ -421,26 +459,39 @@ input {
 }
 
 .cart-table tbody tr:hover {
-  background: #f5f5f4;
+  background: #f0fdf4;
   cursor: pointer;
 }
 
+.cart-table tbody td {
+  color: #292524;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
 .col-seq {
-  width: 56px;
+  width: 52px;
   text-align: center;
-  color: var(--muted);
+  color: #78716c;
+  font-weight: 600;
+  font-size: 0.74rem;
 }
 
 .col-barcode {
-  width: 150px;
-  color: var(--muted);
-  font-size: 0.82rem;
+  width: 140px;
+  color: #57534e;
+  font-size: 0.74rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  letter-spacing: 0.01em;
 }
 
 .col-name {
   width: auto;
   white-space: normal !important;
-  font-weight: 600;
+  font-weight: 650;
+  font-size: 0.8rem;
+  line-height: 1.25;
+  color: #1c1917;
 }
 
 .col-qty,
@@ -448,27 +499,41 @@ input {
 .col-price,
 .col-disc,
 .col-total {
-  width: 88px;
+  width: 80px;
+  font-size: 0.78rem;
+}
+
+.col-unit {
+  color: #78716c;
+  font-weight: 500;
+}
+
+.col-qty,
+.col-price,
+.col-disc {
+  color: #44403c;
 }
 
 .col-total {
-  font-weight: 700;
+  font-weight: 750;
+  color: #134e4a;
+  font-size: 0.82rem;
 }
 
 .col-act {
-  width: 44px;
+  width: 40px;
   text-align: center;
-  padding: 4px !important;
+  padding: 3px !important;
 }
 
 .line-cancel {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 7px;
   background: #fee2e2;
   color: #b91c1c;
-  font-size: 1.1rem;
+  font-size: 0.95rem;
   font-weight: 800;
   line-height: 1;
   cursor: pointer;
@@ -1525,37 +1590,47 @@ input {
   cursor: default;
 }
 
-/* หน้าชำระเงิน — คีย์บอร์ดเฟิร์ส: สรุปบน · กรอกกลาง · รายการขวา */
-
+/* หน้าชำระเงิน — สัดส่วนซ้ายสรุป / ขวาป้อนเงิน */
 .pay-screen {
-  width: min(1040px, 100%);
-  height: min(600px, calc(100vh - 24px));
+  width: min(1080px, 100%);
+  height: min(640px, calc(100vh - 24px));
   background: #fff;
-  border-radius: 18px;
-  box-shadow: 0 24px 60px rgba(15, 118, 110, 0.14);
+  border-radius: 20px;
+  box-shadow: 0 28px 64px rgba(28, 25, 23, 0.22);
   display: grid;
   grid-template-rows: auto 1fr;
   overflow: hidden;
+  border: 1px solid #e7e5e4;
 }
 
 .pay-screen-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 16px;
-  border-bottom: 1px solid #d6d3d1;
-  background: #fff;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border-bottom: 1px solid #e7e5e4;
+  background: linear-gradient(180deg, #ffffff 0%, #fafaf9 100%);
+}
+
+.pay-screen-head-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  flex: 1;
 }
 
 .pay-screen-head h2 {
   margin: 0;
-  font-size: 1.2rem;
-  font-weight: 800;
-  color: #0f172a;
+  font-size: 1.15rem;
+  font-weight: 850;
+  color: #1c1917;
+  letter-spacing: -0.02em;
+  flex-shrink: 0;
 }
 
 .pay-screen-head-meta {
-  flex: 1;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -1569,39 +1644,36 @@ input {
 .pay-member-name {
   font-weight: 800;
   color: var(--ink);
-  margin-right: 2px;
 }
 
 .pay-mp {
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
-  padding: 6px 12px;
-  border-radius: 10px;
-  background: #fef2f2;
-  border: 2px solid #ef4444;
-  line-height: 1.15;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  line-height: 1.1;
 }
 
 .pay-mp em {
   font-style: normal;
   font-weight: 700;
-  color: #b91c1c;
-  font-size: 0.8rem;
+  color: #be123c;
+  font-size: 0.72rem;
 }
 
 .pay-mp strong {
-  font-weight: 900;
+  font-weight: 850;
   font-variant-numeric: tabular-nums;
-  color: #991b1b;
-  font-size: 1.65rem;
-  letter-spacing: -0.02em;
-  line-height: 1;
+  color: #9f1239;
+  font-size: 1.05rem;
 }
 
 .pay-mp--earn {
   background: #f8fafc;
-  border: 1px solid #e2e8f0;
+  border-color: #e2e8f0;
 }
 
 .pay-mp--earn em {
@@ -1609,558 +1681,138 @@ input {
 }
 
 .pay-mp--earn strong {
-  color: #475569;
-  font-size: 1.1rem;
-  font-weight: 800;
+  color: #334155;
 }
 
 .pay-cancel-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   background: #fff;
-  border: 1px solid var(--line-strong);
-  border-radius: 10px;
-  padding: 8px 12px;
-  font-weight: 700;
+  border: 1px solid #d6d3d1;
+  border-radius: 11px;
+  padding: 9px 12px;
+  font-weight: 750;
   cursor: pointer;
-  color: var(--ink);
+  color: #44403c;
   flex-shrink: 0;
 }
 
+.pay-cancel-sm kbd {
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: #f5f5f4;
+  border: 1px solid #d6d3d1;
+  color: #78716c;
+}
 
 .pay-screen-body {
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-columns: minmax(280px, 0.92fr) minmax(0, 1.28fr);
   min-height: 0;
   overflow: hidden;
-}
-
-.pay-hero-bar {
-  display: grid;
-  grid-template-columns: 1.25fr 1fr 1.15fr;
-  gap: 10px;
-  padding: 12px 14px;
-  border-bottom: 1px solid #d6d3d1;
-  background: #f5f5f4;
-}
-
-.pay-hero-bar .pay-stat {
-  padding: 10px 14px;
-  border-right: 0;
-  border-radius: 12px;
-  border: 1px solid #d6d3d1;
-  background: #fff;
-}
-
-.pay-hero-bar .pay-stat:last-child {
-  border-right: 0;
-}
-
-.pay-hero-bar .pay-stat-label {
-  font-size: 0.82rem;
-  font-weight: 750;
-}
-
-.pay-hero-bar .pay-stat-value {
-  font-size: 2rem;
-  font-weight: 900;
-  letter-spacing: -0.04em;
-}
-
-.pay-hero-bar .pay-stat-due {
-  border-color: #0f766e;
-  background: #134e4a;
-}
-
-.pay-hero-bar .pay-stat-due .pay-stat-label {
-  color: #99f6e4;
-}
-
-.pay-hero-bar .pay-stat-due .pay-stat-value {
-  font-size: 2.25rem;
-  color: #fff;
-}
-
-.pay-hero-bar .pay-stat-remain {
-  border-color: #ea580c;
-  background: #fff7ed;
-}
-
-.pay-hero-bar .pay-stat-remain .pay-stat-value {
-  font-size: 2.25rem;
-  color: #c2410c;
-}
-
-.pay-hero-bar .pay-stat-remain.done {
-  border-color: #16a34a;
-  background: #f0fdf4;
-}
-
-.pay-hero-bar .pay-stat-remain.done .pay-stat-label {
-  color: #15803d;
-}
-
-.pay-hero-bar .pay-stat-remain.done .pay-stat-value {
-  color: #166534;
-}
-
-.pay-left-sums {
-  display: grid;
-  grid-template-columns: 1.2fr 1fr 1fr;
-  gap: 0 16px;
-  padding: 4px 2px 10px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 2px;
-}
-
-/* ===== สถิติ = label อ่านอย่างเดียว ไม่ใช่ปุ่ม ===== */
-.pay-stat {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-  cursor: default;
-  user-select: none;
-  pointer-events: none;
-}
-
-.pay-stat-label {
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: var(--muted);
-  letter-spacing: 0.02em;
-  text-transform: none;
-}
-
-.pay-stat-value {
-  font-size: 1.45rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.03em;
-  line-height: 1.1;
-  color: var(--ink);
-}
-
-.pay-stat-due .pay-stat-label {
-  color: #0f766e;
-}
-
-.pay-stat-due .pay-stat-value {
-  color: #0f766e;
-  font-size: 1.6rem;
-}
-
-.pay-stat-remain .pay-stat-label {
-  color: #c2410c;
-}
-
-.pay-stat-remain .pay-stat-value {
-  color: #ea580c;
-  font-size: 1.6rem;
-}
-
-.pay-stat-remain.done .pay-stat-label,
-.pay-stat-remain.done .pay-stat-value {
-  color: #166534;
-}
-
-/* เก็บ class เก่าไว้กันพัง */
-.pay-sum-cell,
-.pay-sum-due,
-.pay-sum-remain {
-  display: contents;
-}
-
-.pay-quick-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-
-.pay-type-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
-}
-
-/* ===== ปุ่มกดได้ — ขอบเข้ม อ่านชัด ไม่กลืนพื้น ===== */
-.pay-action-btn {
-  appearance: none;
-  border: 2px solid #57534e;
-  border-radius: 10px;
-  padding: 12px 8px;
-  font-weight: 800;
-  font-size: 0.9rem;
-  font-family: inherit;
-  cursor: pointer;
-  color: #1c1917;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(28, 25, 23, 0.08);
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  transition: background 0.1s ease, border-color 0.1s ease, transform 0.05s ease;
-}
-
-.pay-action-btn:hover {
-  background: #f5f5f4;
-  border-color: #292524;
-}
-
-.pay-action-btn:active {
-  transform: translateY(1px);
-  background: #e7e5e4;
-}
-
-.pay-action-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.pay-action-btn kbd {
-  display: inline-block;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: #e7e5e4;
-  color: #44403c;
-  font-size: 0.68rem;
-  font-weight: 700;
-  font-family: inherit;
-  letter-spacing: 0.02em;
-}
-
-.pay-quick-row .pay-action-btn {
-  flex-direction: row;
-  gap: 6px;
-  padding: 11px 6px;
-}
-
-.pay-type {
-  min-height: 76px;
-  padding: 12px 8px;
-}
-
-.pay-type-name {
-  font-size: 1rem;
-  font-weight: 800;
-}
-
-.pay-type-cash {
-  background: #d1fae5;
-  border-color: #047857;
-  border-width: 2px;
-  color: #064e3b;
-}
-
-.pay-type-cash:hover {
-  background: #a7f3d0;
-  border-color: #065f46;
-}
-
-.pay-type-cash kbd {
-  background: rgba(6, 78, 59, 0.12);
-  color: #064e3b;
-}
-
-.pay-type-transfer {
-  background: #e0f2fe;
-  border-color: #0369a1;
-  color: #0c4a6e;
-}
-
-.pay-type-transfer:hover {
-  background: #bae6fd;
-  border-color: #0284c7;
-}
-
-.pay-type-transfer kbd {
-  background: rgba(12, 74, 110, 0.12);
-  color: #0c4a6e;
-}
-
-.pay-type-gov {
-  background: #fef3c7;
-  border-color: #b45309;
-  color: #78350f;
-}
-
-.pay-type-gov:hover {
-  background: #fde68a;
-  border-color: #92400e;
-}
-
-.pay-type-gov kbd {
-  background: rgba(120, 53, 15, 0.12);
-  color: #78350f;
-}
-
-.pay-type-points {
-  background: #f3e8ff;
-  border-color: #7e22ce;
-  color: #581c87;
-}
-
-.pay-type-points:hover {
-  background: #e9d5ff;
-  border-color: #6b21a8;
-}
-
-.pay-type-points kbd {
-  background: rgba(88, 28, 135, 0.12);
-  color: #581c87;
-}
-
-.pay-type-cash:active,
-.pay-type-transfer:active,
-.pay-type-gov:active,
-.pay-type-points:active {
-  transform: translateY(1px);
-}
-
-.pay-change-hero {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  padding: 14px 20px;
-  background: linear-gradient(135deg, #e11d48 0%, #be123c 100%);
-  color: rgba(255, 255, 255, 0.92);
-  min-height: 84px;
-  border-radius: 12px;
-}
-
-.pay-change-hero-label {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.pay-change-hero-label span {
-  font-size: 1.1rem;
-  font-weight: 800;
-  color: #fff;
-  letter-spacing: 0.02em;
-}
-
-.pay-change-hero-label small {
-  font-size: 0.78rem;
-  font-weight: 600;
-  line-height: 1.35;
-  color: rgba(255, 255, 255, 0.85);
-}
-
-.pay-change-hero strong {
-  flex-shrink: 0;
-  font-size: 2.4rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.04em;
-  line-height: 1;
-  color: rgba(255, 255, 255, 0.45);
-}
-
-.pay-change-hero.active strong,
-.pay-change-hero.draft strong {
-  color: #fff;
-}
-
-/* เงินทอน — ส้มชัดเมื่อมีค่า ไม่กลืนเขียว */
-.pay-change-chip {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 2px solid #a8a29e;
-  background: #fff;
-  color: var(--ink);
-}
-
-.pay-change-chip-label {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.pay-change-chip-label span {
-  font-size: 0.78rem;
-  font-weight: 750;
-  color: #44403c;
-}
-
-.pay-change-chip-label small {
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: #78716c;
-  line-height: 1.3;
-}
-
-.pay-change-chip strong {
-  flex-shrink: 0;
-  font-size: 1.35rem;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.03em;
-  color: #78716c;
-}
-
-.pay-change-chip.draft {
-  border-color: #ea580c;
-  background: #ffedd5;
-}
-
-.pay-change-chip.draft strong {
-  color: #9a3412;
-}
-
-.pay-change-chip.active {
-  border-color: #ca8a04;
-  background: #fef08a;
-}
-
-.pay-change-chip.active strong {
-  color: #713f12;
-  font-size: 1.55rem;
-}
-
-.pay-main {
-  display: grid;
-  grid-template-columns: 0.95fr 1.35fr;
-  min-height: 0;
-  overflow: hidden;
-  height: 100%;
-}
-
-.pay-input-col {
-  padding: 14px 16px;
-  display: grid;
-  grid-template-rows: auto auto auto 1fr;
-  gap: 10px;
-  min-height: 0;
-  align-content: start;
-  border-left: 1px solid #d6d3d1;
-  background: #fff;
 }
 
 .pay-side-col {
-  padding: 14px;
+  padding: 16px;
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 12px;
   min-height: 0;
   background: #fafaf9;
   border-right: 1px solid #e7e5e4;
 }
 
-.pay-side-col .pay-change-hero {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 8px;
-  padding: 14px 16px;
-  min-height: 0;
-}
-
-.pay-side-col .pay-change-hero strong {
-  align-self: flex-end;
-}
-
-.pay-side-meta {
-  display: grid;
-  gap: 8px;
-}
-
-.pay-side-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  align-items: center;
-  font-size: 0.88rem;
-  font-weight: 600;
-}
-
-.pay-side-row--points {
-  flex-wrap: wrap;
-  padding: 8px 10px;
-  border-radius: 10px;
+.pay-remain-card {
+  padding: 16px 16px 14px;
+  border-radius: 16px;
   background: #fff7ed;
-  border: 1px solid #fed7aa;
+  border: 1px solid #fdba74;
+  text-align: center;
 }
 
-.pay-side-row--points.is-on {
-  background: #ffedd5;
-  border-color: #fb923c;
+.pay-remain-card.done {
+  background: #f0fdf4;
+  border-color: #86efac;
 }
 
-.pay-side-row--points span {
-  font-weight: 700;
-  color: #9a3412;
-}
-
-.pay-side-row--points span small {
+.pay-remain-label {
   display: block;
-  font-weight: 600;
-  opacity: 0.85;
-  font-size: 0.85em;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #c2410c;
 }
 
-.pay-side-row--points strong {
-  font-size: 1.15rem;
+.pay-remain-card.done .pay-remain-label {
+  color: #15803d;
 }
 
-.pay-side-row span {
-  color: var(--muted);
+.pay-remain-value {
+  display: block;
+  margin-top: 4px;
+  font-size: clamp(2.2rem, 4.2vw, 2.85rem);
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 1.05;
+  color: #9a3412;
+  font-variant-numeric: tabular-nums;
 }
 
-.pay-side-row .disc {
-  color: var(--brand);
+.pay-remain-card.done .pay-remain-value {
+  color: #166534;
 }
 
-.pay-points-clear {
-  margin-left: 0.35rem;
-  appearance: none;
-  border: 0;
-  background: #fee2e2;
-  color: #991b1b;
-  font: inherit;
-  font-size: 0.72rem;
-  font-weight: 700;
-  border-radius: 999px;
-  padding: 0.1rem 0.45rem;
-  cursor: pointer;
-}
-
-.pay-points-clear:hover {
-  background: #fecaca;
-}
-
-.pay-promo-mini {
+.pay-remain-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 10px;
+  justify-content: center;
+  gap: 6px 12px;
+  margin-top: 8px;
   font-size: 0.78rem;
-  color: var(--muted);
-  font-weight: 600;
+  font-weight: 650;
+  color: #78716c;
+  font-variant-numeric: tabular-nums;
 }
 
-.pay-disc-inline {
+.pay-change-card {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  font-size: 0.85rem;
-  font-weight: 700;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid #e7e5e4;
 }
 
-.pay-disc-inline input {
-  width: 96px;
-  height: 34px;
-  border: 2px solid #a8a29e;
-  border-radius: 8px;
-  padding: 0 10px;
-  font-weight: 700;
-  text-align: right;
-  background: #fff;
-  color: #1c1917;
+.pay-change-label {
+  font-size: 0.82rem;
+  font-weight: 750;
+  color: #78716c;
+}
+
+.pay-change-value {
+  font-size: 1.35rem;
+  font-weight: 850;
+  font-variant-numeric: tabular-nums;
+  color: #a8a29e;
+  letter-spacing: -0.02em;
+}
+
+.pay-change-card.draft,
+.pay-change-card.active {
+  background: #fefce8;
+  border-color: #facc15;
+}
+
+.pay-change-card.draft .pay-change-value,
+.pay-change-card.active .pay-change-value {
+  color: #a16207;
 }
 
 .pay-entries {
@@ -2171,9 +1823,11 @@ input {
 }
 
 .pay-entries-head {
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #a8a29e;
 }
 
 .pay-entry-list {
@@ -2181,7 +1835,7 @@ input {
   padding: 0;
   list-style: none;
   display: grid;
-  gap: 4px;
+  gap: 6px;
   align-content: start;
   overflow: auto;
 }
@@ -2191,16 +1845,16 @@ input {
   grid-template-columns: 1fr auto auto;
   gap: 8px;
   align-items: center;
-  padding: 7px 10px;
-  border-radius: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
   background: #fff;
-  border: 1px solid var(--line);
-  font-size: 0.86rem;
-  font-weight: 600;
+  border: 1px solid #e7e5e4;
+  font-size: 0.84rem;
+  font-weight: 650;
 }
 
 .pay-entry-list li[data-method="cash"] {
-  border-left: 3px solid var(--accent);
+  border-left: 3px solid #0f766e;
   background: #f0fdfa;
 }
 
@@ -2223,7 +1877,7 @@ input {
   border: 0;
   background: transparent;
   color: var(--brand);
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   font-weight: 800;
   cursor: pointer;
   line-height: 1;
@@ -2231,14 +1885,122 @@ input {
 }
 
 .pay-entries-empty {
-  padding: 14px 12px;
-  border-radius: 8px;
-  border: 1px dashed #a8a29e;
-  color: #57534e;
-  font-size: 0.82rem;
-  font-weight: 600;
+  padding: 16px 12px;
+  border-radius: 10px;
+  border: 1px dashed #d6d3d1;
+  color: #a8a29e;
+  font-size: 0.8rem;
+  font-weight: 650;
   text-align: center;
-  line-height: 1.4;
+  background: #fff;
+}
+
+.pay-side-tools {
+  display: grid;
+  gap: 8px;
+}
+
+.pay-side-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.86rem;
+  font-weight: 650;
+}
+
+.pay-side-row--points {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px 10px;
+  align-items: center;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+}
+
+.pay-side-row--points.is-on {
+  background: #ffedd5;
+  border-color: #fb923c;
+}
+
+.pay-side-row--points span {
+  font-weight: 750;
+  color: #9a3412;
+  min-width: 0;
+}
+
+.pay-side-row--points span small {
+  display: block;
+  font-weight: 600;
+  opacity: 0.85;
+  font-size: 0.85em;
+}
+
+.pay-side-row--points strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.pay-side-row .disc {
+  color: var(--brand);
+}
+
+.pay-points-clear {
+  appearance: none;
+  border: 0;
+  background: #fee2e2;
+  color: #991b1b;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 750;
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  cursor: pointer;
+}
+
+.pay-points-clear:hover {
+  background: #fecaca;
+}
+
+.pay-promo-mini {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-weight: 650;
+}
+
+.pay-disc-inline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.84rem;
+  font-weight: 750;
+  color: #57534e;
+}
+
+.pay-disc-inline input {
+  width: 92px;
+  height: 34px;
+  border: 1px solid #d6d3d1;
+  border-radius: 9px;
+  padding: 0 10px;
+  font-weight: 750;
+  text-align: right;
+  background: #fff;
+  color: #1c1917;
+}
+
+.pay-input-col {
+  padding: 18px 20px 16px;
+  display: grid;
+  grid-template-rows: auto auto minmax(140px, 1fr) auto;
+  gap: 12px;
+  min-height: 0;
   background: #fff;
 }
 
@@ -2246,17 +2008,17 @@ input {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: 12px;
-  border: 3px solid #0f766e;
-  background: #ecfdf5;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  border: 2px solid #0f766e;
+  background: linear-gradient(180deg, #f0fdfa 0%, #ecfdf5 100%);
 }
 
 .pay-amount-display > span {
   font-weight: 800;
   color: #134e4a;
-  font-size: 0.95rem;
+  font-size: 0.9rem;
   flex-shrink: 0;
 }
 
@@ -2266,10 +2028,10 @@ input {
   border: 0;
   background: transparent;
   text-align: right;
-  font-size: 2.6rem;
-  font-weight: 800;
+  font-size: clamp(2.2rem, 4vw, 2.85rem);
+  font-weight: 900;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.04em;
   color: #0f172a;
   outline: none;
   font-family: inherit;
@@ -2281,25 +2043,214 @@ input {
   background: rgba(15, 118, 110, 0.28);
 }
 
+.pay-quick-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.pay-pp-hint {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border-radius: 10px;
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #0f5a3d;
+  font-size: 0.86rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.pay-pp-hint--warn {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #9a3412;
+}
+
+.pay-transfer-popup-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(28, 25, 23, 0.48);
+  backdrop-filter: blur(3px);
+}
+
+.pay-transfer-popup {
+  width: min(100%, 380px);
+  display: grid;
+  gap: 1rem;
+  padding: 1.35rem 1.4rem 1.25rem;
+  border-radius: 18px;
+  background: #fff;
+  border: 1px solid #e7e5e4;
+  box-shadow: 0 22px 48px rgba(28, 25, 23, 0.28);
+  text-align: center;
+}
+
+.pay-transfer-popup__msg {
+  margin: 0;
+  padding: 0.85rem 0.9rem;
+  border-radius: 12px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  color: #92400e;
+  font-size: 1.05rem;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
+.pay-transfer-popup__btn {
+  appearance: none;
+  border: none;
+  border-radius: 12px;
+  padding: 0.9rem 1.1rem;
+  font: inherit;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(165deg, #0f766e 0%, #0d9488 100%);
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(15, 118, 110, 0.28);
+}
+
+.pay-transfer-popup__btn:focus-visible {
+  outline: 3px solid #5eead4;
+  outline-offset: 2px;
+}
+
+.pay-transfer-popup__btn:hover {
+  filter: brightness(1.05);
+}
+
+.pay-action-btn {
+  appearance: none;
+  border: 1px solid #d6d3d1;
+  background: #fff;
+  border-radius: 12px;
+  padding: 11px 8px;
+  font: inherit;
+  font-weight: 750;
+  color: #292524;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.pay-action-btn:hover {
+  background: #f5f5f4;
+  border-color: #a8a29e;
+}
+
+.pay-action-btn:active {
+  transform: translateY(1px);
+}
+
+.pay-action-btn kbd {
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: #f5f5f4;
+  border: 1px solid #d6d3d1;
+  color: #78716c;
+}
+
+.pay-type-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 10px;
+  min-height: 0;
+}
+
+.pay-type-tile {
+  appearance: none;
+  border: 0;
+  border-radius: 16px;
+  padding: 18px 16px;
+  cursor: pointer;
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  align-content: center;
+  min-height: 0;
+  height: 100%;
+  transition: transform 0.08s ease, filter 0.12s ease;
+}
+
+.pay-type-tile:hover {
+  filter: brightness(0.97);
+}
+
+.pay-type-tile:active {
+  transform: scale(0.985);
+}
+
+.pay-type-tile:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.3);
+}
+
+.pay-type-name {
+  font-size: 1.15rem;
+  font-weight: 850;
+  letter-spacing: -0.02em;
+}
+
+.pay-type-tile kbd {
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 750;
+  padding: 3px 7px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.pay-type-cash {
+  background: #ccfbf1;
+  color: #115e59;
+}
+
+.pay-type-transfer {
+  background: #e0f2fe;
+  color: #075985;
+}
+
+.pay-type-gov {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.pay-type-points {
+  background: #ffe4e6;
+  color: #9f1239;
+}
+
 .pay-warn-inline {
-  padding: 8px 10px;
-  border-radius: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
   background: #fff7ed;
   border: 1px solid #fdba74;
   color: #c2410c;
-  font-weight: 700;
-  font-size: 0.82rem;
-  line-height: 1.3;
+  font-weight: 750;
+  font-size: 0.84rem;
+  line-height: 1.35;
 }
 
 .pay-keys-hint {
   margin: 0;
-  padding: 2px 2px 0;
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--muted);
-  line-height: 1.35;
-  align-self: end;
+  font-size: 0.74rem;
+  font-weight: 650;
+  color: #a8a29e;
+  line-height: 1.4;
 }
 
 .pay-modal {
@@ -3549,6 +3500,8 @@ input {
 .cust {
   display: grid;
   grid-template-columns: minmax(280px, 0.95fr) minmax(0, 1.15fr);
+  height: 100%;
+  min-height: 100vh;
   background: var(--bg);
   color: var(--ink);
   overflow: hidden;
@@ -3566,6 +3519,7 @@ input {
     linear-gradient(165deg, #fffaf7 0%, #f5f5f4 100%);
   border-right: 1px solid var(--line);
   min-height: 0;
+  overflow: hidden;
 }
 
 .cust.has-banner .cust-brand {
@@ -3609,12 +3563,13 @@ input {
   box-shadow: var(--shadow);
 }
 
-.cust.has-ads:not(.has-panel) .cust-ads {
+.cust.has-ads:not(.has-panel):not(.has-mid-banner) .cust-ads {
   min-height: min(42vh, 360px);
 }
 
-.cust.has-ads.has-panel .cust-ads {
-  min-height: min(28vh, 240px);
+.cust.has-ads.has-panel .cust-ads,
+.cust.has-ads.has-mid-banner .cust-ads {
+  min-height: min(26vh, 220px);
 }
 
 .cust-ads__media {
@@ -3633,6 +3588,7 @@ input {
   left: 0;
   right: 0;
   bottom: 0.65rem;
+  z-index: 2;
   display: flex;
   justify-content: center;
   gap: 0.35rem;
@@ -3644,6 +3600,9 @@ input {
   height: 7px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.35);
+  transition:
+    width 0.25s ease,
+    background 0.25s ease;
 }
 
 .cust-ads__dot.is-on {
@@ -3655,36 +3614,52 @@ input {
   display: flex;
   align-items: center;
   gap: 1rem;
-}
-
-.cust-banner {
   flex: 0 0 auto;
-  overflow: hidden;
-  background: #0a3d2a;
-  min-height: 72px;
-  border-radius: 16px;
-  box-shadow: 0 6px 18px rgba(10, 61, 42, 0.18);
 }
 
-.cust-banner__img {
+/* แบนเนอร์ — กว้างเต็มคอลัมน์ แสดงครบตามสัดส่วนรูป (ไม่ครอป) */
+.cust-top-banner {
+  flex: 0 0 auto;
+  width: 100%;
+  line-height: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: transparent;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.12);
+}
+
+.cust-top-banner__img {
   display: block;
   width: 100%;
-  max-height: min(22vh, 180px);
-  object-fit: contain;
-  object-position: center;
-  background: #0a3d2a;
-  border-radius: 16px;
+  height: auto;
 }
 
-/* รูปด้านล่าง — ชิดล่าง มีขอบมน */
+.cust-mid-banner {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 100%;
+  line-height: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: transparent;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
+}
+
+.cust-mid-banner__img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
 .cust-panel {
   flex: 0 0 auto;
   align-self: stretch;
+  width: 100%;
   margin-top: auto;
-  max-height: min(26vh, 220px);
-  border-radius: 16px;
+  line-height: 0;
+  border-radius: 14px;
   overflow: hidden;
-  background: #0b1220;
+  background: transparent;
   box-shadow: var(--shadow);
 }
 
@@ -3692,11 +3667,33 @@ input {
   display: block;
   width: 100%;
   height: auto;
-  max-height: min(26vh, 220px);
-  object-fit: contain;
-  object-position: center bottom;
-  background: #0b1220;
-  border-radius: 16px;
+}
+
+/* ตอนโอน PromptPay — ซ่อนกลาง/ล่าง ให้ QR มีที่ */
+.cust.has-pp-qr .cust-mid-banner,
+.cust.has-pp-qr .cust-panel {
+  display: none;
+}
+
+.cust.has-pp-qr .cust-brand {
+  gap: 0.75rem;
+  padding: 1rem 1.1rem 1.15rem;
+}
+
+.cust.has-pp-qr .cust-ads.cust-pay-qr {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-content: center;
+}
+
+.cust.has-pp-qr .cust-pay-qr__img {
+  width: clamp(168px, 26vh, 220px);
+}
+
+.cust.has-pp-qr .cust-pay-qr__card {
+  width: min(100%, 23rem);
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem 0.65rem;
 }
 
 .cust-brand__logo {
@@ -3880,12 +3877,196 @@ input {
   box-shadow: 0 16px 36px rgba(15, 23, 42, 0.28);
 }
 
+.cust-pay--with-qr {
+  flex: 0 0 auto;
+  margin-top: 0;
+  gap: 0.3rem;
+  padding: 0.55rem 0.75rem;
+}
+
+.cust-pay-qr {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  padding: 0.35rem;
+  min-height: 0 !important;
+  overflow-x: hidden;
+  overflow-y: auto;
+  background:
+    linear-gradient(160deg, #e8f1ff 0%, #f0fdfa 48%, #fff7ed 100%) !important;
+  box-shadow: var(--shadow);
+}
+
+.cust-pay-qr__card {
+  width: min(100%, 24rem);
+  max-height: 100%;
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.55rem 0.7rem 0.6rem;
+  border-radius: 16px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 12px 28px rgba(15, 23, 42, 0.1);
+  overflow: auto;
+}
+
+.cust-pay-qr__head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.cust-pay-qr__badge {
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #0b3a75 0%, #1d4ed8 100%);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  box-shadow: 0 6px 14px rgba(29, 78, 216, 0.28);
+}
+
+.cust-pay-qr__head-text {
+  display: grid;
+  gap: 0.02rem;
+}
+
+.cust-pay-qr__head-text strong {
+  font-size: 0.98rem;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: 0.01em;
+}
+
+.cust-pay-qr__head-text span {
+  font-size: 0.72rem;
+  font-weight: 650;
+  color: #64748b;
+}
+
+.cust-pay-qr__frame {
+  display: grid;
+  place-items: center;
+  margin: 0 auto;
+  padding: 0.35rem;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  box-shadow: 0 0 0 2px #f8fafc;
+}
+
+.cust-pay-qr__img {
+  display: block;
+  width: clamp(168px, 26vh, 220px);
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 4px;
+}
+
+.cust-pay-qr__meta {
+  display: grid;
+  justify-items: center;
+  gap: 0.25rem;
+  text-align: center;
+  color: #0f172a;
+}
+
+.cust-pay-qr__meta--top {
+  gap: 0.3rem;
+}
+
+.cust-pay-qr__amount-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.cust-pay-qr__amount {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  font-size: clamp(1.55rem, 2.8vw, 2.15rem);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  color: #0a3d2a;
+  line-height: 1;
+}
+
+.cust-pay-qr__amount small {
+  font-size: 0.85rem;
+  font-weight: 750;
+  color: #166534;
+}
+
+.cust-pay-qr__account {
+  display: grid;
+  gap: 0.08rem;
+  justify-items: center;
+  margin-top: 0.15rem;
+  padding: 0.45rem 0.75rem;
+  width: 100%;
+  border-radius: 12px;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.cust-pay-qr__account span {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #166534;
+}
+
+.cust-pay-qr__account em {
+  font-style: normal;
+  font-size: clamp(1.05rem, 2.1vw, 1.35rem);
+  font-weight: 800;
+  color: #14532d;
+  line-height: 1.25;
+  word-break: break-word;
+}
+
+.cust-pay-qr__id {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: #475569;
+  font-variant-numeric: tabular-nums;
+}
+
+.cust-pay-qr__hint {
+  margin: 0;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.35;
+  color: #b45309;
+}
+
 .cust-pay__title {
   margin: 0;
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: 0.04em;
   opacity: 0.85;
+}
+
+.cust-pay__qr {
+  display: none;
+}
+
+.cust-pay__qr-meta {
+  display: none;
 }
 
 .cust-pay__row {
@@ -4035,7 +4216,10 @@ input {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #fff;
+  background:
+    radial-gradient(720px 280px at 100% 0%, #ecfdf5 0%, transparent 55%),
+    radial-gradient(640px 260px at 0% 100%, #fff1f2 0%, transparent 50%),
+    linear-gradient(180deg, #fffefb 0%, #f8fafc 100%);
 }
 
 .cust-ticket__head {
@@ -4044,8 +4228,8 @@ input {
   gap: 0.75rem 1.25rem;
   align-items: center;
   padding: 0.85rem 1.35rem;
-  border-bottom: 1px solid var(--line);
-  background: #fafaf9;
+  border-bottom: 1px solid #fecdd3;
+  background: linear-gradient(120deg, #fff1f2 0%, #fff7ed 48%, #f0fdfa 100%);
 }
 
 .cust-ticket__head > div:first-child {
@@ -4058,18 +4242,18 @@ input {
 .cust-ticket__head > div:first-child span {
   font-size: 0.82rem;
   font-weight: 700;
-  color: var(--muted);
+  color: #be123c;
 }
 
 .cust-ticket__head > div:first-child strong {
   font-size: 1.35rem;
   font-weight: 800;
-  color: var(--ink);
+  color: #881337;
 }
 
 .cust.is-post-paid .cust-ticket__head {
-  background: #fff7ed;
-  border-bottom-color: #fed7aa;
+  background: linear-gradient(120deg, #fff7ed 0%, #ffedd5 55%, #fef3c7 100%);
+  border-bottom-color: #fdba74;
 }
 
 .cust.is-post-paid .cust-ticket__head > div:first-child span {
@@ -4086,7 +4270,7 @@ input {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: 0.35rem 0.75rem 0.75rem;
+  padding: 0.5rem 0.75rem 0.85rem;
 }
 
 .cust-empty {
@@ -4097,90 +4281,160 @@ input {
   text-align: center;
   color: var(--muted);
   padding: 2rem;
+  border-radius: 16px;
+  margin: 0.35rem;
+  background:
+    linear-gradient(165deg, rgba(255, 241, 242, 0.7) 0%, rgba(240, 253, 250, 0.75) 100%);
+  border: 1px dashed #fda4af;
 }
 
 .cust-empty p {
   margin: 0 0 0.35rem;
   font-size: 1.25rem;
   font-weight: 750;
-  color: #57534e;
+  color: #9f1239;
 }
 
 .cust-empty span {
   font-size: 0.95rem;
+  color: #78716c;
 }
 
 .cust-line {
   display: grid;
-  grid-template-columns: 2.2rem minmax(0, 1fr) auto;
+  grid-template-columns: 2.35rem minmax(0, 1fr) auto;
   gap: 0.75rem;
   align-items: start;
-  padding: 0.85rem 0.75rem;
-  border-radius: 10px;
-  border-bottom: none;
+  padding: 0.85rem 0.8rem;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
 }
 
 .cust-line:nth-child(odd) {
-  background: #f4f4f5;
+  background: linear-gradient(135deg, #fff1f2 0%, #ffe4e6 100%);
+  border-color: #fecdd3;
 }
 
 .cust-line:nth-child(even) {
-  background: transparent;
+  background: linear-gradient(135deg, #f0fdfa 0%, #ccfbf1 100%);
+  border-color: #99f6e4;
+}
+
+.cust-line:nth-child(3n) {
+  background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+  border-color: #fed7aa;
 }
 
 .cust-line + .cust-line {
-  margin-top: 0.15rem;
+  margin-top: 0.4rem;
 }
 
 .cust-line__no {
-  font-size: 0.9rem;
-  font-weight: 700;
-  color: #a8a29e;
-  padding-top: 0.15rem;
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  margin-top: 0.05rem;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: #fff;
+  background: linear-gradient(145deg, #e11d48 0%, #be123c 100%);
+  box-shadow: 0 4px 10px rgba(190, 18, 60, 0.28);
   font-variant-numeric: tabular-nums;
+  padding-top: 0;
+}
+
+.cust-line:nth-child(even) .cust-line__no {
+  background: linear-gradient(145deg, #14b8a6 0%, #0f766e 100%);
+  box-shadow: 0 4px 10px rgba(15, 118, 110, 0.28);
+}
+
+.cust-line:nth-child(3n) .cust-line__no {
+  background: linear-gradient(145deg, #f59e0b 0%, #d97706 100%);
+  box-shadow: 0 4px 10px rgba(217, 119, 6, 0.28);
 }
 
 .cust-line__body {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.3rem;
 }
 
 .cust-line__body strong {
   font-size: 1.15rem;
-  font-weight: 750;
-  color: var(--ink);
+  font-weight: 800;
+  color: #1c1917;
   line-height: 1.3;
   word-break: break-word;
 }
 
-.cust-line__body span {
-  font-size: 0.9rem;
-  color: var(--muted);
-  font-weight: 500;
+.cust-line__meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+  color: #57534e;
+  font-weight: 600;
+}
+
+.cust-line__meta em {
+  font-style: normal;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(28, 25, 23, 0.08);
+  color: #0f766e;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.cust-line__meta > span {
+  color: #78716c;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
 }
 
 .cust-line__disc {
-  color: var(--brand) !important;
-  font-weight: 750 !important;
-  font-size: 0.88rem !important;
+  display: inline-flex;
+  align-self: start;
+  padding: 0.15rem 0.5rem;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #fecaca;
+  color: #be123c !important;
+  font-weight: 800 !important;
+  font-size: 0.84rem !important;
 }
 
 .cust-line__amt {
   font-style: normal;
-  font-size: 1.25rem;
+  font-size: 1.3rem;
   font-weight: 800;
   font-variant-numeric: tabular-nums;
-  color: var(--ink);
+  color: #0f766e;
   letter-spacing: -0.02em;
-  padding-top: 0.1rem;
+  padding-top: 0.15rem;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+.cust-line:nth-child(odd) .cust-line__amt {
+  color: #be123c;
+}
+
+.cust-line:nth-child(3n) .cust-line__amt {
+  color: #c2410c;
 }
 
 .cust-foot {
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid #fecdd3;
   background: #fff;
 }
 
@@ -4190,7 +4444,7 @@ input {
   align-items: center;
   gap: 1rem;
   padding: 0.95rem 1.4rem;
-  background: #fef2f2;
+  background: linear-gradient(120deg, #fff1f2 0%, #ffe4e6 100%);
   border-bottom: 1px solid #fecaca;
   color: var(--brand);
 }
@@ -4228,7 +4482,8 @@ input {
   align-items: flex-end;
   gap: 1rem;
   padding: 1.25rem 1.4rem 1.4rem;
-  background: linear-gradient(180deg, #fff 0%, #f0fdfa 100%);
+  background: linear-gradient(135deg, #ecfdf5 0%, #ccfbf1 45%, #f0fdfa 100%);
+  border-top: 1px solid #99f6e4;
 }
 
 .cust-total__label {
@@ -4239,8 +4494,8 @@ input {
 
 .cust-total__label > span {
   font-size: 1.2rem;
-  font-weight: 750;
-  color: var(--muted);
+  font-weight: 800;
+  color: #0f766e;
   padding-bottom: 0.1rem;
 }
 
@@ -4261,7 +4516,7 @@ input {
 .cust-total strong {
   font-size: clamp(2.6rem, 5.5vw, 3.8rem);
   font-weight: 800;
-  color: var(--accent);
+  color: #0f766e;
   line-height: 0.95;
   letter-spacing: -0.04em;
   font-variant-numeric: tabular-nums;

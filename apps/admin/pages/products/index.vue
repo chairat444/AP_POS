@@ -609,7 +609,7 @@ onMounted(async () => {
           v-model="q"
           class="ui-input ui-list-filters__input"
           type="search"
-          placeholder="ชื่อ / บาร์โค้ด / รหัสสินค้า"
+          placeholder="ชื่อ / บาร์โค้ด"
         />
       </label>
       <label class="ui-list-filters__field">
@@ -665,17 +665,15 @@ onMounted(async () => {
       <div v-if="pending && !rows.length" class="ui-empty">กำลังโหลด...</div>
       <div v-else-if="!pageRows.length" class="ui-empty">ไม่พบข้อมูล</div>
       <div v-else class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-products-table">
           <thead>
             <tr>
-              <th class="ui-table__col-barcode">บาร์โค้ด</th>
-              <th>รหัส</th>
               <th class="ui-table__col-name">ชื่อ</th>
-              <th>หน่วย</th>
-              <th>ทุน</th>
-              <th>ขาย / กำไร</th>
-              <th>แนะนำ {{ marginPct }}%</th>
-              <th>กำไรจริง</th>
+              <th class="ui-table__col-barcode">บาร์โค้ด</th>
+              <th class="ui-products-table__num">ทุน</th>
+              <th class="ui-products-table__num">ขาย</th>
+              <th class="ui-products-table__num">กำไร</th>
+              <th class="ui-products-table__num">แนะนำ {{ marginPct }}%</th>
               <th class="ui-table__col-flag">ด่วน</th>
               <th class="ui-table__col-status" title="สถานะ">●</th>
               <th class="ui-table__actions">จัดการ</th>
@@ -683,36 +681,37 @@ onMounted(async () => {
           </thead>
           <tbody>
             <tr v-for="row in pageRows" :key="row.id">
+              <td class="ui-table__col-name" :title="row.name">
+                <strong>{{ row.name }}</strong>
+              </td>
               <td class="ui-table__col-barcode" :title="row.barcode">
                 {{ row.barcode }}
               </td>
-              <td>{{ row.productCode || "-" }}</td>
-              <td class="ui-table__col-name" :title="row.name">{{ row.name }}</td>
-              <td>{{ row.unit }}</td>
-              <td>{{ baht(row.costPrice) }}</td>
-              <td>
+              <td class="ui-products-table__num">{{ baht(row.costPrice) }}</td>
+              <td class="ui-products-table__num">
                 <template v-if="row.isOpenPrice">
                   เปิด ≤{{ row.openPriceMax }}
                 </template>
                 <template v-else>
-                  <div>{{ baht(row.price) }}</div>
-                  <div
-                    v-if="profitBahtOf(row) != null"
-                    class="ui-field-hint"
-                    style="margin: 0.15rem 0 0"
-                    :class="marginTone(row)"
-                  >
-                    กำไร {{ baht(profitBahtOf(row)) }}
-                  </div>
+                  {{ baht(row.price) }}
                 </template>
               </td>
-              <td>{{ baht(suggestOf(row)) }}</td>
-              <td :class="marginTone(row)">
-                {{
-                  marginOf(row) == null ? "-" : `${marginOf(row)?.toFixed(1)}%`
-                }}
+              <td class="ui-products-table__num" :class="marginTone(row)">
+                <template v-if="row.isOpenPrice">—</template>
+                <template v-else-if="profitBahtOf(row) != null || marginOf(row) != null">
+                  <div v-if="profitBahtOf(row) != null">{{ baht(profitBahtOf(row)) }}</div>
+                  <div
+                    v-if="marginOf(row) != null"
+                    class="ui-field-hint"
+                    style="margin: 0.1rem 0 0"
+                  >
+                    {{ marginOf(row)?.toFixed(1) }}%
+                  </div>
+                </template>
+                <template v-else>—</template>
               </td>
-              <td class="ui-table__col-flag">{{ row.isQuick ? "ใช่" : "-" }}</td>
+              <td class="ui-products-table__num">{{ baht(suggestOf(row)) }}</td>
+              <td class="ui-table__col-flag">{{ row.isQuick ? "ใช่" : "—" }}</td>
               <td class="ui-table__col-status">
                 <span
                   class="ui-status-dot"
@@ -794,44 +793,6 @@ onMounted(async () => {
                   <span>บาร์โค้ด *</span>
                   <input v-model="form.barcode" class="ui-input" type="text" />
                 </label>
-                <label class="ui-field">
-                  <span>รหัส</span>
-                  <input
-                    v-model="form.productCode"
-                    class="ui-input"
-                    type="text"
-                    readonly
-                    title="ออกเลขอัตโนมัติ"
-                  />
-                </label>
-                <div class="ui-field ui-unit-field">
-                  <span>หน่วย</span>
-                  <div class="ui-unit-combo">
-                    <input
-                      v-model="form.unit"
-                      class="ui-input"
-                      type="text"
-                      placeholder="เลือกหรือพิมพ์หน่วยใหม่"
-                      autocomplete="off"
-                      @focus="unitOpen = true"
-                      @input="unitOpen = true"
-                      @blur="unitOpen = false"
-                    />
-                    <ul
-                      v-if="unitOpen && unitSuggestions.length"
-                      class="ui-unit-suggest"
-                      @mousedown.prevent
-                    >
-                      <li
-                        v-for="name in unitSuggestions"
-                        :key="name"
-                        @mousedown="pickUnit(name)"
-                      >
-                        {{ name }}
-                      </li>
-                    </ul>
-                  </div>
-                </div>
                 <label class="ui-field">
                   <span>ลำดับด่วน</span>
                   <input v-model="form.quickSort" class="ui-input" type="number" min="0" />
@@ -967,6 +928,21 @@ onMounted(async () => {
   width: 2rem;
   text-align: center;
   vertical-align: middle;
+}
+.ui-products-table__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.ui-products-table .ui-table__col-name {
+  min-width: 10rem;
+}
+.ui-products-table .ui-table__col-barcode {
+  width: 8.5rem;
+  max-width: 10rem;
+  font-variant-numeric: tabular-nums;
+  color: #64748b;
+  font-size: 0.9rem;
 }
 .ui-status-dot {
   display: inline-block;

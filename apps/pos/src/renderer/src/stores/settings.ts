@@ -81,11 +81,15 @@ export const useSettingsStore = defineStore("settings", () => {
   const keybindings = ref(mergeKeybindings(DEFAULT_KEYBINDINGS, null));
   const pointsConfig = ref<PointsConfig>({ ...DEFAULT_POINTS_CONFIG });
   const customerScreenEnabled = ref(true);
-  const storeName = ref("AP หมูสด");
-  const storeTagline = ref("Fresh Pork POS");
+  const storeName = ref("เอพี หมูสด");
+  const storeTagline = ref("มาตรฐาน สะอาด ปลอดภัย");
   const logoUrl = ref<string | null>(null);
   const customerBannerUrl = ref<string | null>(null);
+  const customerMidBannerUrl = ref<string | null>(null);
   const customerPanelUrl = ref<string | null>(null);
+  /** PromptPay ของสาขาปัจจุบัน (fallback จาก display เก่าได้) */
+  const promptPayId = ref<string | null>(null);
+  const promptPayName = ref<string | null>(null);
   const customerAds = ref<CustomerAdsConfig>({
     ...DEFAULT_CUSTOMER_ADS,
     items: [],
@@ -127,7 +131,9 @@ export const useSettingsStore = defineStore("settings", () => {
       display: {
         customerScreenEnabled: customerScreenEnabled.value,
         bannerUrl: customerBannerUrl.value,
+        midBannerUrl: customerMidBannerUrl.value,
         panelUrl: customerPanelUrl.value,
+        promptPayId: promptPayId.value,
       },
       branding: {
         storeName: storeName.value,
@@ -147,7 +153,9 @@ export const useSettingsStore = defineStore("settings", () => {
       display?: {
         customerScreenEnabled?: boolean;
         bannerUrl?: string | null;
+        midBannerUrl?: string | null;
         panelUrl?: string | null;
+        promptPayId?: string | null;
       } | null;
       branding?: {
         storeName?: string;
@@ -186,8 +194,18 @@ export const useSettingsStore = defineStore("settings", () => {
       if (payload.display.bannerUrl !== undefined) {
         customerBannerUrl.value = payload.display.bannerUrl || null;
       }
+      if (payload.display.midBannerUrl !== undefined) {
+        customerMidBannerUrl.value = payload.display.midBannerUrl || null;
+      }
       if (payload.display.panelUrl !== undefined) {
         customerPanelUrl.value = payload.display.panelUrl || null;
+      }
+      if (payload.display.promptPayId !== undefined) {
+        // fallback เก่าจาก display — ใช้เฉพาะตอนยังไม่มีค่าสาขา
+        if (!promptPayId.value) {
+          const d = String(payload.display.promptPayId ?? "").replace(/\D/g, "");
+          if (d) promptPayId.value = d;
+        }
       }
     }
     if (payload?.branding) {
@@ -206,6 +224,19 @@ export const useSettingsStore = defineStore("settings", () => {
     }
   }
 
+  function setPromptPayId(raw: string | null | undefined) {
+    const d = String(raw ?? "").replace(/\D/g, "");
+    promptPayId.value = d || null;
+  }
+
+  function setPromptPayName(raw: string | null | undefined) {
+    const s = String(raw ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+    promptPayName.value = s || null;
+  }
+
   function resetKeybindings() {
     keybindings.value = mergeKeybindings(DEFAULT_KEYBINDINGS, null);
   }
@@ -218,7 +249,10 @@ export const useSettingsStore = defineStore("settings", () => {
     storeTagline,
     logoUrl,
     customerBannerUrl,
+    customerMidBannerUrl,
     customerPanelUrl,
+    promptPayId,
+    promptPayName,
     customerAds,
     activeCustomerAds,
     labels,
@@ -226,6 +260,8 @@ export const useSettingsStore = defineStore("settings", () => {
     label,
     matches,
     applyFromBackend,
+    setPromptPayId,
+    setPromptPayName,
     syncCustomerScreenToMain,
     publishSettingsToCustomer,
     resetKeybindings,

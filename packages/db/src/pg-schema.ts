@@ -13,6 +13,10 @@ export const branches = pgTable("branches", {
   code: text("code").notNull().unique(),
   name: text("name").notNull(),
   active: integer("active").notNull().default(1),
+  /** PromptPay รับเงินของสาขา (เบอร์ / เลขบัตร) */
+  promptPayId: text("prompt_pay_id"),
+  /** ชื่อเจ้าของบัญชี PromptPay (บุคคล) — โชว์บนจอลูกค้า */
+  promptPayName: text("prompt_pay_name"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
@@ -277,7 +281,8 @@ export const expenseCategories = pgTable("expense_categories", {
  */
 export const expenses = pgTable("expenses", {
   id: text("id").primaryKey(),
-  branchId: text("branch_id").notNull(),
+  /** null = กลาง / ไม่ระบุสาขา */
+  branchId: text("branch_id"),
   categoryId: text("category_id").notNull(),
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
   description: text("description"),

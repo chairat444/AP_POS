@@ -39,6 +39,16 @@ export type CartSnapshot = {
   paymentLines?: CartPaymentLine[];
   /** หลังจบบิล — ค้างรายการบนจอลูกค้าชั่วคราว */
   postPaid?: boolean;
+  /** PromptPay QR payload (EMVCo) — ให้จอลูกค้ารีนเดอร์ */
+  promptPayPayload?: string | null;
+  /** data URL ของ QR (สร้างฝั่งแคชเชียร์) */
+  promptPayQrDataUrl?: string | null;
+  /** ยอดใน QR (บาท) */
+  promptPayAmount?: number | null;
+  /** ชื่อเจ้าของบัญชี PromptPay (บุคคล) — โชว์บนจอลูกค้า */
+  promptPayName?: string | null;
+  /** PromptPay id (เบอร์/เลขบัตร) — โชว์แบบปิดบางหลักได้ */
+  promptPayId?: string | null;
 };
 
 export function recalcLine(line: Omit<CartLine, "lineTotal">): CartLine {

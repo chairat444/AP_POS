@@ -2,6 +2,7 @@
 import {
   normalizePurchaseKey,
   parsePurchaseText,
+  purchaseKeysCompatible,
   type ParsedPurchaseLine,
 } from "@ap-pos/shared";
 import { toBlob } from "html-to-image";
@@ -58,6 +59,8 @@ const pasteByBranch = ref<Record<string, string>>({});
 
 const dragItemKey = ref<string | null>(null);
 const dragOverCol = ref<string | null>(null);
+const movePickKey = ref<string | null>(null);
+let gripDragged = false;
 /** ค่าที่กำลังกรอกบนแผง: itemKey::branchId → qty */
 const qtyDraft = ref<Record<string, string>>({});
 const nameDraft = ref<Record<string, string>>({});
@@ -116,6 +119,30 @@ const pasteFilledCount = computed(
       .length,
 );
 
+/** จำนวนบรรทัดสินค้าจากข้อความที่วาง (ต่อสาขา) */
+function pasteItemCount(branchId: string) {
+  return parsePurchaseText(pasteByBranch.value[branchId] ?? "").length;
+}
+
+/** จำนวนรายการบนแผงที่สาขานั้นสั่ง */
+function boardItemCount(branchId: string) {
+  if (!board.value) return 0;
+  let n = 0;
+  for (const col of board.value.columns) {
+    for (const item of col.items) {
+      if (branchHasOrder(item, branchId)) n += 1;
+    }
+  }
+  return n;
+}
+
+const branchCountLegend = computed(() => {
+  if (!board.value || !copyBranchOrder.value.length) return "";
+  return copyBranchOrder.value
+    .map((b) => `${shortBranchName(b.name)} ${boardItemCount(b.id)}`)
+    .join(" · ");
+});
+
 /** ลำดับคัดลอก: หลุมดิน แล้ว เจ็ดเสมียน แล้วสาขาอื่น */
 const copyBranchOrder = computed(() =>
   [...branches.value].sort((a, b) => {
@@ -129,12 +156,18 @@ const copyBranchOrder = computed(() =>
 const copyLegend = computed(() => {
   const names = copyBranchOrder.value.map((b) => shortBranchName(b.name));
   if (names.length < 2) return "";
-  return `คัดลอก 4+2 = ซื้อรวม 6 ของ${names[0]} 4 · ${names[1]} 2`;
+  return `คัดลอก 4+2 = รวม 6 ของ${names[0]} 4 · ${names[1]} 2 · (01) ${names[0]} · (02) ${names[1]}`;
 });
 
 const sheetCols = computed(
   () =>
     `minmax(0, 1fr) repeat(${Math.max(copyBranchOrder.value.length, 1)}, 1.85rem) 2rem 1.35rem`,
+);
+
+/** แถวเพิ่ม: ปุ่ม「เพิ่ม」กว้างพอ กดได้ */
+const addSheetCols = computed(
+  () =>
+    `minmax(0, 1fr) repeat(${Math.max(copyBranchOrder.value.length, 1)}, 1.85rem) minmax(3.25rem, 4rem)`,
 );
 
 watch(copyBranchOrder, () => {
@@ -245,21 +278,24 @@ function remainingFromPaste(
   itemName: string,
   lines: ParsedPurchaseLine[],
 ): string | null {
-  const key = normalizePurchaseKey(itemName);
-  if (!key || !lines.length) return null;
+  if (!lines.length) return null;
   let best: { score: number; qty: string } | null = null;
   for (const line of lines) {
     const qty = (line.qtyText || line.note || "").trim();
     if (!qty) continue;
+    const how = purchaseKeysCompatible(itemName, line.name);
+    if (how === "none") continue;
+    if (how === "exact") return qty;
+    const key = normalizePurchaseKey(itemName);
     const ck = normalizePurchaseKey(line.name);
-    if (!ck) continue;
-    if (key === ck) return qty;
-    if (key.includes(ck) || ck.includes(key)) {
-      const score = Math.min(key.length, ck.length);
-      if (!best || score > best.score) best = { score, qty };
-    }
+    const score = Math.min(key.length, ck.length);
+    if (!best || score > best.score) best = { score, qty };
   }
   return best?.qty ?? null;
+}
+
+function pasteMentionsItem(itemName: string, lines: ParsedPurchaseLine[]) {
+  return lines.some((line) => purchaseKeysCompatible(itemName, line.name) !== "none");
 }
 
 /** tooltip ต่อรายการสินค้า — เช่น หลุมดิน 3 เจ็ดเสมียน 1 */
@@ -361,6 +397,19 @@ function onQtyInput(itemKey: string, branchId: string, e: Event) {
   if (el.value !== v) el.value = v;
 }
 
+function onAddQtyInput(colKey: string, branchId: string, e: Event) {
+  ensureAddRow(colKey);
+  const el = e.target as HTMLInputElement;
+  const v = sanitizeQtyInput(el.value);
+  const cur = addRow.value[colKey];
+  if (!cur) return;
+  addRow.value = {
+    ...addRow.value,
+    [colKey]: { ...cur, qtys: { ...cur.qtys, [branchId]: v } },
+  };
+  if (el.value !== v) el.value = v;
+}
+
 /** Enter = ไปช่องถัดไปในคอลัมน์ (เหมือน Excel) · blur จะเซฟให้ */
 function onSheetEnter(e: KeyboardEvent, colKey?: string) {
   e.preventDefault();
@@ -408,26 +457,46 @@ async function submitAddRow(colKey: string) {
   const jobs = copyBranchOrder.value.filter((br) =>
     (draft.qtys[br.id] ?? "").trim(),
   );
-  if (!jobs.length) {
-    error.value = "ใส่จำนวนอย่างน้อย 1 สาขา";
+  const anchorBranch = copyBranchOrder.value[0];
+  if (!anchorBranch) {
+    error.value = "ยังไม่มีสาขา";
     return;
   }
+
   saving.value = true;
   error.value = "";
+  message.value = "";
   try {
     let last: Board | null = null;
-    for (const br of jobs) {
+
+    if (!jobs.length) {
+      // ชื่ออย่างเดียว → ขึ้นแผงวันนี้ (จำนวนว่าง) + จำชื่อ→ร้าน
       last = await post<Board>("/purchases/board-qty", {
         dayId: board.value.day.id,
         day: day.value,
-        branchId: br.id,
+        branchId: anchorBranch.id,
         name,
         groupKey: colKey,
-        qtyText: sanitizeQtyInput(draft.qtys[br.id]),
+        qtyText: null,
+        forceCreate: true,
       });
+    } else {
+      for (const br of jobs) {
+        last = await post<Board>("/purchases/board-qty", {
+          dayId: board.value.day.id,
+          day: day.value,
+          branchId: br.id,
+          name,
+          groupKey: colKey,
+          qtyText: sanitizeQtyInput(draft.qtys[br.id]),
+          forceCreate: true,
+        });
+      }
     }
+
     if (last) board.value = last;
     syncQtyDrafts();
+    ensureAddRow(colKey);
     addRow.value = {
       ...addRow.value,
       [colKey]: {
@@ -435,7 +504,9 @@ async function submitAddRow(colKey: string) {
         qtys: Object.fromEntries(copyBranchOrder.value.map((b) => [b.id, ""])),
       },
     };
-    message.value = `เพิ่ม「${name}」แล้ว`;
+    message.value = jobs.length
+      ? `เพิ่ม「${name}」บนแผงแล้ว`
+      : `เพิ่ม「${name}」บนแผงแล้ว · กรอกจำนวนเมื่อพร้อม`;
   } catch (e) {
     error.value = e instanceof Error ? e.message : "เพิ่มรายการไม่สำเร็จ";
   } finally {
@@ -477,7 +548,32 @@ function shortBranchName(name: string) {
   return name.replace(/^สาขา\s*/u, "").trim() || name;
 }
 
-/** คัดลอกจำนวน: 4+2 / แค่หลุมดิน 4 / แค่เจ็ดเสมียน +2 */
+/** ตัด (01)/(02) ท้ายชื่อ — สรุปไลน์ไม่โชว์ */
+function stripBranchMark(name: string) {
+  return name
+    .replace(/(?:\s*[\(（]\s*0?[12]\s*[\)）])+\s*$/u, "")
+    .trim();
+}
+
+function branchHasOrder(item: BoardItem, branchId: string): boolean {
+  if (itemQtyForBranch(item, branchId)) return true;
+  if (item.byBranch.some((b) => b.branchId === branchId)) return true;
+  const lines = remainingLinesByBranch.value.get(branchId) ?? [];
+  return pasteMentionsItem(item.name, lines);
+}
+
+/** หลุมดิน (01) · เจ็ดเสมียน (02) · ทั้งสองสาขา (01) (02) — ทุกรายการที่มีสาขา */
+function itemBranchMark(item: BoardItem): string {
+  const parts: string[] = [];
+  for (const br of copyBranchOrder.value) {
+    if (!branchHasOrder(item, br.id)) continue;
+    if (/หลุมดิน/.test(br.name)) parts.push("(01)");
+    else if (/เจ็ดเสมียน/.test(br.name)) parts.push("(02)");
+  }
+  return parts.join(" ");
+}
+
+/** คัดลอกจำนวน: ทั้งสองสาขา 4+2 · สาขาเดียวไม่มีบวก */
 function formatCopyQty(item: BoardItem): string {
   const order = copyBranchOrder.value;
   if (!order.length) {
@@ -494,15 +590,10 @@ function formatCopyQty(item: BoardItem): string {
     const hit = item.byBranch.find((b) => b.branchId === br.id);
     return hit ? branchQty(hit) : "";
   });
-  if (order.length === 2) {
-    const [a, b] = qtys;
-    if (a && b) return `${a}+${b}`;
-    if (a && !b) return a;
-    if (!a && b) return `+${b}`;
-    return "";
-  }
-  if (qtys.some(Boolean)) return qtys.map((q) => q || "0").join("+");
-  return "";
+  const filled = qtys.filter(Boolean);
+  if (filled.length <= 1) return filled[0] ?? "";
+  if (order.length === 2) return `${qtys[0]}+${qtys[1]}`;
+  return qtys.map((q) => q || "0").join("+");
 }
 
 function shiftDay(delta: number) {
@@ -651,11 +742,8 @@ async function moveItem(item: BoardItem, groupKey: string) {
 }
 
 function onItemDragStart(item: BoardItem, e: DragEvent) {
-  const t = e.target as HTMLElement | null;
-  if (t?.closest("input, textarea, button, a, .ui-purchase-sheet__qty")) {
-    e.preventDefault();
-    return;
-  }
+  gripDragged = true;
+  movePickKey.value = null;
   dragItemKey.value = item.key;
   e.dataTransfer?.setData("text/plain", item.key);
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
@@ -664,6 +752,35 @@ function onItemDragStart(item: BoardItem, e: DragEvent) {
 function onItemDragEnd() {
   dragItemKey.value = null;
   dragOverCol.value = null;
+}
+
+function onGripClick(item: BoardItem) {
+  if (gripDragged) {
+    gripDragged = false;
+    return;
+  }
+  movePickKey.value = movePickKey.value === item.key ? null : item.key;
+}
+
+function moveTargets(item: BoardItem) {
+  return board.value?.columns.filter((c) => c.key !== item.groupKey) ?? [];
+}
+
+function cancelMovePick() {
+  movePickKey.value = null;
+}
+
+async function placeMovePick(colKey: string) {
+  const key = movePickKey.value;
+  if (!key) return;
+  const item = findItem(key);
+  movePickKey.value = null;
+  if (!item) return;
+  await moveItem(item, colKey);
+}
+
+function onMovePickKey(e: KeyboardEvent) {
+  if (e.key === "Escape") cancelMovePick();
 }
 
 function onColDragOver(colKey: string, e: DragEvent) {
@@ -690,12 +807,17 @@ async function onColDrop(colKey: string, e: DragEvent) {
   await moveItem(item, colKey);
 }
 
+function formatCopyLine(item: BoardItem) {
+  const name = stripBranchMark(item.name);
+  const q = formatCopyQty(item);
+  const mark = itemBranchMark(item);
+  const core = q ? `${name} ${q}` : name;
+  return mark ? `${core} ${mark}` : core;
+}
+
 function copyColumn(col: Column) {
-  const text = col.items
-    .map((i) => {
-      const q = formatCopyQty(i);
-      return q ? `${i.name} ${q}` : i.name;
-    })
+  const text = orderedColumnItems(col.items)
+    .map((i) => formatCopyLine(i))
     .join("\n");
   void navigator.clipboard.writeText(text);
   message.value = `คัดลอกคอลัมน์ ${col.label} แล้ว`;
@@ -715,30 +837,75 @@ function summaryHeader(col: Column) {
   return SUMMARY_HEADERS[col.key] ?? col.label;
 }
 
-function summaryLine(item: BoardItem) {
-  const q = formatCopyQty(item);
-  return q ? `${item.name} ${q}` : item.name;
+type ShareLine = {
+  name: string;
+  qty: string;
+  kind: "lumdin" | "chetsamian";
+};
+type SummaryColumn = Column & { lines: ShareLine[] };
+
+function itemQtyForBranch(item: BoardItem, branchId: string): string {
+  const key = qtyFieldKey(item.key, branchId);
+  if (Object.prototype.hasOwnProperty.call(qtyDraft.value, key)) {
+    return String(qtyDraft.value[key] ?? "").trim();
+  }
+  const hit = item.byBranch.find((b) => b.branchId === branchId);
+  return hit ? branchQty(hit) : "";
 }
 
-/** คอลัมน์สรุป — มีรายการเท่านั้น · รายการที่มีบวก (4+2) อยู่บนก่อน */
-const summaryColumns = computed(() => {
-  if (!board.value) return [] as Column[];
+/** เจ็ดเสมียนอย่างเดียว → ล่าง · มีหลุมดินหรือทั้งสองสาขา → บน */
+function itemShareKind(item: BoardItem): ShareLine["kind"] {
+  let hasLumdin = false;
+  let hasChet = false;
+  for (const br of copyBranchOrder.value) {
+    if (!branchHasOrder(item, br.id)) continue;
+    if (/หลุมดิน/.test(br.name)) hasLumdin = true;
+    else if (/เจ็ดเสมียน/.test(br.name)) hasChet = true;
+  }
+  return hasChet && !hasLumdin ? "chetsamian" : "lumdin";
+}
+
+/** เรียงเหมือนสรุปส่งไลน์: หลุมดิน/ทั้งสองสาขาอยู่บน · เจ็ดเสมียนอย่างเดียวอยู่ล่าง */
+function orderedColumnItems(items: BoardItem[]) {
+  const top: BoardItem[] = [];
+  const bottom: BoardItem[] = [];
+  for (const item of items) {
+    if (itemShareKind(item) === "chetsamian") bottom.push(item);
+    else top.push(item);
+  }
+  return [...top, ...bottom];
+}
+
+function formatShareLine(line: ShareLine) {
+  const name = stripBranchMark(line.name);
+  return line.qty ? `${name} ${line.qty}` : name;
+}
+
+/** คอลัมน์สรุปส่งไลน์ — หลุมดิน/ทั้งสองสาขาอยู่บน · เจ็ดเสมียนอย่างเดียวอยู่ล่าง */
+const summaryColumns = computed((): SummaryColumn[] => {
+  if (!board.value) return [];
   return board.value.columns
     .filter((col) => col.items.length > 0)
     .map((col) => {
-      const withPlus: BoardItem[] = [];
-      const rest: BoardItem[] = [];
-      for (const item of col.items) {
-        if (formatCopyQty(item).includes("+")) withPlus.push(item);
-        else rest.push(item);
+      const lumdin: ShareLine[] = [];
+      const chet: ShareLine[] = [];
+      for (const item of orderedColumnItems(col.items)) {
+        const line: ShareLine = {
+          name: stripBranchMark(item.name),
+          qty: formatCopyQty(item),
+          kind: itemShareKind(item),
+        };
+        if (line.kind === "chetsamian") chet.push(line);
+        else lumdin.push(line);
       }
-      return { ...col, items: [...withPlus, ...rest] };
-    });
+      return { ...col, lines: [...lumdin, ...chet] };
+    })
+    .filter((col) => col.lines.length > 0);
 });
 
 const summaryRowCount = computed(() => {
   if (!summaryColumns.value.length) return 0;
-  return Math.max(0, ...summaryColumns.value.map((c) => c.items.length));
+  return Math.max(0, ...summaryColumns.value.map((c) => c.lines.length));
 });
 
 function openSummary() {
@@ -810,8 +977,8 @@ function copySummarySheet() {
     lines.push(
       cols
         .map((c) => {
-          const item = c.items[r];
-          return item ? summaryLine(item) : "";
+          const line = c.lines[r];
+          return line ? formatShareLine(line) : "";
         })
         .join("\t"),
     );
@@ -824,14 +991,23 @@ watch(day, () => {
   void loadBoard();
 });
 
+watch(movePickKey, (key) => {
+  if (key) window.addEventListener("keydown", onMovePickKey);
+  else window.removeEventListener("keydown", onMovePickKey);
+});
+
 onMounted(async () => {
   await loadBranches();
   await loadBoard();
 });
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", onMovePickKey);
+});
 </script>
 
 <template>
-  <div>
+  <div class="ui-purchase-page">
     <div class="ui-page-head">
       <div>
         <h1 class="ui-page-title">รายการซื้อของ</h1>
@@ -886,6 +1062,9 @@ onMounted(async () => {
             <template v-if="board">
               {{ formatDayLabel(day) }} · {{ board.lineCount }} รายการ · ยังไม่ map
               {{ board.unmatched }}
+              <template v-if="branchCountLegend">
+                · {{ branchCountLegend }}
+              </template>
             </template>
             <template v-else>เลือกวันแล้ววางข้อความจากน้อง</template>
           </p>
@@ -920,6 +1099,7 @@ onMounted(async () => {
             1) วางรายการจากสาขา
             <template v-if="pasteCollapsed && pasteFilledCount">
               · มีข้อความ {{ pasteFilledCount }} สาขา
+              <template v-if="branchCountLegend"> · {{ branchCountLegend }}</template>
             </template>
           </span>
         </button>
@@ -935,11 +1115,16 @@ onMounted(async () => {
             :key="b.id"
             class="ui-field ui-purchase-paste"
           >
-            <span>{{ b.code }} — {{ b.name }}</span>
+            <span>
+              {{ b.code }} — {{ b.name }}
+              <template v-if="pasteItemCount(b.id)">
+                · {{ pasteItemCount(b.id) }} รายการ
+              </template>
+            </span>
             <textarea
               v-model="pasteByBranch[b.id]"
               class="ui-input"
-              rows="10"
+              rows="6"
               placeholder="วางข้อความจากน้องที่นี่&#10;เช่น&#10;เห็ดเข็ม9&#10;ผักบุ้ง5"
             />
           </label>
@@ -977,7 +1162,9 @@ onMounted(async () => {
     <div v-else-if="message" class="ui-empty" style="color: #166534">{{ message }}</div>
 
     <p v-if="board" class="ui-field-hint" style="margin: 0.85rem 0 0">
-      แผงสรุป · กด ⓘ ที่สินค้าเพื่อดูคงเหลือ · <strong>Enter</strong> ไปช่องถัดไป
+      แผงสรุป · หลุมดินอยู่บน · เจ็ดเสมียนอยู่ล่าง
+      <template v-if="branchCountLegend"> · {{ branchCountLegend }}</template>
+      · กด ⓘ ดูคงเหลือ · <strong>Enter</strong> ไปช่องถัดไป · คลิก ⋮⋮ ย้ายคอลัมน์
       <template v-if="copyLegend"> · {{ copyLegend }}</template>
     </p>
 
@@ -1032,24 +1219,42 @@ onMounted(async () => {
             <span
               v-for="br in copyBranchOrder"
               :key="br.id"
-              :title="br.name"
+              :title="`${br.name} · ${boardItemCount(br.id)} รายการ`"
             >{{ tinyBranchLabel(br.name) }}</span>
             <span title="รวม">รวม</span>
             <span />
           </div>
 
           <div
-            v-for="item in col.items"
+            v-for="item in orderedColumnItems(col.items)"
             :key="item.key"
+            class="ui-purchase-sheet__block"
+            :class="{
+              'is-dragging': dragItemKey === item.key,
+              'is-picked': movePickKey === item.key,
+              'is-chetsamian': itemShareKind(item) === 'chetsamian',
+            }"
+          >
+          <div
             class="ui-purchase-sheet__row"
-            :class="{ 'is-dragging': dragItemKey === item.key }"
             :style="{ gridTemplateColumns: sheetCols }"
-            draggable="true"
-            @dragstart="onItemDragStart(item, $event)"
-            @dragend="onItemDragEnd"
           >
             <div class="ui-purchase-sheet__name">
-              <span class="ui-purchase-item__grip" aria-hidden="true">⋮⋮</span>
+              <span
+                class="ui-purchase-item__grip"
+                role="button"
+                tabindex="0"
+                draggable="true"
+                title="คลิกเพื่อย้ายคอลัมน์ · หรือลากวาง"
+                :aria-pressed="movePickKey === item.key"
+                @dragstart="onItemDragStart(item, $event)"
+                @dragend="onItemDragEnd"
+                @click="onGripClick(item)"
+                @keydown.enter.prevent="onGripClick(item)"
+                @keydown.space.prevent="onGripClick(item)"
+              >
+                ⋮⋮
+              </span>
               <input
                 v-model="nameDraft[item.key]"
                 class="ui-purchase-sheet__name-input"
@@ -1061,6 +1266,11 @@ onMounted(async () => {
                 @keydown.enter.prevent="onSheetEnter($event)"
                 @blur="saveName(item)"
               />
+              <span
+                v-if="itemBranchMark(item)"
+                class="ui-purchase-sheet__mark"
+                :title="itemBranchMark(item)"
+              >{{ itemBranchMark(item) }}</span>
               <span
                 class="ui-purchase-item-tip"
                 tabindex="0"
@@ -1104,6 +1314,26 @@ onMounted(async () => {
               ×
             </button>
           </div>
+          <div v-if="movePickKey === item.key" class="ui-purchase-move">
+            <span>ย้ายไป</span>
+            <button
+              v-for="dest in moveTargets(item)"
+              :key="dest.key"
+              type="button"
+              class="ui-purchase-move__btn"
+              @click="placeMovePick(dest.key)"
+            >
+              {{ dest.label }}
+            </button>
+            <button
+              type="button"
+              class="ui-purchase-move__cancel"
+              @click="cancelMovePick"
+            >
+              ยกเลิก
+            </button>
+          </div>
+          </div>
 
           <div
             v-if="!col.items.length"
@@ -1116,7 +1346,7 @@ onMounted(async () => {
           <div
             v-if="addRow[col.key]"
             class="ui-purchase-sheet__row ui-purchase-sheet__row--add"
-            :style="{ gridTemplateColumns: sheetCols }"
+            :style="{ gridTemplateColumns: addSheetCols }"
           >
             <input
               v-model="addRow[col.key].name"
@@ -1138,23 +1368,19 @@ onMounted(async () => {
                 type="text"
                 inputmode="decimal"
                 data-sheet-nav
-                @input="
-                  addRow[col.key].qtys[br.id] = sanitizeQtyInput(
-                    ($event.target as HTMLInputElement).value,
-                  )
-                "
+                @input="onAddQtyInput(col.key, br.id, $event)"
                 @keydown.enter.prevent="onSheetEnter($event, col.key)"
               />
             </label>
             <button
               type="button"
-              class="ui-btn ui-btn--ghost ui-purchase-sheet__add-btn"
+              class="ui-btn ui-btn--primary ui-purchase-sheet__add-btn"
               :disabled="saving"
+              title="เพิ่มรายการบนแผงวันนี้ (ใส่จำนวนได้เลยหรือค่อยกรอกทีหลัง)"
               @click="submitAddRow(col.key)"
             >
               เพิ่ม
             </button>
-            <span />
           </div>
         </div>
       </div>
@@ -1216,9 +1442,15 @@ onMounted(async () => {
             </thead>
             <tbody>
               <tr v-for="r in summaryRowCount" :key="r">
-                <td v-for="col in summaryColumns" :key="`${col.key}-${r}`">
-                  <template v-if="col.items[r - 1]">
-                    {{ summaryLine(col.items[r - 1]) }}
+                <td
+                  v-for="col in summaryColumns"
+                  :key="`${col.key}-${r}`"
+                  :class="{
+                    'is-chetsamian': col.lines[r - 1]?.kind === 'chetsamian',
+                  }"
+                >
+                  <template v-if="col.lines[r - 1]">
+                    {{ formatShareLine(col.lines[r - 1]) }}
                   </template>
                 </td>
               </tr>
@@ -1231,6 +1463,27 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+:global(.ui-content:has(.ui-purchase-page)) {
+  padding: 0.9rem clamp(0.85rem, 1.6vw, 1.5rem) 1.35rem;
+}
+.ui-purchase-page :deep(.ui-page-head) {
+  margin-bottom: 0.7rem;
+  gap: 0.65rem;
+}
+.ui-purchase-page :deep(.ui-page-title) {
+  font-size: 1.25rem;
+}
+.ui-purchase-page :deep(.ui-page-sub) {
+  max-width: 46rem;
+  line-height: 1.35;
+}
+.ui-purchase-page :deep(.ui-card) {
+  border-radius: 0.75rem;
+}
+.ui-purchase-page :deep(.ui-report-filters),
+.ui-purchase-page > .ui-card {
+  padding: 0.7rem 0.85rem;
+}
 .ui-purchase-collapse-bar {
   display: flex;
   align-items: center;
@@ -1324,7 +1577,7 @@ onMounted(async () => {
   width: 100%;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   line-height: 1.4;
-  min-height: 12rem;
+  min-height: 7.5rem;
   resize: vertical;
 }
 .ui-purchase-daychips {
@@ -1354,16 +1607,17 @@ onMounted(async () => {
 }
 .ui-purchase-board {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 0.75rem;
-  margin-top: 1rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.65rem;
 }
 .ui-purchase-col {
   background: #fff;
   border: 1px solid #e2e8f0;
-  border-radius: 0.9rem;
+  border-radius: 0.7rem;
   overflow: visible;
-  min-height: 12rem;
+  min-height: 8rem;
+  min-width: 0;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 .ui-purchase-col--drop {
@@ -1374,9 +1628,9 @@ onMounted(async () => {
 .ui-purchase-col__head {
   display: flex;
   justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.35rem;
   align-items: flex-start;
-  padding: 0.75rem 0.85rem;
+  padding: 0.45rem 0.55rem;
   background: #fef9c3;
   border-bottom: 1px solid #fde68a;
 }
@@ -1415,14 +1669,28 @@ onMounted(async () => {
 }
 .ui-purchase-sheet__head span:first-child {
   text-align: left;
-  padding-left: 1.1rem;
+  padding-left: 1.7rem;
+}
+.ui-purchase-sheet__block {
+  border-bottom: 1px solid #f1f5f9;
+}
+.ui-purchase-sheet__block.is-dragging {
+  opacity: 0.45;
+}
+.ui-purchase-sheet__block.is-picked {
+  background: #fffbeb;
+  box-shadow: inset 3px 0 0 #ca8a04;
+}
+.ui-purchase-sheet__block.is-chetsamian {
+  background: #fffef5;
+  box-shadow: inset 3px 0 0 #fde68a;
+}
+.ui-purchase-sheet__block.is-chetsamian.is-picked {
+  background: #fffbeb;
+  box-shadow: inset 3px 0 0 #ca8a04;
 }
 .ui-purchase-sheet__row {
-  border-bottom: 1px solid #f1f5f9;
   min-height: 2rem;
-}
-.ui-purchase-sheet__row.is-dragging {
-  opacity: 0.45;
 }
 .ui-purchase-sheet__row--add {
   border-bottom: 0;
@@ -1433,9 +1701,8 @@ onMounted(async () => {
 .ui-purchase-sheet__name {
   display: flex;
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.15rem;
   min-width: 0;
-  cursor: grab;
 }
 .ui-purchase-sheet__name-input {
   flex: 1 1 auto;
@@ -1460,13 +1727,69 @@ onMounted(async () => {
   border-color: #ca8a04;
   outline: 2px solid #fde68a;
 }
-.ui-purchase-item__grip {
-  color: #94a3b8;
-  font-size: 0.65rem;
+.ui-purchase-sheet__mark {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #854d0e;
+  background: #fef3c7;
+  border-radius: 0.28rem;
+  padding: 0.05rem 0.22rem;
   line-height: 1.2;
-  letter-spacing: -0.12em;
+}
+.ui-purchase-item__grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  margin-top: 0.15rem;
+  width: 1.55rem;
+  height: 1.55rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0.3rem;
+  background: transparent;
+  color: #64748b;
+  font-size: 0.72rem;
+  line-height: 1;
+  letter-spacing: -0.12em;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+}
+.ui-purchase-item__grip:hover,
+.ui-purchase-item__grip[aria-pressed="true"] {
+  background: #fef3c7;
+  color: #854d0e;
+}
+.ui-purchase-move {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.2rem 0.4rem 1.7rem;
+  font-size: 0.75rem;
+  color: #78716c;
+}
+.ui-purchase-move__btn,
+.ui-purchase-move__cancel {
+  border: 1px solid #fde68a;
+  background: #fff;
+  color: #854d0e;
+  border-radius: 999px;
+  padding: 0.18rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+.ui-purchase-move__btn:hover {
+  background: #fef3c7;
+}
+.ui-purchase-move__cancel {
+  border-color: #e2e8f0;
+  color: #64748b;
+  font-weight: 500;
 }
 .ui-purchase-sheet__qty {
   display: block;
@@ -1521,8 +1844,11 @@ onMounted(async () => {
   padding: 0.3rem 0.4rem !important;
 }
 .ui-purchase-sheet__add-btn {
-  padding: 0.25rem 0.2rem !important;
-  font-size: 0.72rem !important;
+  padding: 0.35rem 0.45rem !important;
+  font-size: 0.78rem !important;
+  font-weight: 750 !important;
+  min-height: 2rem;
+  width: 100%;
 }
 .ui-purchase-col__empty {
   border: 1px dashed #cbd5e1;
@@ -1641,14 +1967,34 @@ onMounted(async () => {
   background: #fff;
   height: 1.55rem;
 }
-@media (max-width: 1100px) {
+.ui-purchase-share__table td.is-chetsamian {
+  background: #fff59d;
+  font-weight: 600;
+}
+@media (max-width: 1180px) {
   .ui-purchase-board {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-@media (max-width: 640px) {
+@media (max-width: 720px) {
   .ui-purchase-board {
     grid-template-columns: 1fr;
+  }
+  .ui-purchase-page :deep(.ui-page-head) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+/* Surface 2736×1824 ที่ scale 200% ≈ 1368×912 CSS */
+@media (max-height: 980px) {
+  .ui-purchase-page :deep(.ui-page-sub) {
+    display: none;
+  }
+  .ui-purchase-paste textarea {
+    min-height: 5.5rem;
+  }
+  .ui-purchase-daychips {
+    margin-top: 0.45rem;
   }
 }
 </style>

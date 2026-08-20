@@ -39,6 +39,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ALTER TABLE branches ADD COLUMN IF NOT EXISTS active INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE branches ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
       ALTER TABLE branches ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+      ALTER TABLE branches ADD COLUMN IF NOT EXISTS prompt_pay_id TEXT;
+      ALTER TABLE branches ADD COLUMN IF NOT EXISTS prompt_pay_name TEXT;
       CREATE TABLE IF NOT EXISTS product_units (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
@@ -243,7 +245,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
       CREATE TABLE IF NOT EXISTS expenses (
         id TEXT PRIMARY KEY,
-        branch_id TEXT NOT NULL,
+        branch_id TEXT,
         category_id TEXT NOT NULL,
         amount NUMERIC(12,2) NOT NULL,
         description TEXT,
@@ -260,8 +262,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS expenses_cash_move_id_uidx
         ON expenses (cash_move_id) WHERE cash_move_id IS NOT NULL AND deleted_at IS NULL;
+      ALTER TABLE expenses ALTER COLUMN branch_id DROP NOT NULL;
       INSERT INTO expense_categories (id, name, sort_order, pos_reason)
       VALUES
+        ('expcat-buy', 'ซื้อของ', 1, NULL),
+        ('expcat-makro', 'แม็คโคร', 2, NULL),
+        ('expcat-ploibun', 'พลอยบุญ', 3, NULL),
+        ('expcat-pork', 'ค่าหมู', 4, NULL),
+        ('expcat-veg', 'ค่าผัก', 5, NULL),
+        ('expcat-meatball', 'ค่าลูกชิ้น', 6, NULL),
         ('expcat-water', 'ค่าน้ำ', 10, 'ค่าน้ำ'),
         ('expcat-supplies', 'ค่าของ / สินค้าใช้ในร้าน', 20, 'ค่าของ / สินค้าใช้ในร้าน'),
         ('expcat-utility', 'ค่าไฟ / ค่าบริการ', 30, 'ค่าไฟ / ค่าบริการ'),

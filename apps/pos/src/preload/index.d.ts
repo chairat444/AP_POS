@@ -80,15 +80,17 @@ export type ApPosMediaBridge = {
   index: () => Promise<Record<string, string>>;
   setApiBase: (url: string) => Promise<boolean>;
   resolve: (url: string) => Promise<string | null>;
-  cache: (urls: string[]) => Promise<Record<string, string>>;
+  cache: (urls: string[], force?: boolean) => Promise<Record<string, string>>;
 };
 
 export type ApPosPrintBridge = {
   receipt: (req: {
     html: string;
+    text?: string;
     paperWidth: "58mm" | "80mm";
     silent?: boolean;
     deviceName?: string;
+    openDrawer?: boolean;
   }) => Promise<{ ok: boolean; message?: string }>;
   previewReceipt: (req: {
     html: string;

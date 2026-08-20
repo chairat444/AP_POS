@@ -249,9 +249,9 @@ async function runBackgroundSync() {
     } catch {
       /* offline */
     }
-    // สื่อไม่ค่อยเปลี่ยน — แคชเฉพาะเมื่อ settings/รูปสินค้าใน pull เปลี่ยน หรือยังขาดในเครื่อง
+    // สื่อจอลูกค้า — บังคับดาวน์โหลดใหม่ทุกครั้งที่กดโหลด (กันค้างรูปเก่า)
     if (pull.settings) {
-      await ensureSettingsMediaCached(pull.settings);
+      await ensureSettingsMediaCached(pull.settings, { force: true });
     }
     if (pull.products.length) {
       await ensureProductImagesFromPull(pull.products);

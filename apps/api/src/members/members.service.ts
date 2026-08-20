@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -42,6 +43,10 @@ function toRecord(row: typeof pg.customers.$inferSelect): MemberRecord {
 
 function clampPoints(points: number | undefined): number {
   return Math.max(0, Math.floor(points ?? 0));
+}
+
+function normalizePhone(phone: string | undefined | null): string {
+  return String(phone ?? "").replace(/\D/g, "");
 }
 
 @Injectable()
@@ -130,11 +135,16 @@ export class MembersService implements OnModuleInit {
     const id = `m-${randomUUID().slice(0, 8)}`;
     const code = dto.code?.trim() || (await this.nextMemberCode()).code;
     const points = clampPoints(dto.points);
+    const name = dto.name.trim();
+    const phone = normalizePhone(dto.phone);
+    if (!name) throw new BadRequestException("กรอกชื่อสมาชิก");
+    if (!phone) throw new BadRequestException("กรอกเบอร์โทร");
+    if (phone.length < 9) throw new BadRequestException("เบอร์โทรไม่ครบ");
     await this.database.db.insert(pg.customers).values({
       id,
       code,
-      name: dto.name.trim(),
-      phone: dto.phone?.trim() ?? "",
+      name,
+      phone,
       points,
       updatedAt: now(),
       deletedAt: null,
@@ -154,12 +164,14 @@ export class MembersService implements OnModuleInit {
     const current = await this.get(id);
     const nextPoints =
       dto.points == null ? current.points : clampPoints(dto.points);
+    const nextPhone =
+      dto.phone == null ? current.phone : normalizePhone(dto.phone);
     await this.database.db
       .update(pg.customers)
       .set({
         code: dto.code?.trim() ?? current.code,
         name: dto.name?.trim() ?? current.name,
-        phone: dto.phone?.trim() ?? current.phone,
+        phone: nextPhone,
         points: nextPoints,
         updatedAt: now(),
       })

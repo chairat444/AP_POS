@@ -21,10 +21,19 @@ const query = ref("");
 const results = ref<Member[]>([]);
 const selected = ref(0);
 const queryEl = ref<HTMLInputElement | null>(null);
+const mode = ref<"search" | "create">("search");
+const creating = ref(false);
+const createError = ref("");
+const newName = ref("");
+const newPhone = ref("");
+const nameEl = ref<HTMLInputElement | null>(null);
 
 const hint = computed(() => {
+  if (mode.value === "create") {
+    return "ชื่อและเบอร์โทรจำเป็น · เบอร์ไม่เว้นวรรค · บันทึกขึ้นเซิร์ฟเวอร์เมื่อออนไลน์";
+  }
   if (!query.value.trim()) {
-    return "พิมพ์เบอร์โทรหรือชื่อ · คลิกชื่อเพื่อเลือก · Esc ปิด";
+    return "พิมพ์เบอร์โทรหรือชื่อ · หรือกดเพิ่มสมาชิกใหม่";
   }
   if (results.value.length === 1) {
     return "พบ 1 รายการ · กด Enter เพื่อเลือก";
@@ -42,7 +51,6 @@ function onQueryInput() {
 }
 
 function pick(m: Member) {
-  // ส่งให้พ่อปิด modal เอง — ไม่ set สมาชิกในนี้ เพื่อไม่ให้ UI ใน modal อัปเดตค้าง
   emit("select", m);
 }
 
@@ -59,12 +67,62 @@ function onClose() {
   emit("close");
 }
 
+function openCreate() {
+  mode.value = "create";
+  createError.value = "";
+  newName.value = query.value.trim().replace(/\d/g, "").trim() || "";
+  newPhone.value = query.value.replace(/\D/g, "") || "";
+  void nextTick(() => nameEl.value?.focus());
+}
+
+function backToSearch() {
+  mode.value = "search";
+  createError.value = "";
+  void nextTick(() => queryEl.value?.focus());
+}
+
+function onPhoneInput(e: Event) {
+  const el = e.target as HTMLInputElement;
+  newPhone.value = String(el.value || "").replace(/\D/g, "");
+}
+
+async function submitCreate() {
+  if (creating.value) return;
+  creating.value = true;
+  createError.value = "";
+  try {
+    const created = await members.create({
+      name: newName.value,
+      phone: newPhone.value.replace(/\D/g, ""),
+      points: 0,
+    });
+    emit("select", created);
+  } catch (e) {
+    createError.value =
+      e instanceof Error ? e.message : "สร้างสมาชิกไม่สำเร็จ";
+  } finally {
+    creating.value = false;
+  }
+}
+
 function onKey(e: KeyboardEvent) {
   if (e.key === "Escape") {
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
+    if (mode.value === "create") {
+      backToSearch();
+      return;
+    }
     onClose();
+    return;
+  }
+  if (mode.value === "create") {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      e.stopPropagation();
+      void submitCreate();
+    }
     return;
   }
   if (e.key === "ArrowDown") {
@@ -108,13 +166,17 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
   <div class="pay-overlay member-search-overlay" @pointerdown.self="onClose">
     <div class="pay-modal pay-modal-wide" @pointerdown.stop>
       <header class="pay-head">
-        <h2>ค้นหาสมาชิก</h2>
-        <button type="button" class="member-close-x" @pointerdown.prevent.stop="onClose">
+        <h2>{{ mode === "create" ? "เพิ่มสมาชิกใหม่" : "ค้นหาสมาชิก" }}</h2>
+        <button
+          type="button"
+          class="member-close-x"
+          @pointerdown.prevent.stop="onClose"
+        >
           ปิด
         </button>
       </header>
 
-      <div v-if="currentId" class="member-current">
+      <div v-if="currentId && mode === 'search'" class="member-current">
         <div>
           <span class="member-current-label">สมาชิกตอนนี้</span>
           <strong>{{ currentName }}</strong>
@@ -131,40 +193,135 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
         </button>
       </div>
 
-      <label class="pay-field">
-        <span>เบอร์โทร / ชื่อ</span>
-        <input
-          ref="queryEl"
-          v-model="query"
-          type="search"
-          autofocus
-          placeholder="เช่น 081 หรือ สมชาย"
-          @input="onQueryInput"
-        />
-      </label>
-      <p class="pay-note pay-note-compact">{{ hint }}</p>
+      <template v-if="mode === 'search'">
+        <div class="member-toolbar">
+          <label class="pay-field member-search-field">
+            <span>เบอร์โทร / ชื่อ</span>
+            <input
+              ref="queryEl"
+              v-model="query"
+              type="search"
+              autofocus
+              placeholder="เช่น 081 หรือ สมชาย"
+              @input="onQueryInput"
+            />
+          </label>
+          <button type="button" class="member-add-btn" @click="openCreate">
+            + เพิ่มสมาชิก
+          </button>
+        </div>
+        <p class="pay-note pay-note-compact">{{ hint }}</p>
 
-      <ul class="search-list">
-        <li v-for="(m, i) in results" :key="m.id">
+        <ul class="search-list">
+          <li v-for="(m, i) in results" :key="m.id">
+            <button
+              type="button"
+              class="search-row"
+              :class="{
+                active: i === selected,
+                current: m.id === currentId,
+              }"
+              @pointerdown.prevent.stop="pick(m)"
+              @mouseenter="selected = i"
+            >
+              <span class="search-main">
+                <strong>{{ m.name }}</strong>
+                <span>{{ m.phone }} · {{ m.code }}</span>
+              </span>
+              <span class="search-meta">{{ m.points }} แต้ม</span>
+            </button>
+          </li>
+          <li v-if="!results.length" class="search-empty">
+            ไม่พบสมาชิก
+            <button type="button" class="member-empty-add" @click="openCreate">
+              เพิ่มสมาชิกใหม่
+            </button>
+          </li>
+        </ul>
+      </template>
+
+      <template v-else>
+        <p class="pay-note pay-note-compact">{{ hint }}</p>
+        <label class="pay-field">
+          <span>ชื่อ *</span>
+          <input
+            ref="nameEl"
+            v-model="newName"
+            type="text"
+            maxlength="80"
+            placeholder="ชื่อ-นามสกุล"
+            autocomplete="off"
+          />
+        </label>
+        <label class="pay-field">
+          <span>เบอร์โทร *</span>
+          <input
+            v-model="newPhone"
+            type="tel"
+            inputmode="numeric"
+            maxlength="12"
+            placeholder="08xxxxxxxx"
+            autocomplete="off"
+            @input="onPhoneInput"
+          />
+        </label>
+        <div v-if="createError" class="pay-warn">{{ createError }}</div>
+        <footer class="member-create-actions">
+          <button type="button" class="pay-cancel" @click="backToSearch">
+            กลับค้นหา
+          </button>
           <button
             type="button"
-            class="search-row"
-            :class="{
-              active: i === selected,
-              current: m.id === currentId,
-            }"
-            @pointerdown.prevent.stop="pick(m)"
-            @mouseenter="selected = i"
+            class="pay-confirm"
+            :disabled="creating || !newName.trim() || newPhone.replace(/\D/g, '').length < 9"
+            @click="submitCreate"
           >
-            <span class="search-main">
-              <strong>{{ m.name }}</strong>
-              <span>{{ m.phone }} · {{ m.code }}</span>
-            </span>
-            <span class="search-meta">{{ m.points }} แต้ม</span>
+            {{ creating ? "กำลังบันทึก…" : "บันทึกสมาชิก" }}
           </button>
-        </li>
-        <li v-if="!results.length" class="search-empty">ไม่พบสมาชิก</li>
-      </ul>
+        </footer>
+      </template>
     </div>
   </div>
 </template>
+
+<style scoped>
+.member-toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.member-search-field {
+  margin: 0;
+}
+
+.member-add-btn {
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  background: #0f766e;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.member-empty-add {
+  display: inline-block;
+  margin-top: 8px;
+  border: 0;
+  background: transparent;
+  color: #0f766e;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.member-create-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+</style>

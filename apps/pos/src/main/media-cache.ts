@@ -214,20 +214,25 @@ export function resolveCached(url: string | null | undefined): string | null {
   return localProtocolUrl(file);
 }
 
-async function downloadOne(absUrl: string): Promise<string | null> {
+async function downloadOne(
+  absUrl: string,
+  opts?: { force?: boolean },
+): Promise<string | null> {
+  const force = Boolean(opts?.force);
   const existing = index[absUrl];
-  if (existing && existsSync(join(cacheDir, existing))) {
+  if (!force && existing && existsSync(join(cacheDir, existing))) {
     return localProtocolUrl(existing);
   }
 
   const fileName = fileNameFor(absUrl);
   const dest = join(cacheDir, fileName);
-  const tmp = `${dest}.part`;
+  const tmp = `${dest}.${process.pid}.${Date.now()}.part`;
   ensureDir(dirname(dest));
 
   try {
     const res = await fetch(absUrl, {
       signal: AbortSignal.timeout(120_000),
+      cache: "no-store",
     });
     if (!res.ok || !res.body) {
       console.warn("[media-cache] HTTP", res.status, absUrl);
@@ -237,7 +242,22 @@ async function downloadOne(absUrl: string): Promise<string | null> {
       res.body as import("node:stream/web").ReadableStream,
     );
     await pipeline(nodeStream, createWriteStream(tmp));
-    renameSync(tmp, dest);
+    try {
+      if (existsSync(dest)) unlinkSync(dest);
+    } catch {
+      /* ignore */
+    }
+    try {
+      renameSync(tmp, dest);
+    } catch {
+      // Windows/บางเคส rename ล้ม — คัดลอกแล้วลบ temp
+      copyFileSync(tmp, dest);
+      try {
+        unlinkSync(tmp);
+      } catch {
+        /* ignore */
+      }
+    }
     index[absUrl] = fileName;
     saveIndex();
     return localProtocolUrl(fileName);
@@ -259,8 +279,10 @@ async function downloadOne(absUrl: string): Promise<string | null> {
 export async function cacheUrls(
   urls: string[],
   concurrency = 6,
+  opts?: { force?: boolean },
 ): Promise<Record<string, string>> {
   if (!ready) return {};
+  const force = Boolean(opts?.force);
   const unique = new Set<string>();
   for (const u of urls) {
     const abs = toAbsoluteMediaUrl(u);
@@ -274,7 +296,7 @@ export async function cacheUrls(
     while (i < list.length) {
       const idx = i++;
       const abs = list[idx]!;
-      const local = await downloadOne(abs);
+      const local = await downloadOne(abs, { force });
       if (local) out[abs] = local;
     }
   }

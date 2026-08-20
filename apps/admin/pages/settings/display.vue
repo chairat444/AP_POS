@@ -2,6 +2,7 @@
 type DisplayConfig = {
   customerScreenEnabled: boolean;
   bannerUrl?: string | null;
+  midBannerUrl?: string | null;
   panelUrl?: string | null;
 };
 
@@ -30,12 +31,13 @@ const { get, patch, upload, del, assetUrl } = useAdminApi();
 const pending = ref(false);
 const saving = ref(false);
 const uploading = ref(false);
-const mediaBusy = ref<"banner" | "panel" | null>(null);
+const mediaBusy = ref<"banner" | "midBanner" | "panel" | null>(null);
 const error = ref("");
 const ok = ref("");
 const form = reactive({
   customerScreenEnabled: true,
   bannerUrl: "" as string,
+  midBannerUrl: "" as string,
   panelUrl: "" as string,
 });
 const ads = reactive({
@@ -45,6 +47,7 @@ const ads = reactive({
 });
 const fileInput = ref<HTMLInputElement | null>(null);
 const bannerInput = ref<HTMLInputElement | null>(null);
+const midBannerInput = ref<HTMLInputElement | null>(null);
 const panelInput = ref<HTMLInputElement | null>(null);
 
 const statusLabel = computed(() =>
@@ -72,6 +75,7 @@ async function load() {
     const data = await get<SettingsRecord>("/settings");
     form.customerScreenEnabled = data.display?.customerScreenEnabled !== false;
     form.bannerUrl = data.display?.bannerUrl || "";
+    form.midBannerUrl = data.display?.midBannerUrl || "";
     form.panelUrl = data.display?.panelUrl || "";
     ads.enabled = data.customerAds?.enabled !== false;
     ads.imageDurationSec = Math.max(
@@ -114,7 +118,10 @@ async function save() {
   }
 }
 
-async function onPickDisplayMedia(slot: "banner" | "panel", e: Event) {
+async function onPickDisplayMedia(
+  slot: "banner" | "midBanner" | "panel",
+  e: Event,
+) {
   const input = e.target as HTMLInputElement;
   const file = input.files?.[0];
   input.value = "";
@@ -125,16 +132,22 @@ async function onPickDisplayMedia(slot: "banner" | "panel", e: Event) {
   try {
     const fd = new FormData();
     fd.append("file", file);
-    const data = await upload<SettingsRecord>(
-      `/settings/display/${slot}`,
-      fd,
-    );
+    const path =
+      slot === "banner"
+        ? "/settings/display/banner"
+        : slot === "midBanner"
+          ? "/settings/display/mid-banner"
+          : "/settings/display/panel";
+    const data = await upload<SettingsRecord>(path, fd);
     form.bannerUrl = data.display?.bannerUrl || "";
+    form.midBannerUrl = data.display?.midBannerUrl || "";
     form.panelUrl = data.display?.panelUrl || "";
     ok.value =
       slot === "banner"
-        ? "อัปโหลดแบนเนอร์แล้ว — POS รับตอน sync"
-        : "อัปโหลดรูปด้านล่างแล้ว — POS รับตอน sync";
+        ? "อัปโหลดแบนเนอร์บนแล้ว — POS รับตอน sync"
+        : slot === "midBanner"
+          ? "อัปโหลดแบนเนอร์กลางแล้ว — POS รับตอน sync"
+          : "อัปโหลดรูปด้านล่างแล้ว — POS รับตอน sync";
   } catch (err: unknown) {
     const msg =
       (err as { data?: { message?: string | string[] } })?.data?.message ??
@@ -146,13 +159,26 @@ async function onPickDisplayMedia(slot: "banner" | "panel", e: Event) {
   }
 }
 
-async function clearDisplayMedia(slot: "banner" | "panel") {
-  if (!confirm(slot === "banner" ? "ลบแบนเนอร์?" : "ลบรูปด้านล่าง?")) return;
+async function clearDisplayMedia(slot: "banner" | "midBanner" | "panel") {
+  const label =
+    slot === "banner"
+      ? "ลบแบนเนอร์บน?"
+      : slot === "midBanner"
+        ? "ลบแบนเนอร์กลาง?"
+        : "ลบรูปด้านล่าง?";
+  if (!confirm(label)) return;
   mediaBusy.value = slot;
   error.value = "";
   try {
-    const data = await del<SettingsRecord>(`/settings/display/${slot}`);
+    const path =
+      slot === "banner"
+        ? "/settings/display/banner"
+        : slot === "midBanner"
+          ? "/settings/display/mid-banner"
+          : "/settings/display/panel";
+    const data = await del<SettingsRecord>(path);
     form.bannerUrl = data.display?.bannerUrl || "";
+    form.midBannerUrl = data.display?.midBannerUrl || "";
     form.panelUrl = data.display?.panelUrl || "";
     ok.value = "ลบแล้ว";
   } catch (e: unknown) {
@@ -245,7 +271,7 @@ onMounted(load);
         <p class="dsp-kicker">จอลูกค้า · จอ 2</p>
         <h1 class="ui-page-title">ตั้งค่าจอ</h1>
         <p class="ui-page-sub">
-          จัดเลย์เอาต์แบนเนอร์ รูปด้านล่าง และโฆษณา · sync ไป POS อัตโนมัติ
+          แบนเนอร์บน · โฆษณา · แบนเนอร์กลาง · รูปด้านล่าง · sync ไป POS อัตโนมัติ
         </p>
       </div>
       <div class="dsp-head__actions">
@@ -275,12 +301,13 @@ onMounted(load);
           <div class="dsp-screen__brand">
             <div v-if="form.bannerUrl" class="dsp-screen__banner">
               <img :src="assetUrl(form.bannerUrl)" alt="" />
+              <span class="dsp-screen__chip">แบนเนอร์บน</span>
             </div>
             <div v-else class="dsp-screen__logo-fallback">
               <span class="dsp-screen__mark">AP</span>
               <div>
                 <strong>ชื่อร้าน</strong>
-                <small>โลโก้ + ชื่อ (ค่าเริ่มต้น)</small>
+                <small>โลโก้ + ชื่อ</small>
               </div>
             </div>
 
@@ -301,9 +328,17 @@ onMounted(load);
               <div v-else class="dsp-screen__video-ph">วิดีโอโฆษณา</div>
               <span class="dsp-screen__chip">โฆษณา</span>
             </div>
-            <div v-else-if="!form.panelUrl" class="dsp-screen__welcome">
+            <div
+              v-else-if="!form.midBannerUrl && !form.panelUrl"
+              class="dsp-screen__welcome"
+            >
               <strong>ยินดีต้อนรับ</strong>
               <span>รอสแกนสินค้า</span>
+            </div>
+
+            <div v-if="form.midBannerUrl" class="dsp-screen__mid">
+              <img :src="assetUrl(form.midBannerUrl)" alt="" />
+              <span class="dsp-screen__chip">แบนเนอร์กลาง</span>
             </div>
 
             <div v-if="form.panelUrl" class="dsp-screen__panel">
@@ -332,7 +367,7 @@ onMounted(load);
         </div>
 
         <p class="dsp-preview__hint">
-          ซ้าย = แบนเนอร์ / โฆษณา / รูปด้านล่าง · ขวา = สมาชิก + รายการและยอดรวม
+          ซ้าย = แบนเนอร์บน/โลโก้ → โฆษณา → แบนเนอร์กลาง → รูปด้านล่าง · ขวา = สมาชิก + รายการ
         </p>
       </aside>
 
@@ -367,15 +402,15 @@ onMounted(load);
             <span class="dsp-step">2</span>
             <div>
               <h2>เลย์เอาต์คงที่</h2>
-              <p>แบนเนอร์บน + รูป/GIF ล่าง · อัปโหลดแล้ว sync ทันที</p>
+              <p>แบนเนอร์บน · แบนเนอร์กลาง · รูป/GIF ล่าง · อัปโหลดแล้ว sync ทันที</p>
             </div>
           </div>
 
-          <div class="dsp-media-grid">
+          <div class="dsp-media-grid dsp-media-grid--3">
             <div class="dsp-media">
               <div class="dsp-media__label">
-                <strong>แบนเนอร์ด้านบน</strong>
-                <span>แทนโลโก้ + ชื่อ</span>
+                <strong>แบนเนอร์บน</strong>
+                <span>แทนโลโก้ · กว้างเต็มคอลัมน์ แสดงครบ · แนะนำ 1200×200–320 px</span>
               </div>
               <button
                 type="button"
@@ -385,7 +420,7 @@ onMounted(load);
               >
                 <img v-if="form.bannerUrl" :src="assetUrl(form.bannerUrl)" alt="" />
                 <div v-else class="dsp-drop__empty">
-                  <em>อัปโหลดแบนเนอร์</em>
+                  <em>อัปโหลดแบนเนอร์บน</em>
                   <small>JPG PNG WebP GIF · ≤ 8MB</small>
                 </div>
               </button>
@@ -419,8 +454,57 @@ onMounted(load);
 
             <div class="dsp-media">
               <div class="dsp-media__label">
+                <strong>แบนเนอร์กลาง</strong>
+                <span>ต่อจากโฆษณา · แสดงครบ · แนะนำ 1200×140–240 px</span>
+              </div>
+              <button
+                type="button"
+                class="dsp-drop"
+                :disabled="mediaBusy === 'midBanner'"
+                @click="midBannerInput?.click()"
+              >
+                <img
+                  v-if="form.midBannerUrl"
+                  :src="assetUrl(form.midBannerUrl)"
+                  alt=""
+                />
+                <div v-else class="dsp-drop__empty">
+                  <em>อัปโหลดแบนเนอร์กลาง</em>
+                  <small>JPG PNG WebP GIF · ≤ 8MB</small>
+                </div>
+              </button>
+              <div class="dsp-media__actions">
+                <button
+                  type="button"
+                  class="ui-btn ui-btn--ghost"
+                  :disabled="mediaBusy === 'midBanner'"
+                  @click="midBannerInput?.click()"
+                >
+                  {{ mediaBusy === "midBanner" ? "กำลังอัปโหลด..." : "เลือกไฟล์" }}
+                </button>
+                <button
+                  v-if="form.midBannerUrl"
+                  type="button"
+                  class="ui-btn ui-btn--ghost-danger"
+                  :disabled="mediaBusy === 'midBanner'"
+                  @click="clearDisplayMedia('midBanner')"
+                >
+                  ลบ
+                </button>
+              </div>
+              <input
+                ref="midBannerInput"
+                class="dsp-file"
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/gif"
+                @change="onPickDisplayMedia('midBanner', $event)"
+              />
+            </div>
+
+            <div class="dsp-media">
+              <div class="dsp-media__label">
                 <strong>รูปด้านล่าง</strong>
-                <span>แทนข้อความต้อนรับ · รองรับ GIF</span>
+                <span>รองรับ GIF · แสดงครบ · แนะนำ 1200×240–400 px</span>
               </div>
               <button
                 type="button"
@@ -431,7 +515,7 @@ onMounted(load);
                 <img v-if="form.panelUrl" :src="assetUrl(form.panelUrl)" alt="" />
                 <div v-else class="dsp-drop__empty">
                   <em>อัปโหลดรูป / GIF</em>
-                  <small>โชว์เมื่อไม่มีโฆษณาเลื่อน</small>
+                  <small>โชว์ใต้แบนเนอร์กลาง</small>
                 </div>
               </button>
               <div class="dsp-media__actions">
@@ -713,6 +797,7 @@ onMounted(load);
 }
 
 .dsp-screen__banner,
+.dsp-screen__mid,
 .dsp-screen__media {
   position: relative;
   border-radius: 0.55rem;
@@ -721,7 +806,14 @@ onMounted(load);
   min-height: 3.5rem;
 }
 
+.dsp-screen__banner,
+.dsp-screen__mid {
+  flex: 0 0 auto;
+  min-height: 2.4rem;
+}
+
 .dsp-screen__banner img,
+.dsp-screen__mid img,
 .dsp-screen__media img,
 .dsp-screen__media video {
   display: block;
@@ -729,6 +821,11 @@ onMounted(load);
   height: 100%;
   max-height: 5.5rem;
   object-fit: contain;
+}
+
+.dsp-screen__banner img,
+.dsp-screen__mid img {
+  max-height: 2.8rem;
 }
 
 .dsp-screen__media {
@@ -1049,6 +1146,10 @@ onMounted(load);
   gap: 0.85rem;
 }
 
+.dsp-media-grid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .dsp-media {
   display: grid;
   gap: 0.55rem;
@@ -1279,6 +1380,12 @@ onMounted(load);
 
   .dsp-preview {
     position: static;
+  }
+}
+
+@media (max-width: 900px) {
+  .dsp-media-grid--3 {
+    grid-template-columns: 1fr;
   }
 }
 

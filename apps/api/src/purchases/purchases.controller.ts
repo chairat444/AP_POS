@@ -129,6 +129,7 @@ export class PurchasesController {
       catalogId?: string | null;
       lineId?: string | null;
       qtyText?: string | null;
+      forceCreate?: boolean;
     },
   ) {
     if (!body.branchId || !body.name?.trim() || !body.groupKey) {

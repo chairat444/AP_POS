@@ -1312,13 +1312,13 @@ def upsert_postgres(data: dict[str, Any], tgt: TargetConfig) -> None:
                     cur.execute(
                         """
                         INSERT INTO staff (
-                          id, code, name, pin, phone, role, active,
+                          id, code, name, pin, role, active,
                           commission_enabled, commission_start_sales,
                           commission_step_sales, commission_per_step,
                           monthly_wage,
                           updated_at, deleted_at
                         ) VALUES (
-                          %s,%s,%s,%s,NULL,%s,1,0,8000,1000,100,0,%s,NULL
+                          %s,%s,%s,%s,%s,1,0,8000,1000,100,0,%s,NULL
                         )
                         ON CONFLICT (code) DO UPDATE SET
                           name = EXCLUDED.name,

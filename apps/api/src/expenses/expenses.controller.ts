@@ -28,12 +28,22 @@ export class ExpensesController {
     return this.expenses.createCategory(body);
   }
 
+  @Post("expense-categories/reorder")
+  reorderCategories(@Body() body: { ids?: string[] }) {
+    return this.expenses.reorderCategories(body.ids ?? []);
+  }
+
   @Patch("expense-categories/:id")
   updateCategory(
     @Param("id") id: string,
     @Body() body: Partial<UpsertExpenseCategoryDto>,
   ) {
     return this.expenses.updateCategory(id, body);
+  }
+
+  @Delete("expense-categories/:id")
+  removeCategory(@Param("id") id: string) {
+    return this.expenses.removeCategory(id);
   }
 
   @Get("expenses")

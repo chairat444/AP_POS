@@ -3,7 +3,7 @@ type Branch = { id: string; code: string; name: string };
 type Category = { id: string; name: string; active: boolean };
 type Expense = {
   id: string;
-  branchId: string;
+  branchId: string | null;
   categoryId: string;
   categoryName?: string;
   amount: number;
@@ -36,7 +36,6 @@ const error = ref("");
 const branches = ref<Branch[]>([]);
 const categories = ref<Category[]>([]);
 const rows = ref<Expense[]>([]);
-const modalOpen = ref(false);
 const editingId = ref<string | null>(null);
 
 const filters = reactive({
@@ -67,8 +66,17 @@ function baht(n: number) {
   });
 }
 
-function branchName(id: string) {
-  return branches.value.find((b) => b.id === id)?.name ?? id;
+function branchName(id: string | null) {
+  if (!id) return "กลาง";
+  return branches.value.find((b) => b.id === id)?.name ?? "กลาง";
+}
+
+function preferredCategoryId() {
+  return (
+    categories.value.find((c) => c.name === "ซื้อของ")?.id ||
+    categories.value[0]?.id ||
+    ""
+  );
 }
 
 function paidLabel(v: string) {
@@ -86,10 +94,7 @@ async function loadMeta() {
   ]);
   branches.value = b.branches ?? [];
   categories.value = (c.categories ?? []).filter((x) => x.active !== false);
-  if (!form.branchId && branches.value[0]) form.branchId = branches.value[0].id;
-  if (!form.categoryId && categories.value[0]) {
-    form.categoryId = categories.value[0].id;
-  }
+  if (!form.categoryId) form.categoryId = preferredCategoryId();
 }
 
 async function load() {
@@ -112,42 +117,48 @@ async function load() {
   }
 }
 
-function openCreate() {
+function resetForm() {
   editingId.value = null;
-  form.branchId = filters.branchId || branches.value[0]?.id || "";
-  form.categoryId = categories.value[0]?.id || "";
+  form.branchId = filters.branchId === "shared" ? "" : filters.branchId || "";
+  form.categoryId = preferredCategoryId();
   form.amount = "";
   form.description = "";
   form.paidFrom = "external";
-  form.spentAt = todayIso();
+  form.spentAt = dateMode.value === "day" ? day.value : todayIso();
   form.note = "";
-  modalOpen.value = true;
+  error.value = "";
+}
+
+function openCreate() {
+  resetForm();
 }
 
 function openEdit(row: Expense) {
   editingId.value = row.id;
-  form.branchId = row.branchId;
+  form.branchId = row.branchId ?? "";
   form.categoryId = row.categoryId;
   form.amount = String(row.amount);
   form.description = row.description ?? "";
   form.paidFrom = row.paidFrom;
   form.spentAt = row.spentAt.slice(0, 10);
   form.note = row.note ?? "";
-  modalOpen.value = true;
+  error.value = "";
+  window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function save() {
-  if (!form.branchId || !form.categoryId || !form.amount) {
-    error.value = "กรุณาเลือกสาขา หมวด และจำนวนเงิน";
+  const amount = Number(String(form.amount).replace(/,/g, ""));
+  if (!form.categoryId || !Number.isFinite(amount) || amount <= 0) {
+    error.value = "เลือกประเภท แล้วใส่จำนวนเงิน";
     return;
   }
   saving.value = true;
   error.value = "";
   try {
     const body = {
-      branchId: form.branchId,
+      branchId: form.branchId || null,
       categoryId: form.categoryId,
-      amount: Number(form.amount),
+      amount,
       description: form.description.trim() || null,
       paidFrom: form.paidFrom,
       spentAt: `${form.spentAt}T12:00:00+07:00`,
@@ -158,7 +169,11 @@ async function save() {
     } else {
       await post("/expenses", body);
     }
-    modalOpen.value = false;
+    const keepCat = form.categoryId;
+    const keepDay = form.spentAt;
+    resetForm();
+    form.categoryId = keepCat;
+    form.spentAt = keepDay;
     await load();
   } catch (e) {
     error.value = e instanceof Error ? e.message : "บันทึกไม่สำเร็จ";
@@ -201,19 +216,18 @@ onMounted(async () => {
       <div>
         <h1 class="ui-page-title">ค่าใช้จ่าย</h1>
         <p class="ui-page-sub">
-          บันทึกค่าใช้จ่ายร้าน · จ่ายจากลิ้นชัก POS หรือนอกลิ้นชัก · รายการจาก POS
-          (เบิกเงิน) จะเข้าอัตโนมัติเมื่อ sync
+          กดประเภท ใส่ยอด แล้วบันทึก · ไม่ระบุสาขาได้ (กลาง) · เบิกจาก POS เข้าอัตโนมัติเมื่อ sync
         </p>
       </div>
       <div class="ui-page-head__actions">
+        <NuxtLink to="/expenses/categories" class="ui-btn ui-btn--ghost">
+          จัดการประเภท
+        </NuxtLink>
         <NuxtLink to="/reports/cashflow" class="ui-btn ui-btn--ghost">
           สรุปรายรับ–รายจ่าย
         </NuxtLink>
         <button type="button" class="ui-btn ui-btn--ghost" :disabled="pending" @click="load">
           {{ pending ? "กำลังโหลด..." : "รีเฟรช" }}
-        </button>
-        <button type="button" class="ui-btn ui-btn--primary" @click="openCreate">
-          + บันทึกค่าใช้จ่าย
         </button>
       </div>
     </div>
@@ -327,6 +341,7 @@ onMounted(async () => {
           <span>สาขา</span>
           <select v-model="filters.branchId" class="ui-input" @change="load">
             <option value="">ทุกสาขา</option>
+            <option value="shared">กลาง</option>
             <option v-for="b in branches" :key="b.id" :value="b.id">
               {{ b.code }} — {{ b.name }}
             </option>
@@ -352,7 +367,105 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="error && !modalOpen" class="ui-empty">{{ error }}</div>
+    <div class="ui-card ui-expense-form">
+      <div class="ui-expense-form__head">
+        <strong>{{ editingId ? "แก้ไขรายการ" : "บันทึกค่าใช้จ่าย" }}</strong>
+        <button
+          v-if="editingId"
+          type="button"
+          class="ui-btn ui-btn--ghost"
+          @click="openCreate"
+        >
+          ยกเลิกแก้ไข
+        </button>
+      </div>
+      <div class="ui-field" style="margin-bottom: 0.65rem">
+        <span>ประเภท *</span>
+        <div class="ui-expense-cats">
+          <button
+            v-for="c in categories"
+            :key="c.id"
+            type="button"
+            class="ui-expense-cat"
+            :class="{ 'is-on': form.categoryId === c.id }"
+            @click="form.categoryId = c.id"
+          >
+            {{ c.name }}
+          </button>
+          <NuxtLink to="/expenses/categories" class="ui-expense-cat ui-expense-cat--add">
+            + เพิ่มประเภท
+          </NuxtLink>
+        </div>
+      </div>
+      <div class="ui-expense-form__row">
+        <label class="ui-field ui-expense-form__amount">
+          <span>จำนวนเงิน *</span>
+          <input
+            v-model="form.amount"
+            class="ui-input"
+            type="text"
+            inputmode="decimal"
+            placeholder="0"
+            @keydown.enter.prevent="save"
+          />
+        </label>
+        <label class="ui-field">
+          <span>วันที่</span>
+          <UiDateInput v-model="form.spentAt" aria-label="วันที่" />
+        </label>
+        <label class="ui-field">
+          <span>สาขา</span>
+          <select v-model="form.branchId" class="ui-input">
+            <option value="">กลาง</option>
+            <option v-for="b in branches" :key="b.id" :value="b.id">
+              {{ b.name }}
+            </option>
+          </select>
+        </label>
+        <div class="ui-field">
+          <span>จ่ายจาก</span>
+          <div class="ui-date-mode">
+            <button
+              type="button"
+              class="ui-btn"
+              :class="form.paidFrom === 'external' ? 'ui-btn--primary' : 'ui-btn--ghost'"
+              @click="form.paidFrom = 'external'"
+            >
+              นอกลิ้นชัก
+            </button>
+            <button
+              type="button"
+              class="ui-btn"
+              :class="form.paidFrom === 'drawer' ? 'ui-btn--primary' : 'ui-btn--ghost'"
+              @click="form.paidFrom = 'drawer'"
+            >
+              ลิ้นชัก POS
+            </button>
+          </div>
+        </div>
+      </div>
+      <label class="ui-field">
+        <span>รายละเอียด (ไม่บังคับ)</span>
+        <input
+          v-model="form.description"
+          class="ui-input"
+          type="text"
+          placeholder="เช่น ใบเสร็จ / ของที่ซื้อ"
+          @keydown.enter.prevent="save"
+        />
+      </label>
+      <p v-if="error" class="ui-field-hint" style="color: #b91c1c">{{ error }}</p>
+      <div class="ui-expense-form__foot">
+        <button
+          type="button"
+          class="ui-btn ui-btn--primary"
+          :disabled="saving"
+          @click="save"
+        >
+          {{ saving ? "กำลังบันทึก..." : editingId ? "บันทึกการแก้ไข" : "บันทึก" }}
+        </button>
+      </div>
+    </div>
 
     <div class="ui-card">
       <div class="ui-card__toolbar">
@@ -408,74 +521,6 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="modalOpen" class="ui-modal">
-      <div class="ui-modal__panel" role="dialog" aria-modal="true">
-        <div class="ui-modal__head">
-          <h2>{{ editingId ? "แก้ไขค่าใช้จ่าย" : "บันทึกค่าใช้จ่าย" }}</h2>
-          <button class="ui-icon-btn" type="button" @click="modalOpen = false">×</button>
-        </div>
-        <div class="ui-modal__body">
-          <div class="ui-form-grid">
-            <label class="ui-field">
-              <span>วันที่</span>
-              <UiDateInput v-model="form.spentAt" aria-label="วันที่" />
-            </label>
-            <label class="ui-field">
-              <span>สาขา *</span>
-              <select v-model="form.branchId" class="ui-input">
-                <option v-for="b in branches" :key="b.id" :value="b.id">
-                  {{ b.code }} — {{ b.name }}
-                </option>
-              </select>
-            </label>
-            <label class="ui-field">
-              <span>หมวด *</span>
-              <select v-model="form.categoryId" class="ui-input">
-                <option v-for="c in categories" :key="c.id" :value="c.id">
-                  {{ c.name }}
-                </option>
-              </select>
-            </label>
-            <label class="ui-field">
-              <span>จำนวนเงิน *</span>
-              <input v-model="form.amount" class="ui-input" type="number" min="0" step="0.01" />
-            </label>
-            <label class="ui-field">
-              <span>จ่ายจาก *</span>
-              <select v-model="form.paidFrom" class="ui-input">
-                <option value="external">นอกลิ้นชัก (บัญชี/เจ้าของ)</option>
-                <option value="drawer">ลิ้นชัก POS</option>
-              </select>
-            </label>
-            <label class="ui-field" style="grid-column: 1 / -1">
-              <span>รายละเอียด</span>
-              <input v-model="form.description" class="ui-input" type="text" />
-            </label>
-            <label class="ui-field" style="grid-column: 1 / -1">
-              <span>หมายเหตุ</span>
-              <input v-model="form.note" class="ui-input" type="text" />
-            </label>
-          </div>
-          <p v-if="error" class="ui-field-hint" style="color: #b91c1c">{{ error }}</p>
-          <p class="ui-field-hint">
-            ถ้ารายการมาจากเบิกเงินบน POS แนะนำแก้ที่เครื่อง หรือแก้จำนวนที่นี่ได้
-          </p>
-        </div>
-        <div class="ui-modal__foot">
-          <button type="button" class="ui-btn ui-btn--ghost" @click="modalOpen = false">
-            ยกเลิก
-          </button>
-          <button
-            type="button"
-            class="ui-btn ui-btn--primary"
-            :disabled="saving"
-            @click="save"
-          >
-            {{ saving ? "กำลังบันทึก..." : "บันทึก" }}
-          </button>
-        </div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -530,6 +575,69 @@ onMounted(async () => {
 @media (max-width: 900px) {
   .ui-expense-filters__meta {
     grid-template-columns: 1fr;
+  }
+}
+.ui-expense-form {
+  padding: 1rem 1.25rem 1.15rem;
+  margin-bottom: 1rem;
+}
+.ui-expense-form__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.ui-expense-form__head strong {
+  font-size: 1rem;
+}
+.ui-expense-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.ui-expense-cat {
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #334155;
+  border-radius: 999px;
+  padding: 0.38rem 0.8rem;
+  font-size: 0.88rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+.ui-expense-cat:hover {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+.ui-expense-cat.is-on {
+  border-color: #ca8a04;
+  background: #fef3c7;
+  color: #854d0e;
+}
+.ui-expense-cat--add {
+  text-decoration: none;
+  color: #64748b;
+  font-weight: 500;
+  border-style: dashed;
+}
+.ui-expense-form__row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(10rem, 0.9fr) minmax(8rem, 0.9fr) auto;
+  gap: 0.75rem 1rem;
+  align-items: end;
+  margin-bottom: 0.75rem;
+}
+.ui-expense-form__amount .ui-input {
+  font-size: 1.2rem;
+  font-weight: 700;
+}
+.ui-expense-form__foot {
+  margin-top: 0.85rem;
+}
+@media (max-width: 900px) {
+  .ui-expense-form__row {
+    grid-template-columns: 1fr 1fr;
   }
 }
 </style>

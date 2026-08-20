@@ -123,7 +123,9 @@ type BootstrapResponse = {
     display?: {
       customerScreenEnabled?: boolean;
       bannerUrl?: string | null;
+      midBannerUrl?: string | null;
       panelUrl?: string | null;
+      promptPayId?: string | null;
     };
     branding?: {
       storeName?: string;
@@ -256,12 +258,12 @@ export async function loadMediaIndex() {
  * แคชสื่อแบบประหยัด:
  * - ดาวน์โหลดเฉพาะ URL ที่ยังไม่มีในดิสก์
  * - ข้ามทั้งชุดถ้า fingerprint รายการเดิม + ครบในเครื่องแล้ว (เมื่อใช้ fingerprint)
- * สื่อไม่ค่อยเปลี่ยน — ไม่ต้อง sync ทุก 15 วิ
+ * - force=true → ดาวน์โหลดใหม่ทั้งหมด (ใช้ตอนกดโหลดข้อมูลจอลูกค้า)
  */
 export async function ensureMediaCached(
   scope: string,
   urls: Array<string | null | undefined>,
-  opts?: { fingerprint?: boolean },
+  opts?: { fingerprint?: boolean; force?: boolean },
 ): Promise<boolean> {
   if (!window.apPos?.media?.cache) return false;
   // ออฟไลน์ที่รู้แล้ว — อย่าพยายามดาวน์โหลด (กันค้างตอนเปิดแอป)
@@ -275,14 +277,15 @@ export async function ensureMediaCached(
 
   await loadMediaIndex();
 
+  const force = Boolean(opts?.force);
   const missing: string[] = [];
   for (const u of list) {
     const abs = toAbsoluteMediaUrl(u);
     if (!abs) continue;
-    if (!mediaLocalByRemote.has(abs)) missing.push(abs);
+    if (force || !mediaLocalByRemote.has(abs)) missing.push(abs);
   }
 
-  const useFp = opts?.fingerprint !== false;
+  const useFp = !force && opts?.fingerprint !== false;
   if (useFp) {
     const fp = fingerprintUrls(list);
     const metaKey = `${MEDIA_FP_PREFIX}${scope}`;
@@ -299,7 +302,7 @@ export async function ensureMediaCached(
 
     if (missing.length > 0) {
       try {
-        rememberMediaMap(await window.apPos.media.cache(missing));
+        rememberMediaMap(await window.apPos.media.cache(missing, false));
       } catch {
         return false;
       }
@@ -313,10 +316,21 @@ export async function ensureMediaCached(
     return missing.length > 0;
   }
 
-  // โหมดไม่มี fingerprint (เช่น delta จาก pull) — โหลดเฉพาะที่ขาด
   if (!missing.length) return false;
   try {
-    rememberMediaMap(await window.apPos.media.cache(missing));
+    rememberMediaMap(await window.apPos.media.cache(missing, force));
+    if (force) {
+      // ไฟล์ชื่อเดิมเนื้อหาใหม่อาจได้ local URL เดิม — บังคับให้จอรีเรนเดอร์
+      mediaCacheEpoch.value++;
+      try {
+        await window.apPos.db?.setMeta?.(
+          `${MEDIA_FP_PREFIX}${scope}`,
+          fingerprintUrls(list),
+        );
+      } catch {
+        /* ignore */
+      }
+    }
     return true;
   } catch {
     return false;
@@ -330,8 +344,11 @@ export async function cacheMediaUrls(urls: Array<string | null | undefined>) {
 
 export async function ensureSettingsMediaCached(
   settings: BootstrapResponse["settings"] | null | undefined,
+  opts?: { force?: boolean },
 ) {
-  return ensureMediaCached("settings", collectSettingsMediaUrls(settings));
+  return ensureMediaCached("settings", collectSettingsMediaUrls(settings), {
+    force: opts?.force,
+  });
 }
 
 /**
@@ -383,6 +400,7 @@ export function collectSettingsMediaUrls(
   const out: string[] = [];
   if (settings.branding?.logoUrl) out.push(settings.branding.logoUrl);
   if (settings.display?.bannerUrl) out.push(settings.display.bannerUrl);
+  if (settings.display?.midBannerUrl) out.push(settings.display.midBannerUrl);
   if (settings.display?.panelUrl) out.push(settings.display.panelUrl);
   for (const it of settings.customerAds?.items ?? []) {
     if (it?.url) out.push(it.url);
@@ -402,7 +420,11 @@ export function resolveImage(url: string | null | undefined, fallback: string) {
   const abs = toAbsoluteMediaUrl(url);
   if (abs) {
     const local = mediaLocalByRemote.get(abs);
-    if (local) return local;
+    if (local) {
+      // epoch กัน Electron ค้างรูปเดิมเมื่อไฟล์ชื่อเดิมถูกเขียนทับ
+      const sep = local.includes("?") ? "&" : "?";
+      return `${local}${sep}e=${mediaCacheEpoch.value}`;
+    }
   }
   if (url.startsWith("http://") || url.startsWith("https://")) {
     return url;
@@ -657,7 +679,7 @@ export async function applyPrinterConfigFromTerminal(t: {
   receiptFooterPhones?: string | null;
 }) {
   await savePrinterConfig({
-    paperWidth: t.paperWidth === "58mm" ? "58mm" : "80mm",
+    paperWidth: t.paperWidth === "80mm" ? "80mm" : "58mm",
     autoPrint: t.autoPrint !== false,
     silent: t.printSilent !== false,
     printerName: String(t.printerName ?? "").trim(),
@@ -817,7 +839,34 @@ export type SyncBranch = {
   id: string;
   code: string;
   name: string;
+  promptPayId?: string | null;
+  promptPayName?: string | null;
 };
+
+/** in-memory หลังโหลด/แคชสาขา — ใช้สร้าง QR ตามสาขาปัจจุบัน */
+let branchesMemory: SyncBranch[] = [];
+
+export function rememberBranches(list: SyncBranch[]) {
+  branchesMemory = Array.isArray(list) ? list.map((b) => ({ ...b })) : [];
+}
+
+export function getBranchPromptPayId(branchId: string | null | undefined): string | null {
+  if (!branchId) return null;
+  const hit = branchesMemory.find((b) => b.id === branchId);
+  const d = String(hit?.promptPayId ?? "").replace(/\D/g, "");
+  return d || null;
+}
+
+export function getBranchPromptPayName(
+  branchId: string | null | undefined,
+): string | null {
+  if (!branchId) return null;
+  const hit = branchesMemory.find((b) => b.id === branchId);
+  const s = String(hit?.promptPayName ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return s || null;
+}
 
 export type SyncStaff = {
   id: string;
@@ -865,14 +914,19 @@ async function loadTerminalsFromCache(branchId?: string): Promise<SyncTerminal[]
 }
 
 async function loadBranchesFromCache(): Promise<SyncBranch[]> {
-  if (!window.apPos?.db) return [];
+  if (!window.apPos?.db) return branchesMemory;
   const raw = await window.apPos.db.getMeta(BRANCHES_META);
-  if (!raw) return [];
+  if (!raw) return branchesMemory;
   try {
-    return JSON.parse(raw) as SyncBranch[];
+    const list = JSON.parse(raw) as SyncBranch[];
+    if (Array.isArray(list) && list.length) {
+      rememberBranches(list);
+      return list;
+    }
   } catch {
-    return [];
+    /* ignore */
   }
+  return branchesMemory;
 }
 
 async function loadStaffFromCache(): Promise<SyncStaff[]> {
@@ -940,7 +994,10 @@ export async function loadBranches(): Promise<SyncBranch[]> {
     if (window.apPos?.db && list.length) {
       await window.apPos.db.setMeta(BRANCHES_META, JSON.stringify(list));
     }
-    if (list.length) return list;
+    if (list.length) {
+      rememberBranches(list);
+      return list;
+    }
   } catch {
     markApiOffline();
   }
@@ -1012,6 +1069,131 @@ export async function saveCachedMembers(members: Member[]) {
       updatedAt: new Date().toISOString(),
     })),
   );
+}
+
+type PendingMemberCreate = {
+  localId: string;
+  code: string;
+  name: string;
+  phone: string;
+  points: number;
+};
+
+const PENDING_MEMBERS_META = "pending-member-creates";
+
+async function loadPendingMemberCreates(): Promise<PendingMemberCreate[]> {
+  try {
+    const raw = await window.apPos?.db?.getMeta?.(PENDING_MEMBERS_META);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as PendingMemberCreate[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function savePendingMemberCreates(rows: PendingMemberCreate[]) {
+  await window.apPos?.db?.setMeta?.(
+    PENDING_MEMBERS_META,
+    JSON.stringify(rows),
+  );
+}
+
+/** สร้างสมาชิก — ชื่อ+เบอร์จำเป็น · เบอร์เก็บแบบไม่มีช่องว่าง */
+export async function createMember(input: {
+  name: string;
+  phone?: string;
+  points?: number;
+}): Promise<Member> {
+  const name = String(input.name || "").trim();
+  if (!name) throw new Error("กรอกชื่อสมาชิก");
+  // ไม่เว้นวรรค / ขีด — เก็บเฉพาะตัวเลข
+  const phone = String(input.phone || "").replace(/\D/g, "");
+  if (!phone) throw new Error("กรอกเบอร์โทร");
+  if (phone.length < 9) throw new Error("เบอร์โทรไม่ครบ");
+  const points = Math.max(0, Math.floor(Number(input.points) || 0));
+
+  if (await isApiReachable(1200)) {
+    const created = await postJson<{
+      id: string;
+      code: string;
+      name: string;
+      phone: string;
+      points: number;
+      updatedAt: string;
+    }>(`${getApiBase()}/members`, { name, phone, points }, 6000);
+    const member: Member = {
+      id: created.id,
+      code: created.code,
+      name: created.name,
+      phone: String(created.phone ?? "").replace(/\D/g, "") || phone,
+      points: created.points,
+    };
+    if (window.apPos?.db) {
+      await window.apPos.db.upsertMembers([
+        { ...member, updatedAt: created.updatedAt },
+      ]);
+    }
+    return member;
+  }
+
+  const localId = `m-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+  const code = `L${String(Date.now()).slice(-5)}`;
+  const member: Member = { id: localId, code, name, phone, points };
+  if (window.apPos?.db) {
+    await window.apPos.db.upsertMembers([
+      { ...member, updatedAt: new Date().toISOString() },
+    ]);
+  }
+  const pending = await loadPendingMemberCreates();
+  pending.push({ localId, code, name, phone, points });
+  await savePendingMemberCreates(pending);
+  return member;
+}
+
+/** ดันสมาชิกที่สร้างตอนออฟไลน์ขึ้นเซิร์ฟเวอร์ */
+export async function flushPendingMemberCreates(): Promise<number> {
+  if (!window.apPos?.db) return 0;
+  if (!(await isApiReachable(1000))) return 0;
+  const pending = await loadPendingMemberCreates();
+  if (!pending.length) return 0;
+
+  const remain: PendingMemberCreate[] = [];
+  let ok = 0;
+  for (const row of pending) {
+    try {
+      const created = await postJson<{
+        id: string;
+        code: string;
+        name: string;
+        phone: string;
+        points: number;
+        updatedAt: string;
+      }>(
+        `${getApiBase()}/members`,
+        { name: row.name, phone: row.phone, points: row.points },
+        6000,
+      );
+      await window.apPos.db.upsertMembers([
+        {
+          id: created.id,
+          code: created.code,
+          name: created.name,
+          phone: created.phone ?? "",
+          points: created.points,
+          updatedAt: created.updatedAt,
+        },
+      ]);
+      if (created.id !== row.localId) {
+        await window.apPos.db.removeMembers([row.localId]);
+      }
+      ok += 1;
+    } catch {
+      remain.push(row);
+    }
+  }
+  await savePendingMemberCreates(remain);
+  return ok;
 }
 
 export async function enqueueSale(payload: SyncedSalePayload) {
@@ -1400,6 +1582,13 @@ export async function fetchSettingsFromApi(): Promise<
 export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
   if (!window.apPos?.db) return { accepted: 0 };
   if (isApiOfflineKnown()) return { accepted: 0 };
+
+  try {
+    await flushPendingMemberCreates();
+  } catch {
+    /* keep pending */
+  }
+
   const outbox = (await window.apPos.db.listOutbox()) as SyncEnvelope[];
   if (!outbox.length) return { accepted: 0 };
 

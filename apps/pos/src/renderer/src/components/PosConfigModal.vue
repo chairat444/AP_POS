@@ -1,6 +1,14 @@
 <script setup lang="ts">
 import { nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
+  buildReceiptPrintPayload,
+  buildReceiptText,
+  loadPrinterConfig,
+  savePrinterConfig,
+  type PaperWidth,
+  type PrinterConfig,
+} from "../services/receipt";
+import {
   getAdminUrl,
   getApiBase,
   getDefaultApiBase,
@@ -11,26 +19,78 @@ import {
 const open = defineModel<boolean>("open", { default: false });
 const emit = defineEmits<{ saved: [] }>();
 
+type TabId = "network" | "printer" | "slip";
+
+const tab = ref<TabId>("network");
 const apiBase = ref("");
 const adminUrl = ref("");
 const saving = ref(false);
 const testing = ref(false);
+const testingPrint = ref(false);
 const error = ref("");
 const message = ref("");
 const apiInput = ref<HTMLInputElement | null>(null);
 
-function hydrate() {
+const paperWidth = ref<PaperWidth>("58mm");
+const autoPrint = ref(true);
+const silent = ref(true);
+const printerName = ref("");
+const openDrawer = ref(true);
+const headerText = ref("เอพี หมูสด ({สาขา})\nมาตรฐาน สะอาด ปลอดภัย");
+const footerHours = ref("เปิดบริการทุกวัน 09.00 - 20.00 น.");
+const footerPhones = ref("ติดต่อ 084 912 3509, 092 494 5442");
+const printers = ref<Array<{ name: string; isDefault: boolean }>>([]);
+
+async function loadPrinters() {
+  try {
+    const res = await window.apPos?.print?.listPrinters?.();
+    printers.value = res?.printers ?? [];
+  } catch {
+    printers.value = [];
+  }
+}
+
+async function hydrate() {
   apiBase.value = getApiBase();
   adminUrl.value = getAdminUrl();
   error.value = "";
   message.value = "";
+  tab.value = "network";
+  const printer = await loadPrinterConfig();
+  paperWidth.value = printer.paperWidth;
+  autoPrint.value = printer.autoPrint;
+  silent.value = printer.silent;
+  printerName.value = printer.printerName;
+  openDrawer.value = printer.openDrawer;
+  headerText.value = printer.headerText;
+  footerHours.value = printer.footerHours;
+  footerPhones.value = printer.footerPhones;
+  await loadPrinters();
+  if (!printerName.value.trim()) {
+    const hit =
+      printers.value.find((p) => /xp-?58/i.test(p.name)) ??
+      printers.value.find((p) => /xprinter/i.test(p.name) && !/pdf/i.test(p.name));
+    if (hit) printerName.value = hit.name;
+  }
 }
 
 watch(open, (v) => {
   if (!v) return;
-  hydrate();
-  void nextTick(() => apiInput.value?.focus());
+  void hydrate().then(() => nextTick(() => apiInput.value?.focus()));
 });
+
+function printerPatch(): Partial<PrinterConfig> {
+  return {
+    paperWidth: paperWidth.value,
+    autoPrint: autoPrint.value,
+    silent: silent.value,
+    printerName: printerName.value.trim(),
+    openDrawer: openDrawer.value,
+    headerText: headerText.value,
+    footerHours: footerHours.value,
+    footerPhones: footerPhones.value,
+  };
+}
 
 async function save() {
   if (saving.value) return;
@@ -42,7 +102,8 @@ async function save() {
       apiBase: apiBase.value,
       adminUrl: adminUrl.value,
     });
-    message.value = "บันทึกแล้ว · จะใช้ URL ใหม่ทันที";
+    await savePrinterConfig(printerPatch());
+    message.value = "บันทึกแล้ว · ใช้ค่าใหม่ทันที";
     emit("saved");
   } catch (e) {
     error.value = e instanceof Error ? e.message : "บันทึกไม่สำเร็จ";
@@ -56,6 +117,7 @@ async function testApi() {
   testing.value = true;
   error.value = "";
   message.value = "";
+  tab.value = "network";
   try {
     await savePosNetworkConfig({
       apiBase: apiBase.value,
@@ -70,6 +132,70 @@ async function testApi() {
     error.value = e instanceof Error ? e.message : "ทดสอบไม่สำเร็จ";
   } finally {
     testing.value = false;
+  }
+}
+
+async function testPrint() {
+  if (testingPrint.value) return;
+  testingPrint.value = true;
+  error.value = "";
+  message.value = "";
+  tab.value = "printer";
+  try {
+    await savePrinterConfig(printerPatch());
+    const sample = {
+      storeName: "เอพี หมูสด",
+      branchName: "ทดสอบ",
+      tagline: "มาตรฐาน สะอาด ปลอดภัย",
+      headerText: headerText.value,
+      billNo: "TEST-001",
+      at: new Date().toISOString(),
+      lines: [
+        {
+          name: "ทดสอบรายการชื่อยาวหน่อย",
+          qty: 1,
+          unit: "ชิ้น",
+          unitPrice: 10,
+          lineTotal: 10,
+        },
+      ],
+      itemCount: 1,
+      subtotal: 10,
+      promoDiscount: 0,
+      promos: [],
+      pointsDiscount: 0,
+      total: 10,
+      payments: [{ method: "cash", label: "เงินสด", amount: 10 }],
+      change: 0,
+      paperWidth: paperWidth.value,
+      footerHours: footerHours.value,
+      footerPhones: footerPhones.value,
+      appVersion: "AP Version 0.1.0",
+    };
+    const text = buildReceiptPrintPayload(sample);
+    const preview = buildReceiptText(sample);
+    const html = `<pre style="font:11px/1.3 monospace;white-space:pre-wrap;margin:8px">${preview
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")}</pre>`;
+    const res = await window.apPos?.print?.receipt?.({
+      html,
+      text,
+      paperWidth: paperWidth.value,
+      silent: silent.value,
+      deviceName: printerName.value.trim() || undefined,
+      openDrawer: openDrawer.value,
+    });
+    if (res?.ok) {
+      message.value = res.message
+        ? `สั่งพิมพ์แล้ว · ${res.message}`
+        : "สั่งพิมพ์แล้ว — ดูที่เครื่องพิมพ์";
+    } else {
+      error.value = res?.message || "พิมพ์ทดสอบไม่สำเร็จ";
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "พิมพ์ทดสอบไม่สำเร็จ";
+  } finally {
+    testingPrint.value = false;
   }
 }
 
@@ -97,6 +223,16 @@ async function openAdmin() {
 function resetDefault() {
   apiBase.value = getDefaultApiBase();
   adminUrl.value = "";
+  paperWidth.value = "58mm";
+  autoPrint.value = true;
+  silent.value = true;
+  openDrawer.value = true;
+  headerText.value = "เอพี หมูสด ({สาขา})\nมาตรฐาน สะอาด ปลอดภัย";
+  footerHours.value = "เปิดบริการทุกวัน 09.00 - 20.00 น.";
+  footerPhones.value = "ติดต่อ 084 912 3509, 092 494 5442";
+  const hit = printers.value.find((p) => /xp-?58/i.test(p.name));
+  printerName.value = hit?.name ?? "XP-58C";
+  message.value = "โหลดค่าเริ่มต้นแล้ว — กดบันทึกเพื่อใช้";
 }
 
 function close() {
@@ -117,75 +253,195 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 </script>
 
 <template>
-  <div v-if="open" class="pay-overlay" @click.stop>
-    <div class="pay-modal pay-modal-compact pos-config-modal" @click.stop>
+  <div v-if="open" class="pay-overlay" @click.self="close">
+    <div
+      class="pay-modal pos-config-modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="pos-config-title"
+    >
       <header class="pay-head">
-        <h2>ตั้งค่าเครื่อง</h2>
-        <button type="button" class="pay-cancel-sm" @click="close">
-          ปิด Esc
+        <div>
+          <h2 id="pos-config-title">ตั้งค่าเครื่อง POS</h2>
+          <p class="pos-config-note">เครือข่าย · เครื่องพิมพ์ · ข้อความสลิป</p>
+        </div>
+        <button type="button" class="pay-x" aria-label="ปิด" @click="close">
+          ×
         </button>
       </header>
 
-      <p class="pos-config-note">
-        ตั้ง URL ของ API และหน้า Admin บนเครื่องนี้ · ไม่ต้อง build ใหม่
-      </p>
+      <nav class="pos-config-tabs" aria-label="หมวดตั้งค่า">
+        <button
+          type="button"
+          class="pos-config-tab"
+          :class="{ active: tab === 'network' }"
+          @click="tab = 'network'"
+        >
+          เครือข่าย
+        </button>
+        <button
+          type="button"
+          class="pos-config-tab"
+          :class="{ active: tab === 'printer' }"
+          @click="tab = 'printer'"
+        >
+          เครื่องพิมพ์
+        </button>
+        <button
+          type="button"
+          class="pos-config-tab"
+          :class="{ active: tab === 'slip' }"
+          @click="tab = 'slip'"
+        >
+          ข้อความสลิป
+        </button>
+      </nav>
 
-      <label class="pos-config-field">
-        <span>URL API</span>
-        <input
-          ref="apiInput"
-          v-model="apiBase"
-          class="ui-input"
-          type="url"
-          placeholder="http://192.168.1.10:3000"
-          autocomplete="off"
-          spellcheck="false"
-        />
-      </label>
+      <div class="pos-config-panel">
+        <section v-show="tab === 'network'" class="pos-config-section">
+          <label class="pos-config-field">
+            <span>API Base</span>
+            <input
+              ref="apiInput"
+              v-model="apiBase"
+              class="ui-input"
+              type="url"
+              placeholder="http://pos.chinthurakij.com:8123"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+          <label class="pos-config-field">
+            <span>Admin URL</span>
+            <input
+              v-model="adminUrl"
+              class="ui-input"
+              type="url"
+              placeholder="ว่างไว้ = เดาจาก API (พอร์ต 3100)"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+          <div class="pos-config-inline-actions">
+            <button
+              type="button"
+              class="pay-cancel"
+              :disabled="testing"
+              @click="testApi"
+            >
+              {{ testing ? "กำลังทดสอบ…" : "ทดสอบ API" }}
+            </button>
+            <button type="button" class="pay-cancel" @click="openAdmin">
+              เปิด Admin
+            </button>
+          </div>
+        </section>
 
-      <label class="pos-config-field">
-        <span>URL Admin (ไม่บังคับ)</span>
-        <input
-          v-model="adminUrl"
-          class="ui-input"
-          type="url"
-          placeholder="ว่างไว้ = เดาจาก API (พอร์ต 3100)"
-          autocomplete="off"
-          spellcheck="false"
-        />
-      </label>
+        <section v-show="tab === 'printer'" class="pos-config-section">
+          <label class="pos-config-field">
+            <span>ชื่อเครื่องพิมพ์ใน Windows</span>
+            <select v-model="printerName" class="ui-input">
+              <option value="">อัตโนมัติ (ชอบ XP-58 / ไม่ใช้ PDF)</option>
+              <option
+                v-for="p in printers"
+                :key="p.name"
+                :value="p.name"
+              >
+                {{ p.name }}{{ p.isDefault ? " (default)" : "" }}
+              </option>
+            </select>
+          </label>
+
+          <div class="pos-config-chips">
+            <span class="pos-config-chip-label">ความกว้าง</span>
+            <label class="pos-config-chip">
+              <input v-model="paperWidth" type="radio" value="58mm" />
+              58mm
+            </label>
+            <label class="pos-config-chip">
+              <input v-model="paperWidth" type="radio" value="80mm" />
+              80mm
+            </label>
+          </div>
+
+          <div class="pos-config-toggles">
+            <label class="pos-config-check">
+              <input v-model="autoPrint" type="checkbox" />
+              พิมพ์อัตโนมัติหลังชำระ
+            </label>
+            <label class="pos-config-check">
+              <input v-model="openDrawer" type="checkbox" />
+              เตะลิ้นชักก่อนพิมพ์ (ครั้งเดียว)
+            </label>
+          </div>
+
+          <div class="pos-config-inline-actions">
+            <button
+              type="button"
+              class="pay-cancel"
+              :disabled="testingPrint"
+              @click="testPrint"
+            >
+              {{ testingPrint ? "กำลังพิมพ์…" : "ทดสอบพิมพ์" }}
+            </button>
+          </div>
+          <p class="pos-config-hint">
+            ลำดับงาน: เตะลิ้นชัก 1 ครั้ง → พิมพ์สลิป · จัดซ้าย/กลาง/ขวาเต็มความกว้าง
+          </p>
+        </section>
+
+        <section v-show="tab === 'slip'" class="pos-config-section">
+          <label class="pos-config-field">
+            <span>หัวกระดาษ (หลายบรรทัด · ใช้ {"{สาขา}"} แทนชื่อสาขา)</span>
+            <textarea
+              v-model="headerText"
+              class="ui-input pos-config-textarea"
+              rows="4"
+              placeholder="เอพี หมูสด ({สาขา})&#10;มาตรฐาน สะอาด ปลอดภัย"
+              spellcheck="false"
+            />
+          </label>
+          <label class="pos-config-field">
+            <span>ท้ายสลิป — เวลาเปิดบริการ</span>
+            <input
+              v-model="footerHours"
+              class="ui-input"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+          <label class="pos-config-field">
+            <span>ท้ายสลิป — เบอร์ติดต่อ</span>
+            <input
+              v-model="footerPhones"
+              class="ui-input"
+              type="text"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </label>
+        </section>
+      </div>
 
       <div v-if="error" class="pay-warn">{{ error }}</div>
       <div v-else-if="message" class="pos-config-ok">{{ message }}</div>
 
       <footer class="pos-config-actions">
-        <button type="button" class="pay-cancel" @click="close">ปิด</button>
         <button type="button" class="pay-cancel" @click="resetDefault">
           ค่าเริ่มต้น
         </button>
-        <button
-          type="button"
-          class="pay-cancel"
-          :disabled="testing"
-          @click="testApi"
-        >
-          {{ testing ? "กำลังทดสอบ…" : "ทดสอบ API" }}
-        </button>
-        <button
-          type="button"
-          class="pay-cancel"
-          @click="openAdmin"
-        >
-          เปิด Admin
-        </button>
-        <button
-          type="button"
-          class="pay-confirm"
-          :disabled="saving"
-          @click="save"
-        >
-          {{ saving ? "กำลังบันทึก…" : "บันทึก" }}
-        </button>
+        <div class="pos-config-actions-right">
+          <button type="button" class="pay-cancel" @click="close">ปิด</button>
+          <button
+            type="button"
+            class="pay-confirm"
+            :disabled="saving"
+            @click="save"
+          >
+            {{ saving ? "กำลังบันทึก…" : "บันทึก" }}
+          </button>
+        </div>
       </footer>
     </div>
   </div>
@@ -193,54 +449,129 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 
 <style scoped>
 .pos-config-modal {
-  width: min(480px, 100%);
+  width: min(560px, 100%);
+  max-height: min(92vh, 920px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .pos-config-note {
   margin: 0;
-  font-size: 0.82rem;
-  font-weight: 600;
-  color: #78716c;
-  line-height: 1.4;
+  font-size: 13px;
+  opacity: 0.85;
+}
+
+.pos-config-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 0 4px;
+  margin-top: 4px;
+}
+
+.pos-config-tab {
+  border: 1px solid #d6d3d1;
+  background: #f5f5f4;
+  color: #44403c;
+  border-radius: 10px;
+  padding: 10px 8px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pos-config-tab.active {
+  background: #134e4a;
+  border-color: #0f766e;
+  color: #fff;
+}
+
+.pos-config-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin-top: 12px;
+  padding-right: 2px;
+}
+
+.pos-config-section {
+  display: grid;
+  gap: 4px;
 }
 
 .pos-config-field {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+  margin-top: 10px;
+  font-size: 13px;
 }
 
-.pos-config-field span {
-  font-size: 0.8rem;
+.pos-config-textarea {
+  resize: vertical;
+  min-height: 5rem;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+.pos-config-chips,
+.pos-config-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.pos-config-chip-label {
+  font-size: 13px;
   font-weight: 700;
-  color: #44403c;
+  margin-right: 4px;
 }
 
-.pos-config-field input {
-  width: 100%;
-  height: 40px;
-  border: 2px solid #a8a29e;
-  border-radius: 10px;
-  padding: 0 12px;
-  font: inherit;
-  font-weight: 600;
+.pos-config-chip,
+.pos-config-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.pos-config-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.pos-config-hint {
+  margin: 12px 0 0;
+  font-size: 12px;
+  opacity: 0.75;
+  line-height: 1.45;
 }
 
 .pos-config-ok {
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: #ecfdf5;
-  color: #047857;
-  font-weight: 700;
-  font-size: 0.85rem;
+  margin-top: 12px;
+  color: #166534;
+  font-size: 13px;
 }
 
 .pos-config-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid #e7e5e4;
 }
 
-.pos-config-actions .pay-confirm {
-  grid-column: 1 / -1;
+.pos-config-actions-right {
+  display: flex;
+  gap: 8px;
 }
 </style>

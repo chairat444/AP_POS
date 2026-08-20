@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { useSessionStore } from "../stores/session";
+import { useSettingsStore } from "../stores/settings";
 import {
   claimThisTerminal,
   loadBranches,
@@ -157,6 +158,9 @@ async function prepareOpen() {
   branches.value = list;
   branchId.value =
     list.find((b) => b.id === dev.branchId)?.id ?? list[0]?.id ?? "";
+  const current = list.find((b) => b.id === branchId.value);
+  useSettingsStore().setPromptPayId(current?.promptPayId ?? null);
+  useSettingsStore().setPromptPayName(current?.promptPayName ?? null);
   await reloadTerminals(dev.terminalId);
 
   const terminalOk = Boolean(

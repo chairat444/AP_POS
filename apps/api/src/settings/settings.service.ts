@@ -232,10 +232,21 @@ export class SettingsService implements OnModuleInit {
           parsed.bannerUrl == null || parsed.bannerUrl === ""
             ? null
             : String(parsed.bannerUrl),
+        midBannerUrl:
+          parsed.midBannerUrl == null || parsed.midBannerUrl === ""
+            ? null
+            : String(parsed.midBannerUrl),
         panelUrl:
           parsed.panelUrl == null || parsed.panelUrl === ""
             ? null
             : String(parsed.panelUrl),
+        promptPayId: (() => {
+          if (parsed.promptPayId === undefined) {
+            return DEFAULT_DISPLAY_CONFIG.promptPayId;
+          }
+          const d = String(parsed.promptPayId ?? "").replace(/\D/g, "");
+          return d || null;
+        })(),
       };
     } catch {
       return { ...DEFAULT_DISPLAY_CONFIG };
@@ -523,15 +534,26 @@ export class SettingsService implements OnModuleInit {
           : Boolean(dto.customerScreenEnabled),
       bannerUrl:
         dto.bannerUrl === undefined ? current.bannerUrl : dto.bannerUrl || null,
+      midBannerUrl:
+        dto.midBannerUrl === undefined
+          ? current.midBannerUrl
+          : dto.midBannerUrl || null,
       panelUrl:
         dto.panelUrl === undefined ? current.panelUrl : dto.panelUrl || null,
+      promptPayId:
+        dto.promptPayId === undefined
+          ? current.promptPayId
+          : (() => {
+              const d = String(dto.promptPayId ?? "").replace(/\D/g, "");
+              return d || null;
+            })(),
     };
     await this.upsert(DISPLAY_KEY, JSON.stringify(next));
     return this.get();
   }
 
   async setDisplayMedia(
-    slot: "banner" | "panel",
+    slot: "banner" | "midBanner" | "panel",
     filename: string,
   ): Promise<AppSettingsRecord> {
     mkdirSync(customerDisplayDir(), { recursive: true });
@@ -543,6 +565,12 @@ export class SettingsService implements OnModuleInit {
       }
       return this.updateDisplay({ bannerUrl: url });
     }
+    if (slot === "midBanner") {
+      if (current.midBannerUrl && current.midBannerUrl !== url) {
+        unlinkUpload(current.midBannerUrl);
+      }
+      return this.updateDisplay({ midBannerUrl: url });
+    }
     if (current.panelUrl && current.panelUrl !== url) {
       unlinkUpload(current.panelUrl);
     }
@@ -550,12 +578,16 @@ export class SettingsService implements OnModuleInit {
   }
 
   async clearDisplayMedia(
-    slot: "banner" | "panel",
+    slot: "banner" | "midBanner" | "panel",
   ): Promise<AppSettingsRecord> {
     const current = await this.getDisplay();
     if (slot === "banner") {
       unlinkUpload(current.bannerUrl);
       return this.updateDisplay({ bannerUrl: null });
+    }
+    if (slot === "midBanner") {
+      unlinkUpload(current.midBannerUrl);
+      return this.updateDisplay({ midBannerUrl: null });
     }
     unlinkUpload(current.panelUrl);
     return this.updateDisplay({ panelUrl: null });

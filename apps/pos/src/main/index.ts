@@ -232,9 +232,9 @@ function setupIpc() {
   ipcMain.handle("media:resolve", async (_e, url: string) => {
     return mediaCache.resolveCached(url) ?? null;
   });
-  ipcMain.handle("media:cache", async (_e, urls: string[]) => {
+  ipcMain.handle("media:cache", async (_e, urls: string[], force?: boolean) => {
     const list = Array.isArray(urls) ? urls.filter((u) => typeof u === "string") : [];
-    return mediaCache.cacheUrls(list);
+    return mediaCache.cacheUrls(list, 6, { force: Boolean(force) });
   });
 
   ipcMain.handle(
@@ -243,17 +243,21 @@ function setupIpc() {
       _e,
       req: {
         html: string;
+        text?: string;
         paperWidth?: "58mm" | "80mm";
         silent?: boolean;
         deviceName?: string;
+        openDrawer?: boolean;
       },
     ) => {
       return receiptPrint.printReceiptHtml({
         html: String(req?.html ?? ""),
+        text: typeof req?.text === "string" ? req.text : "",
         paperWidth: req?.paperWidth === "58mm" ? "58mm" : "80mm",
         silent: req?.silent !== false,
         deviceName:
           typeof req?.deviceName === "string" ? req.deviceName.trim() : "",
+        openDrawer: req?.openDrawer !== false,
       });
     },
   );
@@ -506,7 +510,8 @@ function createWindows() {
 
   cashierWindow.once("ready-to-show", () => {
     if (!cashierWindow || cashierWindow.isDestroyed()) return;
-    applyDefaultPosSize(cashierWindow, primary);
+    // เปิดมาเต็มจอทันที (คง title bar — ย่อ/ปิดได้)
+    fitWindowToDisplay(cashierWindow, primary);
     cashierWindow.show();
     cashierWindow.focus();
     if (process.platform === "darwin") registerDarwinStolenKeys();
@@ -583,24 +588,28 @@ function fitWindowToDisplay(
   if (!win.isMaximized()) win.maximize();
 }
 
-function ensureCustomerWindow(): BrowserWindow | null {
-  const target = resolveCustomerDisplay();
-  if (!target) {
-    closeCustomerWindow();
-    return null;
-  }
-
+function ensureCustomerWindow(
+  target: Electron.Display,
+  fullDisplay: boolean,
+): BrowserWindow | null {
   if (customerWindow && !customerWindow.isDestroyed()) {
-    fitWindowToDisplay(customerWindow, target);
+    if (fullDisplay) fitWindowToDisplay(customerWindow, target);
+    else fitCustomerWindowFloating(customerWindow, target);
     return customerWindow;
   }
 
   const iconPath = resolveAppIcon();
+  const bounds = fullDisplay
+    ? {
+        x: target.workArea.x,
+        y: target.workArea.y,
+        width: target.workArea.width,
+        height: target.workArea.height,
+      }
+    : floatingCustomerBounds(target);
+
   customerWindow = new BrowserWindow({
-    x: target.workArea.x,
-    y: target.workArea.y,
-    width: target.workArea.width,
-    height: target.workArea.height,
+    ...bounds,
     show: false,
     focusable: true,
     title: `${APP_NAME} — จอลูกค้า`,
@@ -628,7 +637,8 @@ function ensureCustomerWindow(): BrowserWindow | null {
 
   customerWindow.once("ready-to-show", () => {
     if (!customerWindow || customerWindow.isDestroyed()) return;
-    fitWindowToDisplay(customerWindow, target);
+    if (fullDisplay) fitWindowToDisplay(customerWindow, target);
+    else fitCustomerWindowFloating(customerWindow, target);
     customerWindow.showInactive();
   });
   customerWindow.webContents.on("did-finish-load", () => {
@@ -642,6 +652,39 @@ function ensureCustomerWindow(): BrowserWindow | null {
     customerWindow = null;
   });
   return customerWindow;
+}
+
+/** จอเดียว — เปิดหน้าต่างลูกค้ามุมขวา ไม่ทับจอแคชเชียร์เต็มจอ */
+function floatingCustomerBounds(display: Electron.Display) {
+  const { x, y, width, height } = display.workArea;
+  const w = Math.min(720, Math.max(420, Math.floor(width * 0.42)));
+  const h = Math.min(900, Math.max(560, Math.floor(height * 0.88)));
+  return {
+    x: Math.round(x + width - w - 16),
+    y: Math.round(y + Math.max(12, (height - h) / 2)),
+    width: w,
+    height: h,
+  };
+}
+
+function fitCustomerWindowFloating(
+  win: BrowserWindow,
+  display: Electron.Display,
+) {
+  try {
+    if (win.isFullScreen()) win.setFullScreen(false);
+    if (process.platform === "darwin" && win.isSimpleFullScreen()) {
+      win.setSimpleFullScreen(false);
+    }
+    if (win.isMaximized()) win.unmaximize();
+  } catch {
+    /* ignore */
+  }
+  try {
+    win.setBounds(floatingCustomerBounds(display));
+  } catch {
+    /* ignore */
+  }
 }
 
 /** มีจอที่ไม่ใช่จอหลัก (จอ 2) ต่ออยู่จริงหรือไม่ */
@@ -659,20 +702,19 @@ function resolveCustomerDisplay(): Electron.Display | null {
   return displays.find((d) => d.id !== primary.id) ?? null;
 }
 
-/** เปิด/ปิดจอลูกค้าตามตั้งค่า + การต่อจอจริง */
+/** เปิด/ปิดจอลูกค้าตามตั้งค่า — ไม่มีจอ 2 ก็เปิดหน้าต่างลอยบนจอหลัก */
 function syncCustomerScreen() {
-  if (forceQuit || !customerScreenWanted || !hasSecondaryDisplay()) {
+  if (forceQuit || !customerScreenWanted) {
     closeCustomerWindow();
     return;
   }
-  const target = resolveCustomerDisplay();
-  if (!target) {
-    closeCustomerWindow();
-    return;
-  }
-  const win = ensureCustomerWindow();
+  const secondary = resolveCustomerDisplay();
+  const target = secondary ?? screen.getPrimaryDisplay();
+  const fullDisplay = Boolean(secondary);
+  const win = ensureCustomerWindow(target, fullDisplay);
   if (win && !win.isDestroyed()) {
-    fitWindowToDisplay(win, target);
+    if (fullDisplay) fitWindowToDisplay(win, target);
+    else fitCustomerWindowFloating(win, target);
     if (!win.isVisible()) win.showInactive();
   }
 }

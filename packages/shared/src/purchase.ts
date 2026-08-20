@@ -78,7 +78,9 @@ export function parsePurchaseText(raw: string): ParsedPurchaseLine[] {
       continue;
     }
 
-    const hasMatch = name.match(/^(.*?)(มี\s*.+)$/u);
+    // "xxx มี3" / "มี 1 ครึ่ง" / "มี1ถาดครึ่ง"
+    // ต้องมีตัวเลขหลัง「มี」— กันตัดกลางชื่อเช่น เส้นบะหมี่ (ม+ี+่)
+    const hasMatch = name.match(/^(.*?)(มี\s*\d+(?:\.\d+)?.*)$/u);
     if (hasMatch && hasMatch[1].trim().length >= 2) {
       name = hasMatch[1].trim();
       note = hasMatch[2].trim();
@@ -118,5 +120,21 @@ export function normalizePurchaseKey(name: string) {
     .replace(/กาดขาว|ผักกาด/g, "ผักกาด")
     .replace(/เบคอล|เบคอน/g, "เบคอน")
     .replace(/ซอสหอย|ซอลหอย/g, "ซอสหอย")
-    .replace(/หมูหั่น|หมูสไลด์|เนื้อหมูสไลด์/g, "หมูสไลด์");
+    // หมูหั่น ≠ เนื้อหมูสไลด์ — รวมเฉพาะสไลด์
+    .replace(/เนื้อหมูสไลด์/g, "หมูสไลด์")
+    // น่องไก่ = สะโพกไก่ (สั่งอันเดียวกัน)
+    .replace(/สะโพกไก่|น่องสะโพกไก่|น่องสะโพก/g, "น่องไก่");
+}
+
+/** exact หรือคล้ายกันพอ (กันถ้วยใส่ชีสยืด ชน ชีสยืด) */
+export function purchaseKeysCompatible(a: string, b: string): "exact" | "fuzzy" | "none" {
+  const key = normalizePurchaseKey(a);
+  const ck = normalizePurchaseKey(b);
+  if (!key || !ck) return "none";
+  if (key === ck) return "exact";
+  const shorter = key.length <= ck.length ? key : ck;
+  const longer = key.length <= ck.length ? ck : key;
+  if (!longer.includes(shorter)) return "none";
+  if (shorter.length / longer.length < 0.72) return "none";
+  return "fuzzy";
 }

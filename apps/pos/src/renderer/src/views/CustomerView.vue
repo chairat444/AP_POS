@@ -21,6 +21,7 @@ const {
   storeTagline,
   logoUrl,
   customerBannerUrl,
+  customerMidBannerUrl,
   customerPanelUrl,
   customerAds,
   activeCustomerAds,
@@ -35,6 +36,12 @@ const bannerSrc = computed(() => {
     ? resolveImage(customerBannerUrl.value, "")
     : "";
 });
+const midBannerSrc = computed(() => {
+  void mediaCacheEpoch.value;
+  return customerMidBannerUrl.value
+    ? resolveImage(customerMidBannerUrl.value, "")
+    : "";
+});
 const panelSrc = computed(() => {
   void mediaCacheEpoch.value;
   return customerPanelUrl.value
@@ -42,6 +49,7 @@ const panelSrc = computed(() => {
     : "";
 });
 const hasBanner = computed(() => Boolean(bannerSrc.value));
+const hasMidBanner = computed(() => Boolean(midBannerSrc.value));
 const hasPanel = computed(() => Boolean(panelSrc.value));
 
 const emptyCart: CartSnapshot = {
@@ -55,6 +63,11 @@ const emptyCart: CartSnapshot = {
   pointsUsable: 0,
   pointsToEarn: 0,
   pointsDiscount: 0,
+  promptPayPayload: null,
+  promptPayQrDataUrl: null,
+  promptPayAmount: null,
+  promptPayName: null,
+  promptPayId: null,
 };
 
 const cart = ref<CartSnapshot>({ ...emptyCart });
@@ -76,21 +89,7 @@ const adsUnavailable = ref(false);
 const playlistKey = computed(() =>
   activeCustomerAds.value.map((a) => `${a.id}|${a.url}|${a.type}`).join(";"),
 );
-/** โฆษณาไม่ถูกเงินทอนบัง — เงินทอนแทนที่รูปด้านล่าง */
-const showAds = computed(
-  () =>
-    !isPaying.value &&
-    activeCustomerAds.value.length > 0 &&
-    !adsUnavailable.value,
-);
-/** รูปด้านล่าง — ซ่อนตอนมีเงินทอน/ขอบคุณทับตำแหน่ง */
-const showPanelMedia = computed(
-  () =>
-    !isPaying.value &&
-    hasPanel.value &&
-    !showChange.value &&
-    !showThanks.value,
-);
+/** โฆษณา / รูปล่าง นิยามหลัง showPromptPayQr */
 const memberLabel = computed(
   () => cart.value.memberName?.trim() || "ลูกค้าทั่วไป",
 );
@@ -123,6 +122,73 @@ const displayUsableDiscount = computed(() => {
 const paymentLines = computed(() => cart.value.paymentLines ?? []);
 const paidAmount = computed(() => Number(cart.value.paid) || 0);
 const remainingAmount = computed(() => Number(cart.value.remaining) || 0);
+const promptPayAmount = computed(() => Number(cart.value.promptPayAmount) || 0);
+const promptPayAccountName = computed(
+  () => String(cart.value.promptPayName || "").trim() || "",
+);
+const promptPayIdMasked = computed(() => {
+  const d = String(cart.value.promptPayId || "").replace(/\D/g, "");
+  if (d.length < 4) return "";
+  if (d.length === 13) {
+    return `${d.slice(0, 1)}-xxxx-xxxxx-${d.slice(-4, -1)}${d.slice(-1)}`;
+  }
+  const tail = d.slice(-4);
+  const head = d.slice(0, Math.min(3, d.length - 4));
+  return `${head}${"x".repeat(Math.max(0, d.length - head.length - 4))}${tail}`;
+});
+const promptPayPayload = computed(
+  () => String(cart.value.promptPayPayload || "").trim() || "",
+);
+const qrFromCart = computed(
+  () => String(cart.value.promptPayQrDataUrl || "").trim() || "",
+);
+const qrLocal = ref("");
+const qrDataUrl = computed(() => qrFromCart.value || qrLocal.value);
+const showPromptPayQr = computed(
+  () =>
+    isPaying.value &&
+    Boolean(qrDataUrl.value) &&
+    promptPayAmount.value > 0,
+);
+
+/** โฆษณา — ซ่อนเฉพาะตอนโอน PromptPay (QR) หรือสื่อพัง */
+const showAds = computed(
+  () =>
+    !showPromptPayQr.value &&
+    activeCustomerAds.value.length > 0 &&
+    !adsUnavailable.value,
+);
+/** รูปด้านล่าง — ซ่อนตอนชำระเงิน / เงินทอน / ขอบคุณ */
+const showPanelMedia = computed(
+  () =>
+    !isPaying.value &&
+    hasPanel.value &&
+    !showChange.value &&
+    !showThanks.value,
+);
+
+watch(
+  promptPayPayload,
+  async (payload) => {
+    if (!payload || qrFromCart.value) {
+      if (!payload) qrLocal.value = "";
+      return;
+    }
+    try {
+      const { toDataURL } = await import("qrcode");
+      qrLocal.value = await toDataURL(payload, {
+        errorCorrectionLevel: "M",
+        margin: 2,
+        width: 400,
+        color: { dark: "#000000", light: "#ffffff" },
+      });
+    } catch (err) {
+      console.error("[promptpay] customer QR failed", err);
+      qrLocal.value = "";
+    }
+  },
+  { immediate: true },
+);
 const payChangeAmount = computed(() =>
   isPaying.value ? Number(cart.value.change) || 0 : 0,
 );
@@ -136,7 +202,7 @@ const dots = computed(() => activeCustomerAds.value.length);
 let rotateTimer: ReturnType<typeof setTimeout> | null = null;
 let errorTimer: ReturnType<typeof setTimeout> | null = null;
 let retryAdsTimer: ReturnType<typeof setTimeout> | null = null;
-let settingsPollTimer: ReturnType<typeof setInterval> | null = null;
+let settingsPollTimer: number | null = null;
 let stopped = false;
 let errorStreak = 0;
 let playGen = 0;
@@ -212,7 +278,7 @@ async function playCurrentVideo(gen = playGen) {
 }
 
 async function showAdAt(index: number) {
-  if (stopped || adsUnavailable.value || isPaying.value) return;
+  if (stopped || adsUnavailable.value || showPromptPayQr.value) return;
   if (!activeCustomerAds.value.length) {
     unloadMedia();
     return;
@@ -267,7 +333,7 @@ async function showAdAt(index: number) {
 }
 
 async function advanceAd() {
-  if (stopped || adsUnavailable.value || isPaying.value) return;
+  if (stopped || adsUnavailable.value || showPromptPayQr.value) return;
   const list = activeCustomerAds.value;
   if (!list.length) return;
   if (list.length === 1) {
@@ -303,7 +369,7 @@ function scheduleMediaError() {
     retryAdsTimer = setTimeout(() => {
       adsUnavailable.value = false;
       errorStreak = 0;
-      if (playlistKey.value && !isPaying.value) void showAdAt(0);
+      if (playlistKey.value && !showPromptPayQr.value) void showAdAt(0);
     }, 8000);
     return;
   }
@@ -363,6 +429,23 @@ function applySnapshot(snapshot: CartSnapshot | null | undefined) {
       ? snapshot.paymentLines.map((l) => ({ ...l }))
       : [],
     postPaid: Boolean(snapshot.postPaid),
+    promptPayPayload: snapshot.promptPayPayload
+      ? String(snapshot.promptPayPayload)
+      : null,
+    promptPayQrDataUrl: snapshot.promptPayQrDataUrl
+      ? String(snapshot.promptPayQrDataUrl)
+      : null,
+    promptPayAmount:
+      snapshot.promptPayAmount != null &&
+      Number.isFinite(Number(snapshot.promptPayAmount))
+        ? Number(snapshot.promptPayAmount)
+        : null,
+    promptPayName: snapshot.promptPayName
+      ? String(snapshot.promptPayName).trim()
+      : null,
+    promptPayId: snapshot.promptPayId
+      ? String(snapshot.promptPayId).replace(/\D/g, "")
+      : null,
   };
 }
 
@@ -380,24 +463,24 @@ watch(playlistKey, (key) => {
   adsUnavailable.value = false;
   errorStreak = 0;
   clearRetryAdsTimer();
-  if (!key || isPaying.value) {
+  if (!key || showPromptPayQr.value) {
     unloadMedia();
     return;
   }
   void showAdAt(0);
 });
 
-watch(isPaying, (paying) => {
-  if (paying) {
+watch(showPromptPayQr, (on) => {
+  if (on) {
     unloadMedia();
     return;
   }
   if (playlistKey.value && !adsUnavailable.value) {
-    void showAdAt(0);
+    void showAdAt(mediaIndex.value || 0);
   }
 });
 
-/** เมื่อ DOM ของโฆษณาพร้อม (เช่น หลังปิดหน้าชำระ) ให้เล่นต่อ */
+/** เมื่อ DOM ของโฆษณาพร้อม (เช่น หลังปิด QR โอน) ให้เล่นต่อ */
 watch(showAds, (on) => {
   if (!on) return;
   if (!mediaSrc.value && playlistKey.value && !adsUnavailable.value) {
@@ -416,6 +499,7 @@ function applySettingsPayload(payload: unknown) {
     display?: {
       customerScreenEnabled?: boolean;
       bannerUrl?: string | null;
+      midBannerUrl?: string | null;
       panelUrl?: string | null;
     };
     branding?: {
@@ -464,7 +548,7 @@ async function hydrateSettings() {
   }
   const mediaSource = remote ?? cached;
   await ensureSettingsMediaCached(mediaSource);
-  if (playlistKey.value && !isPaying.value) void showAdAt(0);
+  if (playlistKey.value && !showPromptPayQr.value) void showAdAt(0);
 }
 
 onMounted(() => {
@@ -495,7 +579,7 @@ onMounted(() => {
       display: p?.display,
       customerAds: p?.customerAds as never,
     }).then(() => {
-      if (playlistKey.value && !isPaying.value) {
+      if (playlistKey.value && !showPromptPayQr.value) {
         void showAdAt(mediaIndex.value || 0);
       }
     });
@@ -543,57 +627,115 @@ onUnmounted(() => {
       'has-thanks': showThanks,
       'has-ads': showAds,
       'has-panel': showPanelMedia,
-      'has-banner': hasBanner,
+      'has-banner': hasBanner && !showPromptPayQr,
+      'has-mid-banner': hasMidBanner,
       'is-paying': isPaying,
+      'has-pp-qr': showPromptPayQr,
       'is-post-paid': isPostPaid,
     }"
   >
     <aside class="cust-brand">
-      <div v-if="hasBanner" class="cust-banner">
-        <img class="cust-banner__img" :src="bannerSrc" alt="" />
-      </div>
-      <div v-else class="cust-brand__top">
-        <img
-          class="cust-brand__logo"
-          :src="brandLogoSrc"
-          alt=""
-          width="96"
-          height="96"
-        />
-        <div>
-          <p class="cust-brand__name">{{ storeName }}</p>
-          <p class="cust-brand__tag">
-            {{ storeTagline || "ยินดีต้อนรับ" }}
-          </p>
+      <!-- โอน PromptPay: เอาแบนเนอร์บนออก เหลือพื้นที่ให้ QR -->
+      <template v-if="!showPromptPayQr">
+        <div v-if="hasBanner" class="cust-top-banner">
+          <img
+            class="cust-top-banner__img"
+            :key="bannerSrc"
+            :src="bannerSrc"
+            alt=""
+          />
         </div>
-      </div>
+        <div v-else class="cust-brand__top">
+          <img
+            class="cust-brand__logo"
+            :src="brandLogoSrc"
+            alt=""
+            width="96"
+            height="96"
+          />
+          <div>
+            <p class="cust-brand__name">{{ storeName }}</p>
+            <p class="cust-brand__tag">
+              {{ storeTagline || "ยินดีต้อนรับ" }}
+            </p>
+          </div>
+        </div>
+      </template>
 
       <div class="cust-brand__body">
-        <div v-if="isPaying" class="cust-pay">
-          <p class="cust-pay__title">กำลังชำระเงิน</p>
-          <div class="cust-pay__row">
-            <span>ชำระแล้ว</span>
-            <strong>{{ formatMoney(paidAmount) }}</strong>
-          </div>
-          <ul v-if="paymentLines.length" class="cust-pay__methods">
-            <li v-for="(p, i) in paymentLines" :key="`${p.method}-${i}`">
-              <span>{{ p.label }}</span>
-              <em>{{ formatMoney(p.amount) }}</em>
-            </li>
-          </ul>
+        <!-- โอน PromptPay: QR แทนโฆษณา -->
+        <template v-if="showPromptPayQr">
           <div
-            class="cust-pay__row cust-pay__remain"
-            :class="{ 'is-done': remainingAmount <= 0 }"
+            class="cust-ads cust-pay-qr"
+            aria-label="PromptPay QR"
           >
-            <span>{{ remainingAmount <= 0 ? "ครบยอดแล้ว" : "เหลือ" }}</span>
-            <strong>{{ formatMoney(remainingAmount) }}</strong>
-          </div>
-          <div v-if="payChangeAmount > 0" class="cust-pay__change">
-            <span>เงินทอน</span>
-            <strong>{{ formatMoney(payChangeAmount) }}</strong>
-          </div>
-        </div>
+            <div class="cust-pay-qr__card">
+              <header class="cust-pay-qr__head">
+                <span class="cust-pay-qr__badge" aria-hidden="true">PP</span>
+                <div class="cust-pay-qr__head-text">
+                  <strong>PromptPay</strong>
+                  <span>สแกนเพื่อชำระเงิน</span>
+                </div>
+              </header>
 
+              <div class="cust-pay-qr__meta cust-pay-qr__meta--top">
+                <span class="cust-pay-qr__amount-label">ยอดที่ต้องโอน</span>
+                <strong class="cust-pay-qr__amount">
+                  {{ formatMoney(promptPayAmount) }}
+                  <small>บาท</small>
+                </strong>
+                <div class="cust-pay-qr__account">
+                  <span>ชื่อบัญชี</span>
+                  <em>{{ promptPayAccountName || "—" }}</em>
+                </div>
+                <p v-if="promptPayIdMasked" class="cust-pay-qr__id">
+                  PromptPay {{ promptPayIdMasked }}
+                </p>
+              </div>
+
+              <div class="cust-pay-qr__frame">
+                <img
+                  class="cust-pay-qr__img"
+                  :src="qrDataUrl"
+                  alt="PromptPay QR"
+                  width="360"
+                  height="360"
+                />
+              </div>
+
+              <p class="cust-pay-qr__hint">
+                กรุณาตรวจสอบชื่อบัญชีให้ตรงก่อนยืนยันการโอน
+              </p>
+            </div>
+          </div>
+
+          <div class="cust-pay cust-pay--with-qr">
+            <p class="cust-pay__title">กำลังชำระเงิน</p>
+            <div class="cust-pay__row">
+              <span>ชำระแล้ว</span>
+              <strong>{{ formatMoney(paidAmount) }}</strong>
+            </div>
+            <ul v-if="paymentLines.length" class="cust-pay__methods">
+              <li v-for="(p, i) in paymentLines" :key="`${p.method}-${i}`">
+                <span>{{ p.label }}</span>
+                <em>{{ formatMoney(p.amount) }}</em>
+              </li>
+            </ul>
+            <div
+              class="cust-pay__row cust-pay__remain"
+              :class="{ 'is-done': remainingAmount <= 0 }"
+            >
+              <span>{{ remainingAmount <= 0 ? "ครบยอดแล้ว" : "เหลือ" }}</span>
+              <strong>{{ formatMoney(remainingAmount) }}</strong>
+            </div>
+            <div v-if="payChangeAmount > 0" class="cust-pay__change">
+              <span>เงินทอน</span>
+              <strong>{{ formatMoney(payChangeAmount) }}</strong>
+            </div>
+          </div>
+        </template>
+
+        <!-- ปกติ / ชำระเงินสดฯ — โฆษณายังเล่นได้ -->
         <template v-else>
           <div v-if="showAds" class="cust-ads" aria-hidden="true">
             <img
@@ -616,24 +758,34 @@ onUnmounted(() => {
               @ended="onVideoEnded"
               @error="onVideoError"
               @loadeddata="() => playCurrentVideo()"
-            />
+            ></video>
             <div v-if="dots > 1" class="cust-ads__dots">
               <span
                 v-for="(_, i) in dots"
                 :key="i"
                 class="cust-ads__dot"
                 :class="{ 'is-on': i === mediaIndex }"
-              />
+              ></span>
             </div>
           </div>
 
           <div
-            v-else-if="!showPanelMedia && !showChange && !showThanks"
+            v-else-if="!hasMidBanner && !showPanelMedia && !showChange && !showThanks && !isPaying"
             class="cust-welcome"
           >
             <p v-if="hasItems">กำลังคิดเงิน</p>
             <p v-else>ยินดีต้อนรับ</p>
             <span>{{ hasItems ? "โปรดตรวจสอบรายการด้านขวา" : "รอสแกนสินค้า" }}</span>
+          </div>
+
+          <div v-if="hasMidBanner" class="cust-mid-banner" aria-hidden="true">
+            <img
+              class="cust-mid-banner__img"
+              :key="midBannerSrc"
+              :src="midBannerSrc"
+              alt=""
+              decoding="async"
+            />
           </div>
 
           <div v-if="showChange" class="cust-change cust-change--panel">
@@ -649,7 +801,38 @@ onUnmounted(() => {
             <strong>ขอบคุณครับ</strong>
           </div>
           <div v-else-if="showPanelMedia" class="cust-panel" aria-hidden="true">
-            <img class="cust-panel__img" :src="panelSrc" alt="" decoding="async" />
+            <img
+              class="cust-panel__img"
+              :key="panelSrc"
+              :src="panelSrc"
+              alt=""
+              decoding="async"
+            />
+          </div>
+
+          <div v-if="isPaying" class="cust-pay">
+            <p class="cust-pay__title">กำลังชำระเงิน</p>
+            <div class="cust-pay__row">
+              <span>ชำระแล้ว</span>
+              <strong>{{ formatMoney(paidAmount) }}</strong>
+            </div>
+            <ul v-if="paymentLines.length" class="cust-pay__methods">
+              <li v-for="(p, i) in paymentLines" :key="`${p.method}-${i}`">
+                <span>{{ p.label }}</span>
+                <em>{{ formatMoney(p.amount) }}</em>
+              </li>
+            </ul>
+            <div
+              class="cust-pay__row cust-pay__remain"
+              :class="{ 'is-done': remainingAmount <= 0 }"
+            >
+              <span>{{ remainingAmount <= 0 ? "ครบยอดแล้ว" : "เหลือ" }}</span>
+              <strong>{{ formatMoney(remainingAmount) }}</strong>
+            </div>
+            <div v-if="payChangeAmount > 0" class="cust-pay__change">
+              <span>เงินทอน</span>
+              <strong>{{ formatMoney(payChangeAmount) }}</strong>
+            </div>
           </div>
         </template>
       </div>
@@ -694,9 +877,9 @@ onUnmounted(() => {
           <span class="cust-line__no">{{ i + 1 }}</span>
           <div class="cust-line__body">
             <strong>{{ line.name }}</strong>
-            <span>
-              {{ line.qty }} {{ line.unit }}
-              · {{ formatMoney(line.unitPrice) }}
+            <span class="cust-line__meta">
+              <em>{{ line.qty }} {{ line.unit }}</em>
+              <span>{{ formatMoney(line.unitPrice) }}</span>
             </span>
             <span v-if="line.discount > 0" class="cust-line__disc">
               ลดรายการ -{{ formatMoney(line.discount) }}

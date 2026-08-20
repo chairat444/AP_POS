@@ -101,15 +101,17 @@ contextBridge.exposeInMainWorld("apPos", {
       ipcRenderer.invoke("media:set-api-base", url) as Promise<boolean>,
     resolve: (url: string) =>
       ipcRenderer.invoke("media:resolve", url) as Promise<string | null>,
-    cache: (urls: string[]) =>
-      ipcRenderer.invoke("media:cache", urls) as Promise<Record<string, string>>,
+      cache: (urls: string[], force?: boolean) =>
+      ipcRenderer.invoke("media:cache", urls, force) as Promise<Record<string, string>>,
   },
   print: {
     receipt: (req: {
       html: string;
+      text?: string;
       paperWidth: "58mm" | "80mm";
       silent?: boolean;
       deviceName?: string;
+      openDrawer?: boolean;
     }) =>
       ipcRenderer.invoke("receipt:print", req) as Promise<{
         ok: boolean;

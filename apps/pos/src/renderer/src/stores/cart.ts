@@ -103,6 +103,11 @@ export const useCartStore = defineStore("cart", () => {
     remaining: number;
     change: number;
     lines: CartPaymentLine[];
+    promptPayPayload: string | null;
+    promptPayQrDataUrl: string | null;
+    promptPayAmount: number | null;
+    promptPayName: string | null;
+    promptPayId: string | null;
   } | null>(null);
 
   function clearLastChange() {
@@ -140,6 +145,11 @@ export const useCartStore = defineStore("cart", () => {
     remaining: number;
     change: number;
     lines: CartPaymentLine[];
+    promptPayPayload?: string | null;
+    promptPayQrDataUrl?: string | null;
+    promptPayAmount?: number | null;
+    promptPayName?: string | null;
+    promptPayId?: string | null;
   } | null) {
     if (!next) {
       if (!payProgress.value?.active) return;
@@ -153,6 +163,11 @@ export const useCartStore = defineStore("cart", () => {
       remaining: next.remaining,
       change: next.change,
       lines: next.lines.map((l) => ({ ...l })),
+      promptPayPayload: next.promptPayPayload ?? null,
+      promptPayQrDataUrl: next.promptPayQrDataUrl ?? null,
+      promptPayAmount: next.promptPayAmount ?? null,
+      promptPayName: next.promptPayName ?? null,
+      promptPayId: next.promptPayId ?? null,
     };
     publish();
   }
@@ -268,6 +283,11 @@ export const useCartStore = defineStore("cart", () => {
         remaining: 0,
         paymentLines: [],
         postPaid: true,
+        promptPayPayload: null,
+        promptPayQrDataUrl: null,
+        promptPayAmount: null,
+        promptPayName: null,
+        promptPayId: null,
       };
     }
     const usable = Math.max(
@@ -290,6 +310,11 @@ export const useCartStore = defineStore("cart", () => {
       remaining: payProgress.value?.remaining ?? 0,
       paymentLines: payProgress.value?.lines ?? [],
       postPaid: false,
+      promptPayPayload: payProgress.value?.promptPayPayload ?? null,
+      promptPayQrDataUrl: payProgress.value?.promptPayQrDataUrl ?? null,
+      promptPayAmount: payProgress.value?.promptPayAmount ?? null,
+      promptPayName: payProgress.value?.promptPayName ?? null,
+      promptPayId: payProgress.value?.promptPayId ?? null,
     };
   });
 
@@ -327,6 +352,11 @@ export const useCartStore = defineStore("cart", () => {
       remaining: s.remaining,
       paymentLines: (s.paymentLines ?? []).map((l) => ({ ...l })),
       postPaid: Boolean(s.postPaid),
+      promptPayPayload: s.promptPayPayload ?? null,
+      promptPayQrDataUrl: s.promptPayQrDataUrl ?? null,
+      promptPayAmount: s.promptPayAmount ?? null,
+      promptPayName: s.promptPayName ?? null,
+      promptPayId: s.promptPayId ?? null,
     };
     window.apPos?.publishCart(plain);
   }
@@ -900,6 +930,9 @@ export const useCartStore = defineStore("cart", () => {
     lastPointsEarned.value = earned;
 
     const members = useMembersStore();
+    const printerPromise = loadPrinterConfig();
+    const devicePromise = getDeviceConfig();
+
     if (memberId.value) {
       await members.adjustPoints(memberId.value, -pointsUsed + earned);
       const updated = members.findById(memberId.value);
@@ -916,26 +949,7 @@ export const useCartStore = defineStore("cart", () => {
       pointsEarned: earned,
       memberName: memberName.value,
     });
-    const device = await getDeviceConfig();
-    await enqueueSaleAndSync({
-      id: sale.id,
-      billNo: sale.billNo,
-      branchId: device.branchId,
-      terminalId: device.terminalId,
-      shiftId: session.shiftId,
-      customerId: memberId.value,
-      customerName: memberName.value,
-      subtotal: summary.value.subtotal,
-      discount: billDiscount.value,
-      total: payable,
-      paid: cashTendered || payable,
-      change,
-      pointsRedeemed: pointsUsed,
-      pointsEarned: earned,
-      createdAt: sale.at,
-      payments: normalized.map((p) => ({ ...p })),
-      lines: lines.value.map((line) => ({ ...line })),
-    });
+    const [device, printer] = await Promise.all([devicePromise, printerPromise]);
 
     paid.value = cashTendered || payable;
     lastPaymentMethod.value = normalized[normalized.length - 1]?.method ?? null;
@@ -980,14 +994,17 @@ export const useCartStore = defineStore("cart", () => {
       pointsToEarn: earned,
     });
 
-    // พิมพ์ใบเสร็จ (ไม่บล็อกการเคลียร์บิล)
+    // พิมพ์/เตะลิ้นชักทันที — ไม่รอบันทึก outbox
+    statusMessage.value = `${doneMsg} · กำลังพิมพ์…`;
     void (async () => {
       try {
-        const printer = await loadPrinterConfig();
-        if (!printer.autoPrint) return;
+        if (!printer.autoPrint) {
+          statusMessage.value = doneMsg;
+          return;
+        }
         const brand = useSettingsStore();
         const payload: ReceiptPayload = {
-          storeName: brand.storeName || "AP หมูสด",
+          storeName: brand.storeName || "เอพี หมูสด",
           branchName: device.branchName || "",
           tagline: brand.storeTagline || "มาตรฐาน สะอาด ปลอดภัย",
           billNo: sale.billNo,
@@ -1039,30 +1056,58 @@ export const useCartStore = defineStore("cart", () => {
           pointsEarned: earned,
           pointsBalance: pointsBalanceAfter,
           paperWidth: printer.paperWidth,
+          headerText: printer.headerText,
           footerHours: printer.footerHours,
           footerPhones: printer.footerPhones,
           appVersion: "AP Version 0.1.0",
         };
         const result = await printReceipt(payload, {
           silent: printer.silent,
-          preview: !printer.silent,
+          preview: false,
           deviceName: printer.printerName || undefined,
+          openDrawer: printer.openDrawer,
         });
         if (!result.ok) {
           statusMessage.value = `${doneMsg} · พิมพ์ไม่สำเร็จ${
             result.message ? `: ${result.message}` : ""
           }`;
         } else if (result.message) {
-          statusMessage.value = `${doneMsg} · ${result.message}`;
+          statusMessage.value = `${doneMsg} · พิมพ์แล้ว · ${result.message}`;
+        } else {
+          statusMessage.value = `${doneMsg} · พิมพ์แล้ว`;
         }
-      } catch {
-        /* ไม่ให้พิมพ์พังแล้วขายไม่ได้ */
+      } catch (e) {
+        statusMessage.value = `${doneMsg} · พิมพ์ผิดพลาด${
+          e instanceof Error ? `: ${e.message}` : ""
+        }`;
       }
     })();
 
+    // บันทึกบิลพื้นหลังคู่กับพิมพ์
+    void enqueueSaleAndSync({
+      id: sale.id,
+      billNo: sale.billNo,
+      branchId: device.branchId,
+      terminalId: device.terminalId,
+      shiftId: session.shiftId,
+      customerId: memberId.value,
+      customerName: memberName.value,
+      subtotal: snap.subtotal,
+      discount: billDiscount.value,
+      total: payable,
+      paid: cashTendered || payable,
+      change,
+      pointsRedeemed: pointsUsed,
+      pointsEarned: earned,
+      createdAt: sale.at,
+      payments: normalized.map((p) => ({ ...p })),
+      lines: receiptLines.map((line) => ({ ...line })),
+    }).catch(() => {
+      /* outbox จะ sync รอบถัดไป */
+    });
+
     payProgress.value = null;
     clearBill({ reason: "paid" });
-    statusMessage.value = doneMsg;
     publish();
     return true;
   }

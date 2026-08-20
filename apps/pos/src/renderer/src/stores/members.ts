@@ -1,11 +1,14 @@
 import { defineStore } from "pinia";
 import { ref } from "vue";
 import { searchMembers, type Member } from "../data/demo-members";
-import { loadCachedMembers, saveCachedMembers } from "../services/sync";
+import {
+  createMember as createMemberRemote,
+  loadCachedMembers,
+  saveCachedMembers,
+} from "../services/sync";
 
 export const useMembersStore = defineStore("members", () => {
   const members = ref<Member[]>([]);
-
 
   async function loadLocal() {
     members.value = await loadCachedMembers();
@@ -42,6 +45,19 @@ export const useMembersStore = defineStore("members", () => {
     await saveCachedMembers(members.value);
   }
 
+  async function create(input: {
+    name: string;
+    phone?: string;
+    points?: number;
+  }): Promise<Member> {
+    const created = await createMemberRemote(input);
+    const without = members.value.filter((m) => m.id !== created.id);
+    members.value = [...without, created].sort((a, b) =>
+      a.name.localeCompare(b.name, "th"),
+    );
+    return created;
+  }
+
   return {
     members,
     loadLocal,
@@ -50,5 +66,6 @@ export const useMembersStore = defineStore("members", () => {
     findById,
     adjustPoints,
     setPoints,
+    create,
   };
 });

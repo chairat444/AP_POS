@@ -11,7 +11,7 @@ export type ExpenseCategoryRecord = {
 
 export type ExpenseRecord = {
   id: string;
-  branchId: string;
+  branchId: string | null;
   categoryId: string;
   categoryName?: string;
   amount: number;
@@ -28,7 +28,7 @@ export type ExpenseRecord = {
 };
 
 export type UpsertExpenseDto = {
-  branchId: string;
+  branchId?: string | null;
   categoryId: string;
   amount: number;
   description?: string | null;

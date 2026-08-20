@@ -11,16 +11,23 @@ export const DEFAULT_POINTS_CONFIG: PointsConfig = {
 export type DisplayConfig = {
   /** เปิดจอลูกค้า (จอ 2) */
   customerScreenEnabled: boolean;
-  /** แบนเนอร์แทนโลโก้+ชื่อด้านบน */
+  /** แบนเนอร์ด้านบน แทนโลโก้+ชื่อ */
   bannerUrl: string | null;
+  /** แบนเนอร์กลาง ต่อจากโฆษณา ก่อนรูปด้านล่าง */
+  midBannerUrl: string | null;
   /** รูป/GIF ด้านล่างแทนข้อความยินดีต้อนรับ/กำลังคิดเงิน */
   panelUrl: string | null;
+  /** PromptPay (เบอร์ / เลขบัตร) — ว่าง = ไม่โชว์ QR */
+  promptPayId: string | null;
 };
 
 export const DEFAULT_DISPLAY_CONFIG: DisplayConfig = {
   customerScreenEnabled: true,
   bannerUrl: null,
+  midBannerUrl: null,
   panelUrl: null,
+  /** fallback เก่า — ใช้ค่าสาขาก่อน */
+  promptPayId: null,
 };
 
 export type PricingConfig = {
@@ -100,7 +107,9 @@ export type UpdatePointsDto = {
 export type UpdateDisplayDto = {
   customerScreenEnabled?: boolean;
   bannerUrl?: string | null;
+  midBannerUrl?: string | null;
   panelUrl?: string | null;
+  promptPayId?: string | null;
 };
 
 export type UpdatePricingDto = {

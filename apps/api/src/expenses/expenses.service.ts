@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
   OnModuleInit,
@@ -56,7 +57,7 @@ function toExpense(
 ): ExpenseRecord {
   return {
     id: row.id,
-    branchId: row.branchId,
+    branchId: row.branchId ?? null,
     categoryId: row.categoryId,
     categoryName,
     amount: num(row.amount),
@@ -98,10 +99,12 @@ export class ExpensesService implements OnModuleInit {
   }
 
   async createCategory(dto: UpsertExpenseCategoryDto) {
+    const name = dto.name?.trim();
+    if (!name) throw new BadRequestException("กรุณาใส่ชื่อประเภท");
     const id = `expcat-${randomUUID().slice(0, 8)}`;
     await this.database.db.insert(pg.expenseCategories).values({
       id,
-      name: dto.name.trim(),
+      name,
       sortOrder: dto.sortOrder ?? 100,
       posReason: dto.posReason?.trim() || null,
       active: dto.active === false ? 0 : 1,
@@ -148,6 +151,48 @@ export class ExpensesService implements OnModuleInit {
     return toCategory(next[0]!);
   }
 
+  async reorderCategories(ids: string[]) {
+    const unique = [...new Set(ids.map((id) => String(id || "").trim()).filter(Boolean))];
+    if (!unique.length) throw new BadRequestException("ไม่มีรายการให้เรียง");
+    let i = 0;
+    for (const id of unique) {
+      i += 1;
+      await this.database.db
+        .update(pg.expenseCategories)
+        .set({ sortOrder: i * 10, updatedAt: now() })
+        .where(
+          and(eq(pg.expenseCategories.id, id), isNull(pg.expenseCategories.deletedAt)),
+        );
+    }
+    return this.listCategories(true);
+  }
+
+  async removeCategory(id: string) {
+    const rows = await this.database.db
+      .select()
+      .from(pg.expenseCategories)
+      .where(
+        and(eq(pg.expenseCategories.id, id), isNull(pg.expenseCategories.deletedAt)),
+      )
+      .limit(1);
+    if (!rows[0]) throw new NotFoundException("ไม่พบหมวดค่าใช้จ่าย");
+    const used = await this.database.db
+      .select({ id: pg.expenses.id })
+      .from(pg.expenses)
+      .where(and(eq(pg.expenses.categoryId, id), isNull(pg.expenses.deletedAt)))
+      .limit(1);
+    if (used[0]) {
+      throw new BadRequestException(
+        "ยังมีรายการใช้หมวดนี้ — ปิดการใช้งานแทนได้",
+      );
+    }
+    await this.database.db
+      .update(pg.expenseCategories)
+      .set({ deletedAt: now(), updatedAt: now(), active: 0 })
+      .where(eq(pg.expenseCategories.id, id));
+    return { id };
+  }
+
   async list(opts: {
     from?: string;
     to?: string;
@@ -159,7 +204,11 @@ export class ExpensesService implements OnModuleInit {
     const catMap = new Map(cats.categories.map((c) => [c.id, c.name]));
 
     const conds = [isNull(pg.expenses.deletedAt)];
-    if (opts.branchId) conds.push(eq(pg.expenses.branchId, opts.branchId));
+    if (opts.branchId === "shared") {
+      conds.push(isNull(pg.expenses.branchId));
+    } else if (opts.branchId) {
+      conds.push(eq(pg.expenses.branchId, opts.branchId));
+    }
     if (opts.categoryId) conds.push(eq(pg.expenses.categoryId, opts.categoryId));
     if (opts.paidFrom === "drawer" || opts.paidFrom === "external") {
       conds.push(eq(pg.expenses.paidFrom, opts.paidFrom));
@@ -183,11 +232,14 @@ export class ExpensesService implements OnModuleInit {
   }
 
   async create(dto: UpsertExpenseDto) {
+    if (!dto.categoryId?.trim()) {
+      throw new BadRequestException("กรุณาเลือกประเภทค่าใช้จ่าย");
+    }
     const id = `exp-${randomUUID().slice(0, 10)}`;
     const spentAt = dto.spentAt ? new Date(dto.spentAt) : now();
     await this.database.db.insert(pg.expenses).values({
       id,
-      branchId: dto.branchId,
+      branchId: dto.branchId?.trim() || null,
       categoryId: dto.categoryId,
       amount: String(Math.max(0, num(dto.amount))),
       description: dto.description?.trim() || null,
@@ -219,7 +271,10 @@ export class ExpensesService implements OnModuleInit {
     await this.database.db
       .update(pg.expenses)
       .set({
-        branchId: dto.branchId ?? cur.branchId,
+        branchId:
+          dto.branchId === undefined
+            ? cur.branchId
+            : dto.branchId?.trim() || null,
         categoryId: dto.categoryId ?? cur.categoryId,
         amount:
           dto.amount == null ? cur.amount : String(Math.max(0, num(dto.amount))),
@@ -468,7 +523,7 @@ export class ExpensesService implements OnModuleInit {
       cur.count += 1;
       byCategoryMap.set(key, cur);
 
-      const br = ensureBranch(e.branchId);
+      const br = ensureBranch(e.branchId || "shared");
       br.expenseTotal += e.amount;
       if (e.paidFrom === "drawer") br.expenseDrawer += e.amount;
       else br.expenseExternal += e.amount;
@@ -511,8 +566,8 @@ export class ExpensesService implements OnModuleInit {
       }
     }
 
-    const branchIds = [...byBranchMap.keys()];
-    const branchNameMap = new Map<string, string>();
+    const branchIds = [...byBranchMap.keys()].filter((id) => id !== "shared");
+    const branchNameMap = new Map<string, string>([["shared", "กลาง"]]);
     if (branchIds.length) {
       const branchRows = await this.database.db
         .select({

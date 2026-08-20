@@ -113,7 +113,7 @@ function collectMediaUrls(snapshot) {
     if (abs) urls.add(abs);
   }
   const display = snapshot.settings?.display ?? {};
-  for (const key of ["bannerUrl", "panelUrl"]) {
+  for (const key of ["bannerUrl", "midBannerUrl", "panelUrl"]) {
     const abs = toAbsoluteMediaUrl(display[key]);
     if (abs) urls.add(abs);
   }
@@ -202,9 +202,12 @@ async function main() {
     branches: branches.branches ?? [],
     terminals: (terminals.terminals ?? []).filter((t) => t.active !== false),
     printer: {
-      paperWidth: "80mm",
+      paperWidth: "58mm",
       autoPrint: true,
       silent: true,
+      printerName: "XP-58C",
+      openDrawer: true,
+      headerText: "เอพี หมูสด ({สาขา})\nมาตรฐาน สะอาด ปลอดภัย",
       footerHours: "เปิดบริการทุกวัน 09.00 - 20.00 น.",
       footerPhones: "ติดต่อ 084 912 3509, 092 494 5442",
     },

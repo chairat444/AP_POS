@@ -8,4 +8,5 @@ export * from "./keybindings";
 export * from "./commission";
 export * from "./pricing";
 export * from "./purchase";
+export * from "./promptpay";
 

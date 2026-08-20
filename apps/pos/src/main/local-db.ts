@@ -250,6 +250,8 @@ export type OfflineSeedSnapshot = {
     autoPrint?: boolean;
     silent?: boolean;
     printerName?: string;
+    openDrawer?: boolean;
+    headerText?: string;
     footerHours?: string;
     footerPhones?: string;
   };

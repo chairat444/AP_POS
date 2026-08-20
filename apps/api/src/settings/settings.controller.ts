@@ -109,6 +109,26 @@ export class SettingsController {
     return this.settings.clearDisplayMedia("banner");
   }
 
+  @Post("display/mid-banner")
+  @UseInterceptors(customerDisplayUpload())
+  uploadMidBanner(@UploadedFile() file: Express.Multer.File) {
+    if (!file) throw new BadRequestException("ไม่พบไฟล์");
+    if (file.size > CUSTOMER_DISPLAY_IMAGE_MAX_BYTES) {
+      try {
+        unlinkSync(file.path);
+      } catch {
+        /* ignore */
+      }
+      throw new BadRequestException("ไฟล์ต้องไม่เกิน 8MB");
+    }
+    return this.settings.setDisplayMedia("midBanner", file.filename);
+  }
+
+  @Delete("display/mid-banner")
+  clearMidBanner() {
+    return this.settings.clearDisplayMedia("midBanner");
+  }
+
   @Post("display/panel")
   @UseInterceptors(customerDisplayUpload())
   uploadPanel(@UploadedFile() file: Express.Multer.File) {

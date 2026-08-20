@@ -22,6 +22,7 @@ import {
   type SyncedShiftPayload,
 } from "../services/sync";
 import type { PaymentMethod } from "./cart";
+import { useSettingsStore } from "./settings";
 
 let cachedDevice: {
   branchId: string;
@@ -251,6 +252,8 @@ export const useSessionStore = defineStore("session", () => {
     const next = await setDeviceBranch({ id: branch.id, name: branch.name });
     cachedDevice = next;
     device.value = next;
+    useSettingsStore().setPromptPayId(branch.promptPayId ?? null);
+    useSettingsStore().setPromptPayName(branch.promptPayName ?? null);
     return next;
   }
 

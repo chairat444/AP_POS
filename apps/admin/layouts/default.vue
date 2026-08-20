@@ -25,7 +25,34 @@ async function loadBranding() {
   }
 }
 
-onMounted(loadBranding);
+const SIDEBAR_KEY = "ap-admin-sidebar-collapsed";
+
+function readCollapsed() {
+  try {
+    return localStorage.getItem(SIDEBAR_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+const collapsed = ref(import.meta.client ? readCollapsed() : false);
+
+function persistCollapsed() {
+  try {
+    localStorage.setItem(SIDEBAR_KEY, collapsed.value ? "1" : "0");
+  } catch {
+    /* ignore */
+  }
+}
+
+function toggleSidebar() {
+  collapsed.value = !collapsed.value;
+  persistCollapsed();
+}
+
+onMounted(() => {
+  void loadBranding();
+});
 watch(() => route.path, (p) => {
   if (p.startsWith("/settings")) void loadBranding();
 });
@@ -93,6 +120,7 @@ const groups: NavGroup[] = [
       { to: "/members/points", label: "ประวัติแต้ม", icon: "coin" },
       { to: "/staff", label: "พนักงาน", icon: "badge" },
       { to: "/expenses", label: "ค่าใช้จ่าย", icon: "coin" },
+      { to: "/expenses/categories", label: "ประเภทค่าใช้จ่าย", icon: "tag" },
       { to: "/purchases", label: "รายการซื้อของ", icon: "box" },
     ],
   },
@@ -133,7 +161,13 @@ const crumb = computed(() => {
 function isActive(to: string, exact = false) {
   if (exact || to === "/") return route.path === to;
   // กัน /members ไฮไลต์ตอนอยู่ /members/points
-  if (to === "/products" || to === "/reports" || to === "/members") {
+  if (
+    to === "/products" ||
+    to === "/reports" ||
+    to === "/members" ||
+    to === "/expenses" ||
+    to === "/purchases"
+  ) {
     return route.path === to;
   }
   return route.path === to || route.path.startsWith(`${to}/`);
@@ -143,8 +177,16 @@ function isGroupActive(group: NavGroup) {
   return group.items.some((i) => isActive(i.to, i.exact));
 }
 
-/** เปิดได้ทีละกลุ่ม (accordion) */
+/** เปิดได้ทีละกลุ่ม (accordion) — ถ้า sidebar ยุบอยู่ ให้ขยายก่อน */
 function toggleGroup(id: string) {
+  if (collapsed.value) {
+    collapsed.value = false;
+    persistCollapsed();
+    openGroups.value = Object.fromEntries(
+      groups.map((g) => [g.id, g.id === id]),
+    );
+    return;
+  }
   const nextOpen = !openGroups.value[id];
   openGroups.value = Object.fromEntries(
     groups.map((g) => [g.id, nextOpen && g.id === id]),
@@ -169,7 +211,7 @@ async function onLogout() {
 </script>
 
 <template>
-  <div class="ui-shell">
+  <div class="ui-shell" :class="{ 'is-collapsed': collapsed }">
     <aside class="ui-sidebar">
       <div class="ui-sidebar__brand">
         <NuxtLink to="/" class="ui-sidebar__brand-link" :title="displayName">
@@ -187,6 +229,16 @@ async function onLogout() {
             }}</span>
           </div>
         </NuxtLink>
+        <button
+          type="button"
+          class="ui-sidebar__collapse"
+          :title="collapsed ? 'ขยายเมนู' : 'ยุบเมนู'"
+          :aria-label="collapsed ? 'ขยายเมนู' : 'ยุบเมนู'"
+          :aria-expanded="!collapsed"
+          @click="toggleSidebar"
+        >
+          <span aria-hidden="true">{{ collapsed ? "»" : "«" }}</span>
+        </button>
       </div>
 
       <nav class="ui-sidebar__nav">

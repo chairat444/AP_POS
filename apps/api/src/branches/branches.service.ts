@@ -4,10 +4,14 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { and, asc, eq, isNull } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
 import { pg } from "@ap-pos/db";
 import { DatabaseService } from "../db/database.service";
-import type { BranchRecord, UpsertBranchDto } from "./branch.types";
+import {
+  normalizeBranchPromptPayId,
+  normalizeBranchPromptPayName,
+  type BranchRecord,
+  type UpsertBranchDto,
+} from "./branch.types";
 
 function now() {
   return new Date();
@@ -19,6 +23,8 @@ function toRecord(row: typeof pg.branches.$inferSelect): BranchRecord {
     code: row.code,
     name: row.name,
     active: Boolean(row.active),
+    promptPayId: normalizeBranchPromptPayId(row.promptPayId),
+    promptPayName: normalizeBranchPromptPayName(row.promptPayName),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -84,6 +90,8 @@ export class BranchesService {
       code,
       name: dto.name.trim(),
       active: dto.active === false ? 0 : 1,
+      promptPayId: normalizeBranchPromptPayId(dto.promptPayId),
+      promptPayName: normalizeBranchPromptPayName(dto.promptPayName),
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -111,6 +119,14 @@ export class BranchesService {
         name: dto.name?.trim() ?? current.name,
         active:
           dto.active == null ? (current.active ? 1 : 0) : dto.active ? 1 : 0,
+        promptPayId:
+          dto.promptPayId === undefined
+            ? current.promptPayId
+            : normalizeBranchPromptPayId(dto.promptPayId),
+        promptPayName:
+          dto.promptPayName === undefined
+            ? current.promptPayName
+            : normalizeBranchPromptPayName(dto.promptPayName),
         updatedAt: now(),
       })
       .where(eq(pg.branches.id, id));

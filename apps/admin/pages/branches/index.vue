@@ -6,18 +6,24 @@ type Branch = {
   code: string;
   name: string;
   active: boolean;
+  promptPayId?: string | null;
+  promptPayName?: string | null;
 };
 
 type BranchForm = {
   code: string;
   name: string;
   active: boolean;
+  promptPayId: string;
+  promptPayName: string;
 };
 
 const emptyForm = (): BranchForm => ({
   code: "",
   name: "",
   active: true,
+  promptPayId: "",
+  promptPayName: "",
 });
 
 const { get, post, patch, del } = useAdminApi();
@@ -88,6 +94,8 @@ function openEdit(row: Branch) {
     code: row.code,
     name: row.name,
     active: row.active,
+    promptPayId: String(row.promptPayId || "").replace(/\D/g, ""),
+    promptPayName: String(row.promptPayName || "").trim(),
   };
   modalOpen.value = true;
 }
@@ -108,6 +116,8 @@ async function save() {
       code: form.value.code.trim() || undefined,
       name: form.value.name.trim(),
       active: form.value.active,
+      promptPayId: form.value.promptPayId.replace(/\D/g, "") || null,
+      promptPayName: form.value.promptPayName.trim() || null,
     };
     if (editingId.value) {
       await patch(`/branches/${editingId.value}`, body);
@@ -160,7 +170,7 @@ onMounted(load);
       <div>
         <h1 class="ui-page-title">สาขา</h1>
         <p class="ui-page-sub">
-          จัดการสาขาสำหรับ POS · พนักงานใช้ได้ทุกสาขา (เลือกสาขาตอนเปิดรอบ)
+          จัดการสาขาสำหรับ POS · ตั้ง PromptPay รับเงินแยกตามสาขา · พนักงานเลือกสาขาตอนเปิดรอบ
         </p>
       </div>
       <div class="ui-page-head__actions">
@@ -201,6 +211,8 @@ onMounted(load);
             <tr>
               <th>รหัส</th>
               <th>ชื่อสาขา</th>
+              <th>PromptPay</th>
+              <th>ชื่อบัญชี</th>
               <th>สถานะ</th>
               <th class="ui-table__actions">จัดการ</th>
             </tr>
@@ -209,6 +221,8 @@ onMounted(load);
             <tr v-for="row in pageRows" :key="row.id">
               <td>{{ row.code }}</td>
               <td>{{ row.name }}</td>
+              <td>{{ row.promptPayId || "—" }}</td>
+              <td>{{ row.promptPayName || "—" }}</td>
               <td>{{ row.active ? "ใช้งาน" : "ปิด" }}</td>
               <td class="ui-table__actions">
                 <button type="button" class="ui-btn ui-btn--ghost" @click="openEdit(row)">
@@ -251,6 +265,35 @@ onMounted(load);
             <label class="ui-field">
               <span>ชื่อสาขา *</span>
               <input v-model="form.name" class="ui-input" type="text" />
+            </label>
+            <label class="ui-field">
+              <span>PromptPay รับเงิน</span>
+              <input
+                v-model="form.promptPayId"
+                class="ui-input"
+                type="text"
+                inputmode="numeric"
+                maxlength="15"
+                placeholder="เช่น 0849123509"
+                autocomplete="off"
+              />
+              <small class="ui-field-hint">
+                เบอร์หรือเลขบัตร · ว่าง = ไม่โชว์ QR บนจอลูกค้า
+              </small>
+            </label>
+            <label class="ui-field">
+              <span>ชื่อเจ้าของบัญชี PromptPay</span>
+              <input
+                v-model="form.promptPayName"
+                class="ui-input"
+                type="text"
+                maxlength="80"
+                placeholder="เช่น สมชาย ใจดี"
+                autocomplete="off"
+              />
+              <small class="ui-field-hint">
+                ชื่อบุคคลที่โชว์ใต้ QR บนจอลูกค้า
+              </small>
             </label>
             <label class="ui-field ui-field--check">
               <input v-model="form.active" type="checkbox" />

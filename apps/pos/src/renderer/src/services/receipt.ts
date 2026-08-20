@@ -6,19 +6,29 @@ export type PrinterConfig = {
   paperWidth: PaperWidth;
   /** พิมพ์อัตโนมัติหลังชำระ */
   autoPrint: boolean;
-  /** true = ไม่โชว์ไดอะล็อก */
+  /** true = ไม่โชว์ไดอะล็อก (fallback Electron) */
   silent: boolean;
-  /** ชื่อเครื่องพิมพ์ใน OS (จาก Admin) — ว่าง = default */
+  /** ชื่อเครื่องพิมพ์ใน OS — ว่าง = เดา XP-58 */
   printerName: string;
+  /** เตะลิ้นชักตอนพิมพ์ */
+  openDrawer: boolean;
+  /**
+   * ข้อความหัวกระดาษ (หลายบรรทัดได้)
+   * ว่าง = ใช้ชื่อร้าน + สาขา + คำโปรยจากตั้งค่าร้าน
+   */
+  headerText: string;
   footerHours: string;
   footerPhones: string;
 };
 
 export const DEFAULT_PRINTER_CONFIG: PrinterConfig = {
-  paperWidth: "80mm",
+  paperWidth: "58mm",
   autoPrint: true,
   silent: true,
   printerName: "",
+  openDrawer: true,
+  /** {สาขา} = ชื่อสาขาเครื่องตอนพิมพ์ */
+  headerText: "เอพี หมูสด ({สาขา})\nมาตรฐาน สะอาด ปลอดภัย",
   footerHours: "เปิดบริการทุกวัน 09.00 - 20.00 น.",
   footerPhones: "ติดต่อ 084 912 3509, 092 494 5442",
 };
@@ -49,6 +59,8 @@ export type ReceiptPayload = {
   storeName: string;
   branchName: string;
   tagline: string;
+  /** หัวกระดาษกำหนดเอง (หลายบรรทัด) — ถ้าว่างใช้ store/branch/tagline */
+  headerText?: string;
   billNo: string;
   at: string;
   lines: ReceiptLine[];
@@ -81,11 +93,26 @@ export function normalizePrinterConfig(
     raw?.paperWidth === "58mm" || raw?.paperWidth === "80mm"
       ? raw.paperWidth
       : DEFAULT_PRINTER_CONFIG.paperWidth;
+  const headerRaw = raw?.headerText;
+  let headerText =
+    headerRaw === undefined || headerRaw === null
+      ? DEFAULT_PRINTER_CONFIG.headerText
+      : String(headerRaw).replace(/\r\n/g, "\n").trimEnd();
+  // อัปเกรดค่าเก่าที่ไม่มีชื่อสาขา
+  if (
+    !headerText ||
+    headerText === "AP หมูสด\nมาตรฐาน สะอาด ปลอดภัย" ||
+    headerText === "เอพี หมูสด\nมาตรฐาน สะอาด ปลอดภัย"
+  ) {
+    headerText = DEFAULT_PRINTER_CONFIG.headerText;
+  }
   return {
     paperWidth,
     autoPrint: raw?.autoPrint !== false,
     silent: raw?.silent !== false,
     printerName: String(raw?.printerName ?? "").trim(),
+    openDrawer: raw?.openDrawer !== false,
+    headerText,
     footerHours:
       String(raw?.footerHours ?? "").trim() ||
       DEFAULT_PRINTER_CONFIG.footerHours,
@@ -136,6 +163,234 @@ function money(n: number) {
   });
 }
 
+function moneyPlain(n: number) {
+  return Number(n).toFixed(2);
+}
+
+function chars(s: string) {
+  return Array.from(String(s ?? ""));
+}
+
+function clip(s: string, max: number) {
+  const a = chars(s);
+  if (a.length <= max) return a.join("");
+  if (max <= 1) return a.slice(0, max).join("");
+  return `${a.slice(0, max - 1).join("")}…`;
+}
+
+function padCenter(s: string, width: number) {
+  const a = chars(s);
+  if (a.length >= width) return a.slice(0, width).join("");
+  const left = Math.floor((width - a.length) / 2);
+  return `${" ".repeat(left)}${a.join("")}`;
+}
+
+function pairLine(left: string, right: string, width: number) {
+  const r = chars(right).join("");
+  const maxL = Math.max(0, width - r.length - 1);
+  const l = clip(left, maxL);
+  const gap = Math.max(1, width - chars(l).length - r.length);
+  return `${l}${" ".repeat(gap)}${r}`;
+}
+
+function dashLine(width: number) {
+  return "-".repeat(width);
+}
+
+/** แถวสลิปสำหรับจัดซ้าย/กลาง/ขวาตอนพิมพ์ GDI */
+export type ReceiptRow =
+  | { a: "c"; t: string }
+  | { a: "l"; t: string }
+  | { a: "lr"; l: string; r: string }
+  | { a: "s" };
+
+function formatThaiDateTimePlain(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${dd}/${mm}/${yyyy} ${hh}:${mi}`;
+}
+
+function formatThaiDatePlain(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+/** แทนที่ {สาขา} ด้วยชื่อสาขาเครื่อง */
+function expandHeaderLines(
+  headerText: string | undefined,
+  payload: Pick<ReceiptPayload, "storeName" | "branchName" | "tagline">,
+): string[] {
+  const branch = String(payload.branchName ?? "").trim();
+  const custom = String(headerText ?? "")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((line) => {
+      let t = line;
+      if (!branch) {
+        t = t
+          .replace(/\s*\(\s*\{สาขา\}\s*\)/g, "")
+          .replace(/\s*\(\s*\{branch\}\s*\)/g, "");
+      }
+      t = t
+        .replaceAll("{สาขา}", branch)
+        .replaceAll("{branch}", branch)
+        .replace(/\(\s*\)/g, "")
+        .replace(/[ \t]{2,}/g, " ")
+        .trim();
+      return t;
+    })
+    .filter(Boolean);
+
+  if (custom.length) return custom;
+
+  const storeLine = branch
+    ? `${payload.storeName} (${branch})`
+    : payload.storeName;
+  const lines = [storeLine];
+  if (payload.tagline) lines.push(payload.tagline);
+  return lines;
+}
+
+/** โครงสลิป — ซ้าย / กลาง / ขวา (ตัวเลขอยู่ขวา) */
+export function buildReceiptRows(payload: ReceiptPayload): ReceiptRow[] {
+  const when = formatThaiDateTimePlain(payload.at);
+  const day = formatThaiDatePlain(payload.at);
+  const rows: ReceiptRow[] = [];
+
+  for (const h of expandHeaderLines(payload.headerText, payload)) {
+    rows.push({ a: "c", t: h });
+  }
+  rows.push({ a: "s" });
+  rows.push({ a: "lr", l: "บิล", r: payload.billNo });
+  rows.push({ a: "lr", l: "วันที่", r: when });
+  rows.push({ a: "s" });
+
+  for (const line of payload.lines) {
+    rows.push({ a: "lr", l: line.name, r: moneyPlain(line.lineTotal) });
+    if (line.qty !== 1 || line.promoHint) {
+      rows.push({
+        a: "l",
+        t: `  ${Number(line.qty).toFixed(2)} x ${moneyPlain(line.unitPrice)}`,
+      });
+    }
+    if (line.promoHint) rows.push({ a: "l", t: `  ${line.promoHint}` });
+    if (line.discount && line.discount > 0) {
+      rows.push({
+        a: "lr",
+        l: "  ลดรายการ",
+        r: `-${moneyPlain(line.discount)}`,
+      });
+    }
+  }
+
+  rows.push({ a: "s" });
+  rows.push({
+    a: "lr",
+    l: `รายการ ${payload.itemCount}`,
+    r: moneyPlain(payload.subtotal),
+  });
+
+  for (const p of payload.promos) {
+    if (p.discount > 0) {
+      rows.push({
+        a: "lr",
+        l: `โปร (${p.label})`,
+        r: `-${moneyPlain(p.discount)}`,
+      });
+    }
+  }
+  if (payload.pointsDiscount > 0) {
+    rows.push({
+      a: "lr",
+      l: "ส่วนลดแต้ม",
+      r: `-${moneyPlain(payload.pointsDiscount)}`,
+    });
+  }
+  rows.push({ a: "lr", l: "รวมทั้งสิ้น", r: moneyPlain(payload.total) });
+  rows.push({ a: "s" });
+
+  for (const p of payload.payments) {
+    rows.push({ a: "lr", l: p.label, r: moneyPlain(p.amount) });
+  }
+  if (payload.change > 0) {
+    rows.push({ a: "lr", l: "เงินทอน", r: moneyPlain(payload.change) });
+  }
+
+  if (
+    payload.memberCode ||
+    (payload.memberName && payload.memberName !== "ลูกค้าทั่วไป")
+  ) {
+    rows.push({ a: "s" });
+    rows.push({
+      a: "l",
+      t: `สมาชิก ${payload.memberCode || ""} ${payload.memberName || ""}`.trim(),
+    });
+    if ((payload.pointsEarned ?? 0) > 0) {
+      rows.push({
+        a: "lr",
+        l: `ได้แต้ม(${day})`,
+        r: `${payload.pointsEarned} P`,
+      });
+    }
+    rows.push({
+      a: "lr",
+      l: `แต้มคงเหลือ(${day})`,
+      r: `${payload.pointsBalance ?? 0} P`,
+    });
+  }
+
+  rows.push({ a: "s" });
+  rows.push({ a: "c", t: "ขอบคุณที่ใช้บริการ" });
+  if (payload.footerHours) rows.push({ a: "c", t: payload.footerHours });
+  if (payload.footerPhones) rows.push({ a: "c", t: payload.footerPhones });
+  if (payload.appVersion) rows.push({ a: "c", t: payload.appVersion });
+  return rows;
+}
+
+/** payload สำหรับไดรเวอร์ — บรรทัดง่าย (ไม่ใช้ JSON ที่ PowerShell พังง่าย) */
+export function buildReceiptPrintPayload(payload: ReceiptPayload): string {
+  const esc = (s: string) =>
+    String(s ?? "")
+      .replace(/\r\n|\r|\n/g, " ")
+      .replace(/\t/g, " ");
+  const lines: string[] = ["APSLIP2"];
+  for (const row of buildReceiptRows(payload)) {
+    if (row.a === "s") lines.push("S");
+    else if (row.a === "c") lines.push(`C\t${esc(row.t)}`);
+    else if (row.a === "l") lines.push(`L\t${esc(row.t)}`);
+    else lines.push(`LR\t${esc(row.l)}\t${esc(row.r)}`);
+  }
+  return lines.join("\n");
+}
+
+/** สลิปข้อความ (พรีวิว / fallback) */
+export function buildReceiptText(
+  payload: ReceiptPayload,
+  opts?: { cols?: number },
+): string {
+  const width =
+    opts?.cols ?? (payload.paperWidth === "58mm" ? 32 : 42);
+  return buildReceiptRows(payload)
+    .map((row) => {
+      if (row.a === "s") return dashLine(width);
+      if (row.a === "c") return padCenter(clip(row.t, width), width);
+      if (row.a === "l") return clip(row.t, width);
+      return pairLine(row.l, row.r, width);
+    })
+    .join("\n");
+}
+
 function esc(s: string) {
   return s
     .replace(/&/g, "&amp;")
@@ -173,9 +428,13 @@ export function buildReceiptHtml(payload: ReceiptPayload): string {
   const titleSize = payload.paperWidth === "58mm" ? "14px" : "16px";
   const when = formatThaiDateTime(payload.at);
   const day = formatThaiDate(payload.at);
-  const storeLine = payload.branchName
-    ? `${payload.storeName} (${payload.branchName})`
-    : payload.storeName;
+  const headerLines = expandHeaderLines(payload.headerText, payload);
+  const headerHtml = headerLines
+    .map(
+      (h, i) =>
+        `<div class="center ${i === 0 ? "store" : "tag"}">${esc(h)}</div>`,
+    )
+    .join("");
 
   const lineRows = payload.lines
     .map((l) => {
@@ -293,8 +552,7 @@ export function buildReceiptHtml(payload: ReceiptPayload): string {
 </style>
 </head>
 <body>
-  <div class="center store">${esc(storeLine)}</div>
-  ${payload.tagline ? `<div class="center tag">${esc(payload.tagline)}</div>` : ""}
+  ${headerHtml}
   <div class="center meta">
     <div>${esc(payload.billNo)}</div>
     <div>${esc(when)}</div>
@@ -334,15 +592,20 @@ export function buildReceiptHtml(payload: ReceiptPayload): string {
 
 export async function printReceipt(
   payload: ReceiptPayload,
-  opts?: { silent?: boolean; preview?: boolean; deviceName?: string },
+  opts?: {
+    silent?: boolean;
+    preview?: boolean;
+    deviceName?: string;
+    openDrawer?: boolean;
+  },
 ): Promise<{ ok: boolean; message?: string }> {
   if (!window.apPos?.print?.receipt && !window.apPos?.print?.previewReceipt) {
     return { ok: false, message: "ระบบพิมพ์ยังไม่พร้อม" };
   }
   const html = buildReceiptHtml(payload);
+  const text = buildReceiptPrintPayload(payload);
   const paperWidth = payload.paperWidth;
   try {
-    // เปิดตัวอย่างเฉพาะเมื่อขอ (เช่น silent ปิด) — ค่าเริ่มต้นพิมพ์เงียบ
     const wantPreview = opts?.preview === true;
     if (wantPreview && window.apPos.print?.previewReceipt) {
       const prev = await window.apPos.print.previewReceipt({ html, paperWidth });
@@ -362,12 +625,13 @@ export async function printReceipt(
         undefined;
       return await window.apPos.print.receipt({
         html,
+        text,
         paperWidth,
         silent: opts?.silent ?? true,
         deviceName,
+        openDrawer: opts?.openDrawer ?? printer.openDrawer,
       });
     } catch (e) {
-      // silent พัง — ถ้าเปิดตัวอย่างไว้แล้วยังถือว่าพอใช้
       return {
         ok: wantPreview,
         message: e instanceof Error ? e.message : undefined,
