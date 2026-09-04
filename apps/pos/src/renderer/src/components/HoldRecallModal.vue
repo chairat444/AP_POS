@@ -182,7 +182,7 @@ function billTotal(linesIn: { lineTotal: number }[]) {
                   {{ b.memberName }}
                 </span>
               </span>
-              <span class="search-meta">{{ billTotal(b.lines) }} ฿</span>
+              <span class="search-meta">{{ billTotal(b.lines) }}</span>
             </button>
             <button
               type="button"

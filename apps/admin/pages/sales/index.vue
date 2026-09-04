@@ -216,18 +216,32 @@ function shiftLabel(shiftId?: string | null) {
   return m?.[1] || shiftId;
 }
 
-function payShort(row: Sale) {
+/** ป้ายช่องทางอย่างเดียว — ไม่ซ้ำกับยอดด้านขวา */
+function payMethodsShort(row: Sale) {
   const pays = moneyPays(row);
-  if (!pays.length) return "-";
-  return pays.map((p) => `${payLabel(p.method)} ${baht(p.amount)}`).join(" · ");
+  if (!pays.length) return "ไม่ระบุ";
+  return pays.map((p) => payLabel(p.method)).join(" · ");
 }
+
+const showMobileDetail = computed(
+  () => Boolean(selectedId.value && detail.value),
+);
 
 function onDateMode(mode: "day" | "range") {
   setDateMode(mode);
   void load();
 }
 
-async function load() {
+const route = useRoute();
+
+function saleDayIso(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  // ใช้วันตามเวลาท้องถิ่น (เดียวกับตัวกรองรายงาน)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+async function load(opts: { keepSelection?: boolean } = {}) {
   pending.value = true;
   error.value = "";
   try {
@@ -240,7 +254,11 @@ async function load() {
     const data = await get<{ sales: Sale[] }>(`/sales?${qs.toString()}`);
     rows.value = data.sales ?? [];
     page.value = 1;
-    if (selectedId.value && !rows.value.some((r) => r.id === selectedId.value)) {
+    if (
+      !opts.keepSelection &&
+      selectedId.value &&
+      !rows.value.some((r) => r.id === selectedId.value)
+    ) {
       selectedId.value = null;
       detail.value = null;
     }
@@ -272,6 +290,55 @@ function clearDetail() {
   detail.value = null;
 }
 
+/** เปิดบิลจาก query ?id=... (เช่นจากประวัติแต้ม) */
+async function openSaleFromQuery() {
+  const id =
+    typeof route.query.id === "string" ? route.query.id.trim() : "";
+  if (!id) return false;
+
+  detailPending.value = true;
+  error.value = "";
+  try {
+    const sale = await get<SaleDetail>(`/sales/${encodeURIComponent(id)}`);
+    selectedId.value = sale.id;
+    detail.value = sale;
+    if (sale.billNo && !filters.q.trim()) {
+      filters.q = sale.billNo;
+    }
+    const dayIso = saleDayIso(sale.createdAt);
+    if (dayIso) {
+      dateMode.value = "day";
+      day.value = dayIso;
+    }
+    await load({ keepSelection: true });
+    return true;
+  } catch (e) {
+    error.value =
+      e instanceof Error ? e.message : "โหลดรายละเอียดบิลไม่สำเร็จ";
+    selectedId.value = null;
+    detail.value = null;
+    return false;
+  } finally {
+    detailPending.value = false;
+  }
+}
+
+/** ถ้าค้นหาแล้วเหลือบิลเดียว ให้เปิดรายละเอียดเลย */
+async function autoOpenFilteredBill() {
+  if (selectedId.value && detail.value) return;
+  const q = filters.q.trim().toLowerCase();
+  if (!q) return;
+  const hits = filteredRows.value.filter(
+    (r) =>
+      r.billNo.toLowerCase() === q ||
+      r.billNo.toLowerCase().includes(q) ||
+      r.id.toLowerCase() === q,
+  );
+  const exact = hits.filter((r) => r.billNo.toLowerCase() === q);
+  const pick = exact.length === 1 ? exact[0] : hits.length === 1 ? hits[0] : null;
+  if (pick) await selectBill(pick);
+}
+
 watch(
   () => filters.q,
   () => {
@@ -280,7 +347,6 @@ watch(
 );
 
 onMounted(async () => {
-  const route = useRoute();
   if (typeof route.query.q === "string" && route.query.q.trim()) {
     filters.q = route.query.q.trim();
   }
@@ -290,17 +356,24 @@ onMounted(async () => {
   } catch {
     branches.value = [];
   }
-  await load();
+  const opened = await openSaleFromQuery();
+  if (!opened) {
+    await load();
+    await autoOpenFilteredBill();
+  }
 });
 </script>
 
 <template>
-  <div class="ui-sales">
+  <div
+    class="ui-sales"
+    :class="{ 'ui-sales--detail-open': showMobileDetail }"
+  >
     <div class="ui-page-head">
       <div>
         <h1 class="ui-page-title">บิลขาย</h1>
         <p class="ui-page-sub">
-          เลือกบิลจากรายการด้านซ้าย · สรุปยอดรวมดูที่
+          เลือกรายการเพื่อดูรายละเอียด · สรุปยอดรวมดูที่
           <NuxtLink to="/reports">สรุปยอดขาย</NuxtLink>
         </p>
       </div>
@@ -336,150 +409,139 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div class="ui-card ui-sales__filters">
-      <div class="ui-sales__filter-row">
-        <div class="ui-field">
-          <span>ดูแบบ</span>
-          <div class="ui-date-mode">
-            <button
-              type="button"
-              class="ui-btn"
-              :class="dateMode === 'day' ? 'ui-btn--primary' : 'ui-btn--ghost'"
-              @click="onDateMode('day')"
-            >
-              รายวัน
-            </button>
-            <button
-              type="button"
-              class="ui-btn"
-              :class="dateMode === 'range' ? 'ui-btn--primary' : 'ui-btn--ghost'"
-              @click="onDateMode('range')"
-            >
-              ช่วงวันที่
-            </button>
-          </div>
+    <UiSalesTabs />
+
+    <div class="ui-card ui-sales__toolbar">
+      <div class="ui-sales__toolbar-row">
+        <div class="ui-date-mode" role="group" aria-label="ดูแบบ">
+          <button
+            type="button"
+            class="ui-btn"
+            :class="dateMode === 'day' ? 'ui-btn--primary' : 'ui-btn--ghost'"
+            @click="onDateMode('day')"
+          >
+            รายวัน
+          </button>
+          <button
+            type="button"
+            class="ui-btn"
+            :class="dateMode === 'range' ? 'ui-btn--primary' : 'ui-btn--ghost'"
+            @click="onDateMode('range')"
+          >
+            ช่วงวันที่
+          </button>
         </div>
 
-        <div v-if="dateMode === 'day'" class="ui-field">
-          <span>วันที่</span>
-          <div class="ui-date-daybar">
-            <button
-              type="button"
-              class="ui-btn ui-btn--ghost"
-              title="วันก่อน"
-              @click="
-                shiftDay(-1);
-                load();
-              "
-            >
-              ‹
-            </button>
-            <UiDateInput
-              :model-value="day"
-              aria-label="วันที่"
-              @update:model-value="
-                day = $event;
-                load();
-              "
-            />
-            <button
-              type="button"
-              class="ui-btn ui-btn--ghost"
-              title="วันถัดไป"
-              @click="
-                shiftDay(1);
-                load();
-              "
-            >
-              ›
-            </button>
-          </div>
+        <div v-if="dateMode === 'day'" class="ui-sales__daybar">
+          <button
+            type="button"
+            class="ui-btn ui-btn--ghost ui-sales__day-nav"
+            title="วันก่อน"
+            @click="
+              shiftDay(-1);
+              load();
+            "
+          >
+            ‹
+          </button>
+          <UiDateInput
+            :model-value="day"
+            aria-label="วันที่"
+            @update:model-value="
+              day = $event;
+              load();
+            "
+          />
+          <button
+            type="button"
+            class="ui-btn ui-btn--ghost ui-sales__day-nav"
+            title="วันถัดไป"
+            @click="
+              shiftDay(1);
+              load();
+            "
+          >
+            ›
+          </button>
         </div>
         <template v-else>
-          <label class="ui-field">
-            <span>ตั้งแต่</span>
-            <UiDateInput
-              :model-value="from"
-              aria-label="ตั้งแต่"
-              @update:model-value="
-                from = $event;
-                load();
-              "
-            />
-          </label>
-          <label class="ui-field">
-            <span>ถึง</span>
-            <UiDateInput
-              :model-value="to"
-              aria-label="ถึง"
-              @update:model-value="
-                to = $event;
-                load();
-              "
-            />
-          </label>
+          <UiDateInput
+            :model-value="from"
+            aria-label="ตั้งแต่"
+            @update:model-value="
+              from = $event;
+              load();
+            "
+          />
+          <span class="ui-sales__range-sep">ถึง</span>
+          <UiDateInput
+            :model-value="to"
+            aria-label="ถึง"
+            @update:model-value="
+              to = $event;
+              load();
+            "
+          />
         </template>
 
-        <label class="ui-field">
-          <span>สาขา</span>
-          <select v-model="filters.branchId" class="ui-input" @change="load">
-            <option value="">ทุกสาขา</option>
-            <option v-for="b in branches" :key="b.id" :value="b.id">
-              {{ b.name }}
-            </option>
-          </select>
-        </label>
+        <select
+          v-model="filters.branchId"
+          class="ui-input ui-sales__select"
+          aria-label="สาขา"
+          @change="load"
+        >
+          <option value="">ทุกสาขา</option>
+          <option v-for="b in branches" :key="b.id" :value="b.id">
+            {{ b.name }}
+          </option>
+        </select>
 
-        <label class="ui-field">
-          <span>การชำระ</span>
-          <select
-            v-model="filters.paymentMethod"
-            class="ui-input"
-            @change="load"
-          >
-            <option value="">ทุกประเภท</option>
-            <option value="cash">เงินสด</option>
-            <option value="transfer">เงินโอน</option>
-            <option value="government">เงินสวัสดิการ</option>
-          </select>
-        </label>
+        <select
+          v-model="filters.paymentMethod"
+          class="ui-input ui-sales__select"
+          aria-label="การชำระ"
+          @change="load"
+        >
+          <option value="">ทุกประเภท</option>
+          <option value="cash">เงินสด</option>
+          <option value="transfer">เงินโอน</option>
+          <option value="government">เงินสวัสดิการ</option>
+        </select>
 
-        <label class="ui-field ui-sales__search">
-          <span>ค้นหา</span>
-          <input
-            v-model="filters.q"
-            class="ui-input"
-            type="search"
-            placeholder="เลขบิล / สมาชิก / รอบขาย"
-          />
-        </label>
+        <input
+          v-model="filters.q"
+          class="ui-input ui-sales__q"
+          type="search"
+          placeholder="ค้นหาเลขบิล / สมาชิก"
+          aria-label="ค้นหา"
+        />
       </div>
 
       <div class="ui-sales__stats">
-        <span>{{ periodBillCount }} บิล</span>
-        <span class="ui-sales__stats-dot">·</span>
-        <strong>{{ baht(periodTotal) }}</strong>
-        <span class="ui-sales__stats-hint">เงินเข้า · ไม่รวมบิลยกเลิก</span>
-        <template v-if="periodByPay.length">
-          <span class="ui-sales__stats-dot">·</span>
-          <span
-            v-for="(p, i) in periodByPay"
-            :key="p.method"
-            class="ui-sales__stats-pay"
-          >
-            <template v-if="i"> · </template>
-            {{ payLabel(p.method) }} {{ baht(p.amount) }}
-          </span>
-        </template>
-        <span class="ui-sales__stats-dot">·</span>
-        <span
-          class="ui-sales__stats-void"
-          :class="{ 'is-alert': voidedBillCount > 0 }"
-          :title="voidedBillCount ? 'ตรวจบิลยกเลิก — อาจเป็นจุดเสี่ยง' : ''"
+        <div class="ui-sales__stat">
+          <span>บิล</span>
+          <strong>{{ periodBillCount }}</strong>
+        </div>
+        <div class="ui-sales__stat ui-sales__stat--main">
+          <span>เงินเข้า</span>
+          <strong>{{ baht(periodTotal) }}</strong>
+        </div>
+        <div
+          v-for="p in periodByPay"
+          :key="p.method"
+          class="ui-sales__stat"
+          :data-pay="p.method"
         >
-          ยกเลิก {{ voidedBillCount }} บิล
-          <strong>{{ baht(voidedTotal) }}</strong>
-        </span>
+          <span>{{ payLabel(p.method) }}</span>
+          <strong>{{ baht(p.amount) }}</strong>
+        </div>
+        <div
+          class="ui-sales__stat"
+          :class="{ 'is-void': voidedBillCount > 0 }"
+        >
+          <span>ยกเลิก</span>
+          <strong>{{ voidedBillCount }} · {{ baht(voidedTotal) }}</strong>
+        </div>
       </div>
     </div>
 
@@ -487,6 +549,10 @@ onMounted(async () => {
 
     <div class="ui-sales__split">
       <section class="ui-card ui-sales__list">
+        <header class="ui-sales__panel-head">
+          <strong>รายการบิล</strong>
+          <span>{{ meta.total }} รายการ</span>
+        </header>
         <div v-if="pending && !rows.length" class="ui-empty">กำลังโหลด...</div>
         <div v-else-if="!pageRows.length" class="ui-empty">ไม่มีบิลในช่วงนี้</div>
         <div v-else class="ui-sales__list-body">
@@ -501,20 +567,17 @@ onMounted(async () => {
             }"
             @click="selectBill(row)"
           >
-            <div class="ui-sales__row-main">
+            <div class="ui-sales__row-top">
               <span class="ui-sales__row-time">{{ fmtTime(row.createdAt) }}</span>
-              <span class="ui-sales__row-bill">
-                {{ row.billNo }}
-                <em v-if="row.status === 'voided'">ยกเลิก</em>
-              </span>
+              <strong class="ui-sales__row-amt">{{ baht(saleMoney(row)) }}</strong>
+            </div>
+            <div class="ui-sales__row-bill">
+              {{ row.billNo }}
+              <em v-if="row.status === 'voided'">ยกเลิก</em>
             </div>
             <div class="ui-sales__row-meta">
               <span>{{ row.customerName || "ลูกค้าทั่วไป" }}</span>
-              <span class="ui-sales__row-pay">{{ payShort(row) }}</span>
-            </div>
-            <div class="ui-sales__row-foot">
-              <span class="ui-sales__row-shift">{{ shiftLabel(row.shiftId) }}</span>
-              <strong class="ui-sales__row-amt">{{ baht(saleMoney(row)) }}</strong>
+              <span class="ui-sales__row-pay">{{ payMethodsShort(row) }}</span>
             </div>
           </button>
         </div>
@@ -527,18 +590,32 @@ onMounted(async () => {
         <div v-if="detailPending && !detail" class="ui-empty">กำลังเปิดบิล...</div>
         <div v-else-if="!detail" class="ui-sales__detail-empty">
           <p>เลือกบิลจากรายการ</p>
-          <span>รายละเอียดจะแสดงที่นี่ทันที ไม่ต้องเปิดหน้าต่างซ้อน</span>
+          <span>รายละเอียดจะแสดงที่นี่ทันที</span>
         </div>
         <template v-else>
           <header class="ui-sales__detail-head">
-            <div>
+            <button
+              type="button"
+              class="ui-btn ui-btn--ghost ui-sales__back"
+              @click="clearDetail"
+            >
+              ← รายการ
+            </button>
+            <div class="ui-sales__detail-title">
               <p class="ui-sales__detail-kicker">{{ fmtAt(detail.createdAt) }}</p>
               <h2>
                 {{ detail.billNo }}
-                <em v-if="detail.status === 'voided'" class="ui-sales__void-tag">ยกเลิก</em>
+                <em
+                  v-if="detail.status === 'voided'"
+                  class="ui-sales__void-tag"
+                >ยกเลิก</em>
               </h2>
             </div>
-            <button type="button" class="ui-btn ui-btn--ghost" @click="clearDetail">
+            <button
+              type="button"
+              class="ui-btn ui-btn--ghost ui-sales__close-desk"
+              @click="clearDetail"
+            >
               ปิด
             </button>
           </header>
@@ -595,13 +672,15 @@ onMounted(async () => {
                 class="ui-sales__pay"
                 :data-method="p.method"
               >
-                {{ payLabel(p.method) }} {{ baht(p.amount) }}
+                {{ payLabel(p.method) }}
+                <b>{{ baht(p.amount) }}</b>
               </span>
               <span
                 v-if="pointsDiscountBaht(detail) > 0"
                 class="ui-sales__pay ui-sales__pay--points"
               >
-                ส่วนลดแต้ม {{ baht(pointsDiscountBaht(detail)) }}
+                ส่วนลดแต้ม
+                <b>{{ baht(pointsDiscountBaht(detail)) }}</b>
               </span>
               <span
                 v-if="!moneyPays(detail).length && !pointsDiscountBaht(detail)"
@@ -615,7 +694,9 @@ onMounted(async () => {
                 <span>ก่อนลด</span>
                 <span>{{ baht(detail.subtotal ?? detail.total) }}</span>
               </div>
-              <div v-if="(detail.discount || 0) - pointsDiscountBaht(detail) > 0">
+              <div
+                v-if="(detail.discount || 0) - pointsDiscountBaht(detail) > 0"
+              >
                 <span>ส่วนลดอื่น</span>
                 <span>
                   −{{ baht((detail.discount || 0) - pointsDiscountBaht(detail)) }}
@@ -649,101 +730,134 @@ onMounted(async () => {
 .ui-sales {
   display: flex;
   flex-direction: column;
-  gap: 0;
-  min-height: 0;
-  height: calc(100vh - var(--ui-shell-header-height, 3.75rem) - 2.5rem);
+  gap: 0.65rem;
+  min-height: calc(100vh - var(--ui-shell-header-height, 3.75rem) - 2rem);
 }
 
 .ui-sales :deep(.ui-page-head) {
   flex: 0 0 auto;
-}
-
-.ui-sales__filters {
-  flex: 0 0 auto;
-  padding: 1rem 1.15rem 0.9rem;
-  margin-bottom: 1rem;
-}
-
-.ui-sales__filter-row {
-  display: grid;
-  grid-template-columns: auto auto auto minmax(9rem, 1fr) minmax(8rem, 0.9fr) minmax(12rem, 1.4fr);
-  gap: 0.75rem 0.85rem;
-  align-items: end;
-}
-
-.ui-sales__filters .ui-field {
   margin-bottom: 0;
 }
 
-.ui-sales__filters :deep(.ui-date) {
-  min-width: 11rem;
-  width: 11rem;
+.ui-sales__toolbar {
+  flex: 0 0 auto;
+  padding: 0.65rem 0.85rem;
+  margin: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.ui-sales__toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.55rem;
+}
+
+.ui-sales__daybar {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 0 0 auto;
+}
+
+.ui-sales__daybar :deep(.ui-date) {
+  width: 10.5rem;
+  min-width: 10.5rem;
+}
+
+.ui-sales__day-nav {
+  min-width: 2.1rem;
+  padding-left: 0.45rem;
+  padding-right: 0.45rem;
+}
+
+.ui-sales__range-sep {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}
+
+.ui-sales__select {
+  width: auto;
+  min-width: 8.5rem;
+  max-width: 12rem;
+  flex: 0 1 auto;
+}
+
+.ui-sales__q {
+  flex: 1 1 12rem;
+  min-width: 10rem;
+  max-width: 22rem;
 }
 
 .ui-sales__stats {
   display: flex;
-  align-items: baseline;
   flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-top: 0.85rem;
-  padding-top: 0.75rem;
+  gap: 0.35rem 0.45rem;
+  padding-top: 0.55rem;
   border-top: 1px solid #eef2f6;
-  color: #64748b;
-  font-size: 0.9rem;
 }
 
-.ui-sales__stats strong {
-  color: #0f172a;
-  font-size: 1.05rem;
-}
-
-.ui-sales__stats-dot {
-  opacity: 0.5;
-}
-
-.ui-sales__stats-hint {
-  margin-left: 0.15rem;
-  font-size: 0.78rem;
-  color: #94a3b8;
-}
-
-.ui-sales__stats-pay {
-  color: #334155;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.ui-sales__stats-void {
+.ui-sales__stat {
   display: inline-flex;
   align-items: baseline;
-  gap: 0.35rem;
+  justify-content: space-between;
+  gap: 0.65rem;
+  min-width: 7.5rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.55rem;
+  background: #f8fafc;
+  border: 1px solid #eef2f6;
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.ui-sales__stat strong {
+  color: #0f172a;
+  font-size: 0.92rem;
+  font-weight: 750;
   font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
-.ui-sales__stats-void strong {
-  font-size: inherit;
-  color: inherit;
+.ui-sales__stat--main {
+  background: color-mix(in srgb, var(--ui-primary) 8%, white);
+  border-color: color-mix(in srgb, var(--ui-primary) 22%, #e2e8f0);
 }
 
-.ui-sales__stats-void.is-alert {
-  padding: 0.15rem 0.55rem;
-  border-radius: 0.45rem;
+.ui-sales__stat--main strong {
+  font-size: 1rem;
+}
+
+.ui-sales__stat[data-pay="cash"] strong {
+  color: #047857;
+}
+
+.ui-sales__stat[data-pay="transfer"] strong {
+  color: #1d4ed8;
+}
+
+.ui-sales__stat[data-pay="government"] strong {
+  color: #c2410c;
+}
+
+.ui-sales__stat.is-void {
   background: #fef2f2;
+  border-color: #fecaca;
   color: #b91c1c;
-  font-weight: 650;
 }
 
-.ui-sales__stats-void.is-alert strong {
+.ui-sales__stat.is-void strong {
   color: #991b1b;
-  font-size: 1.05rem;
 }
 
 .ui-sales__split {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 26rem;
   display: grid;
-  grid-template-columns: minmax(18rem, 22rem) minmax(0, 1fr);
-  gap: 1rem;
+  grid-template-columns: minmax(22rem, 0.95fr) minmax(0, 1.35fr);
+  gap: 0.75rem;
   align-items: stretch;
 }
 
@@ -753,25 +867,46 @@ onMounted(async () => {
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  max-height: 100%;
   overflow: hidden;
   padding: 0;
 }
 
+.ui-sales__panel-head {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid #eef2f6;
+  background: #fafbfc;
+}
+
+.ui-sales__panel-head strong {
+  font-size: 0.88rem;
+  color: #0f172a;
+}
+
+.ui-sales__panel-head span {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+
 .ui-sales__list-body {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 14rem;
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  padding: 0.45rem;
+  padding: 0.25rem;
 }
 
 .ui-sales__pager {
   flex: 0 0 auto;
   border-top: 1px solid #eef2f6;
-  padding: 0.35rem 0.55rem;
+  padding: 0.25rem 0.45rem;
 }
 
 .ui-sales__row {
@@ -779,12 +914,13 @@ onMounted(async () => {
   text-align: left;
   appearance: none;
   border: 1px solid transparent;
-  background: transparent;
-  border-radius: 0.75rem;
-  padding: 0.7rem 0.75rem;
+  border-bottom-color: #f1f5f9;
+  background: #fff;
+  border-radius: 0.55rem;
+  padding: 0.55rem 0.65rem;
   cursor: pointer;
   display: grid;
-  gap: 0.28rem;
+  gap: 0.15rem;
   color: inherit;
   font: inherit;
 }
@@ -799,56 +935,66 @@ onMounted(async () => {
 }
 
 .ui-sales__row.is-void {
-  opacity: 0.62;
+  opacity: 0.55;
 }
 
 .ui-sales__row.is-void .ui-sales__row-amt {
   text-decoration: line-through;
 }
 
-.ui-sales__row-bill em,
-.ui-sales__void-tag {
-  margin-left: 0.35rem;
-  font-style: normal;
-  font-size: 0.72rem;
-  font-weight: 700;
-  color: #b91c1c;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  border-radius: 999px;
-  padding: 0.05rem 0.4rem;
-  vertical-align: middle;
-}
-
-.ui-sales__row-main {
+.ui-sales__row-top {
   display: flex;
   justify-content: space-between;
-  gap: 0.75rem;
   align-items: baseline;
+  gap: 0.75rem;
 }
 
 .ui-sales__row-time {
   font-variant-numeric: tabular-nums;
   color: #64748b;
-  font-size: 0.82rem;
-  flex: 0 0 auto;
+  font-size: 0.78rem;
+}
+
+.ui-sales__row-amt {
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.98rem;
+  font-weight: 750;
+  text-align: right;
 }
 
 .ui-sales__row-bill {
   font-weight: 650;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
   color: #0f172a;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  word-break: break-all;
+  line-height: 1.35;
 }
 
-.ui-sales__row-meta,
-.ui-sales__row-foot {
+.ui-sales__row-bill em,
+.ui-sales__void-tag {
+  margin-left: 0.3rem;
+  font-style: normal;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 999px;
+  padding: 0.05rem 0.35rem;
+  vertical-align: middle;
+}
+
+.ui-sales__row-meta {
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: #64748b;
 }
 
@@ -856,24 +1002,11 @@ onMounted(async () => {
   color: #475569;
   font-weight: 600;
   text-align: right;
-  max-width: 60%;
-  line-height: 1.35;
-}
-
-.ui-sales__row-shift {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ui-sales__row-amt {
-  color: #0f172a;
-  font-variant-numeric: tabular-nums;
-  font-size: 0.92rem;
+  max-width: 55%;
 }
 
 .ui-sales__detail {
-  padding: 1rem 1.15rem 1.1rem;
+  padding: 0.75rem 0.9rem 0.9rem;
 }
 
 .ui-sales__detail-empty {
@@ -881,69 +1014,83 @@ onMounted(async () => {
   display: grid;
   place-content: center;
   text-align: center;
-  gap: 0.35rem;
+  gap: 0.3rem;
   color: #94a3b8;
-  padding: 2rem 1rem;
+  padding: 1.5rem 1rem;
 }
 
 .ui-sales__detail-empty p {
   margin: 0;
   color: #64748b;
   font-weight: 650;
-  font-size: 1rem;
+  font-size: 0.95rem;
 }
 
 .ui-sales__detail-empty span {
-  font-size: 0.88rem;
+  font-size: 0.82rem;
 }
 
 .ui-sales__detail-head {
   display: flex;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.65rem;
   align-items: start;
-  margin-bottom: 0.85rem;
+  margin-bottom: 0.65rem;
+}
+
+.ui-sales__detail-title {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .ui-sales__detail-kicker {
-  margin: 0 0 0.2rem;
+  margin: 0 0 0.15rem;
   color: #64748b;
-  font-size: 0.82rem;
+  font-size: 0.78rem;
 }
 
 .ui-sales__detail-head h2 {
   margin: 0;
-  font-size: 1.15rem;
+  font-size: 1.05rem;
   font-weight: 750;
   color: #0f172a;
   word-break: break-all;
 }
 
+.ui-sales__back {
+  display: none;
+  flex: 0 0 auto;
+}
+
+.ui-sales__close-desk {
+  flex: 0 0 auto;
+}
+
 .ui-sales__detail-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.55rem;
-  margin-bottom: 0.85rem;
+  gap: 0.4rem;
+  margin-bottom: 0.65rem;
 }
 
 .ui-sales__detail-grid > div {
   background: #f8fafc;
   border: 1px solid #eef2f6;
-  border-radius: 0.7rem;
-  padding: 0.55rem 0.7rem;
+  border-radius: 0.55rem;
+  padding: 0.4rem 0.55rem;
   min-width: 0;
 }
 
 .ui-sales__detail-grid span {
   display: block;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   color: #64748b;
-  margin-bottom: 0.15rem;
+  margin-bottom: 0.1rem;
 }
 
 .ui-sales__detail-grid strong {
   display: block;
-  font-size: 0.88rem;
+  font-size: 0.82rem;
   font-weight: 650;
   color: #0f172a;
   overflow: hidden;
@@ -953,20 +1100,20 @@ onMounted(async () => {
 
 .ui-sales__lines {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 10rem;
   overflow: auto;
   border: 1px solid #eef2f6;
-  border-radius: 0.8rem;
+  border-radius: 0.65rem;
   background: #fff;
 }
 
 .ui-sales__lines-head,
 .ui-sales__line {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 7.5rem 6.5rem;
-  gap: 0.6rem;
+  grid-template-columns: minmax(0, 1fr) 6.5rem 5.75rem;
+  gap: 0.45rem;
   align-items: start;
-  padding: 0.55rem 0.75rem;
+  padding: 0.45rem 0.6rem;
 }
 
 .ui-sales__lines-head {
@@ -975,9 +1122,14 @@ onMounted(async () => {
   background: #f8fafc;
   border-bottom: 1px solid #eef2f6;
   color: #64748b;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
   font-weight: 650;
   z-index: 1;
+}
+
+.ui-sales__lines-head span:nth-child(2),
+.ui-sales__lines-head span:nth-child(3) {
+  text-align: right;
 }
 
 .ui-sales__line + .ui-sales__line {
@@ -987,11 +1139,11 @@ onMounted(async () => {
 .ui-sales__line-name {
   min-width: 0;
   display: grid;
-  gap: 0.1rem;
+  gap: 0.05rem;
 }
 
 .ui-sales__line-name strong {
-  font-size: 0.9rem;
+  font-size: 0.84rem;
   font-weight: 650;
   color: #0f172a;
 }
@@ -999,15 +1151,15 @@ onMounted(async () => {
 .ui-sales__line-name small,
 .ui-sales__line-qty small {
   color: #94a3b8;
-  font-size: 0.75rem;
+  font-size: 0.72rem;
 }
 
 .ui-sales__line-qty {
   text-align: right;
-  font-size: 0.86rem;
+  font-size: 0.8rem;
   color: #334155;
   display: grid;
-  gap: 0.1rem;
+  gap: 0.05rem;
 }
 
 .ui-sales__line-total {
@@ -1020,26 +1172,32 @@ onMounted(async () => {
 .ui-sales__detail-foot {
   flex: 0 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(12rem, 15rem);
-  gap: 0.85rem;
-  margin-top: 0.85rem;
+  grid-template-columns: minmax(0, 1fr) minmax(10.5rem, 13rem);
+  gap: 0.65rem;
+  margin-top: 0.65rem;
   align-items: end;
 }
 
 .ui-sales__pays {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
+  gap: 0.3rem;
 }
 
 .ui-sales__pay {
   display: inline-flex;
-  padding: 0.35rem 0.65rem;
+  align-items: baseline;
+  gap: 0.35rem;
+  padding: 0.3rem 0.55rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--ui-primary) 12%, white);
   color: var(--ui-primary-dark);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
   font-weight: 650;
+}
+
+.ui-sales__pay b {
+  font-variant-numeric: tabular-nums;
 }
 
 .ui-sales__pay[data-method="cash"] {
@@ -1064,56 +1222,48 @@ onMounted(async () => {
 
 .ui-sales__totals {
   display: grid;
-  gap: 0.28rem;
-  padding: 0.7rem 0.85rem;
+  gap: 0.22rem;
+  padding: 0.6rem 0.75rem;
   background: #0f172a;
   color: #e2e8f0;
-  border-radius: 0.8rem;
+  border-radius: 0.65rem;
 }
 
 .ui-sales__totals > div {
   display: flex;
   justify-content: space-between;
   gap: 0.75rem;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .ui-sales__totals .is-total {
-  margin-top: 0.15rem;
-  padding-top: 0.4rem;
+  margin-top: 0.1rem;
+  padding-top: 0.35rem;
   border-top: 1px solid rgba(148, 163, 184, 0.35);
-  font-size: 1.02rem;
+  font-size: 0.98rem;
   color: #fff;
 }
 
 @media (max-width: 1100px) {
   .ui-sales {
-    height: auto;
     min-height: 0;
-  }
-
-  .ui-sales__filter-row {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .ui-sales__search {
-    grid-column: 1 / -1;
+    height: auto;
   }
 
   .ui-sales__split {
     grid-template-columns: 1fr;
-    flex: none;
+    min-height: 0;
   }
 
   .ui-sales__list {
-    height: min(28rem, 55vh);
-    max-height: min(28rem, 55vh);
+    height: min(26rem, 50vh);
+    max-height: min(26rem, 50vh);
   }
 
   .ui-sales__detail {
     height: auto;
-    max-height: none;
-    min-height: 24rem;
+    min-height: 18rem;
   }
 
   .ui-sales__detail-grid {
@@ -1122,6 +1272,60 @@ onMounted(async () => {
 
   .ui-sales__detail-foot {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .ui-page-head__actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ui-page-head__actions .ui-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .ui-sales__q,
+  .ui-sales__select {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+
+  .ui-sales__daybar {
+    width: 100%;
+  }
+
+  .ui-sales__daybar :deep(.ui-date) {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
+  }
+
+  .ui-sales__stat {
+    flex: 1 1 calc(50% - 0.45rem);
+    min-width: 0;
+  }
+
+  .ui-sales--detail-open .ui-sales__list {
+    display: none;
+  }
+
+  .ui-sales:not(.ui-sales--detail-open) .ui-sales__detail {
+    display: none;
+  }
+
+  .ui-sales--detail-open .ui-sales__detail {
+    min-height: min(70vh, 34rem);
+  }
+
+  .ui-sales__back {
+    display: inline-flex;
+  }
+
+  .ui-sales__close-desk {
+    display: none;
   }
 }
 </style>

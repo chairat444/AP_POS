@@ -39,6 +39,81 @@ function normalizePrinterKey(name: string) {
     .replace(/^\\\\[^\\]+\\/, ""); // \\PC\Printer → Printer
 }
 
+function formatPrintError(msg: string): string {
+  const m = msg.trim();
+  if (/specified printer has been deleted/i.test(m)) {
+    return "เครื่องพิมพ์ถูกลบหรือไดรเวอร์หลุด — ลบเครื่องพิมพ์เก่าใน Windows แล้วติดตั้งไดรเวอร์ใหม่ · เลือกชื่อในรายการอีกครั้ง";
+  }
+  if (/เครื่องพิมพ์ไม่พร้อม/i.test(m)) return m;
+  if (/not valid|invalid printer/i.test(m)) {
+    return "เครื่องพิมพ์ไม่พร้อม — ตรวจสาย USB / เปิดเครื่องพิมพ์ / เลือกชื่อในรายการใหม่";
+  }
+  return m;
+}
+
+/** ลำดับเครื่องพิมพ์ลองพิมพ์ — ชอบ thermal · ข้าม virtual */
+function rankPrinterNames(
+  available: string[],
+  preferred?: string,
+): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const push = (n: string) => {
+    const t = n.trim();
+    if (!t || seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+  };
+  const want = preferred?.trim();
+  if (want) push(want);
+  const ranked = [...available]
+    .filter((n) => n && !isVirtualPrinter(n))
+    .sort((a, b) => thermalScore(b) - thermalScore(a));
+  for (const n of ranked) push(n);
+  for (const n of available) push(n);
+  return out;
+}
+
+async function printGdiWithFallback(
+  available: string[],
+  preferred: string | undefined,
+  slipText: string,
+  gdiOpts: { paperWidthMm: 58 | 80; fontSizePt: number },
+  wantDrawer: boolean,
+): Promise<{ ok: true; used: string; note?: string } | { ok: false; message: string }> {
+  const candidates = rankPrinterNames(available, preferred);
+  if (!candidates.length) {
+    return {
+      ok: false,
+      message: "ไม่พบเครื่องพิมพ์ใน Windows — ติดตั้งไดรเวอร์ก่อน",
+    };
+  }
+  let lastErr = "";
+  for (const name of candidates) {
+    try {
+      const drawerP = wantDrawer
+        ? kickCashDrawerBestEffort([name]).then((r) => {
+            if (!r.ok) console.warn("[ap-pos] drawer kick skipped:", r.error);
+            return r;
+          })
+        : Promise.resolve({ ok: true as const });
+      await Promise.all([
+        drawerP,
+        sendTextToWindowsPrinter(name, slipText, gdiOpts),
+      ]);
+      const note =
+        preferred && normalizePrinterKey(name) !== normalizePrinterKey(preferred)
+          ? `ใช้「${name}」แทน「${preferred}」`
+          : undefined;
+      return { ok: true, used: name, note };
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : String(e);
+      console.warn(`[ap-pos] GDI fail → ${name}:`, lastErr);
+    }
+  }
+  return { ok: false, message: formatPrintError(lastErr || "พิมพ์ไม่สำเร็จ") };
+}
+
 /** PDF / Fax / OneNote — ไม่ใช่เครื่องสลิป */
 function isVirtualPrinter(name: string) {
   const n = normalizePrinterKey(name);
@@ -541,30 +616,49 @@ export async function printReceiptHtml(
     fontSizePt: paperWidth === "80mm" ? 8 : 7,
   };
 
-  // Fast path: Windows + ตั้งชื่อเครื่องแล้ว — ไม่ต้อง enumerate เครื่องพิมพ์
+  // Fast path: Windows + ตั้งชื่อเครื่องแล้ว — validate รายชื่อก่อนพิมพ์
   if (isWin() && preferred && textBody) {
     const t0 = Date.now();
-    console.log(`[ap-pos] fast print → ${preferred}`);
-    const drawerP = wantDrawer
-      ? kickCashDrawerBestEffort([preferred]).then((r) => {
-          if (!r.ok) console.warn("[ap-pos] drawer kick skipped:", r.error);
-          else console.log(`[ap-pos] drawer ${Date.now() - t0}ms → ${r.used}`);
-          return r;
-        })
-      : Promise.resolve({ ok: true as const });
-
+    let probe: BrowserWindow | null = null;
     try {
-      await Promise.all([
-        drawerP,
-        sendTextToWindowsPrinter(preferred, slipText, gdiOpts).then(() => {
-          console.log(`[ap-pos] GDI done ${Date.now() - t0}ms → ${preferred}`);
-        }),
-      ]);
-      return { ok: true, message: "พิมพ์ผ่านไดรเวอร์ Windows" };
+      probe = new BrowserWindow({
+        show: false,
+        width: 100,
+        height: 100,
+        webPreferences: { sandbox: true, contextIsolation: true },
+      });
+      await probe.loadURL("about:blank");
+      const resolved = await resolvePrinterName(probe.webContents, preferred);
+      await safeDestroy(probe, 50);
+      probe = null;
+
+      if (resolved.available.length) {
+        console.log(`[ap-pos] fast print → ${preferred}`);
+        const gdi = await printGdiWithFallback(
+          resolved.available,
+          preferred,
+          slipText,
+          gdiOpts,
+          wantDrawer,
+        );
+        if (gdi.ok) {
+          console.log(
+            `[ap-pos] GDI done ${Date.now() - t0}ms → ${gdi.used}`,
+          );
+          return {
+            ok: true,
+            message: gdi.note
+              ? `พิมพ์ผ่านไดรเวอร์ Windows · ${gdi.note}`
+              : "พิมพ์ผ่านไดรเวอร์ Windows",
+          };
+        }
+        console.warn("[ap-pos] fast print failed:", gdi.message);
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.warn("[ap-pos] fast print failed, fallback enumerate:", msg);
-      // ตกไปทางช้าด้านล่าง
+      console.warn("[ap-pos] fast print probe failed:", msg);
+    } finally {
+      await safeDestroy(probe, 0);
     }
   }
 
@@ -612,47 +706,29 @@ export async function printReceiptHtml(
     }
 
     if (isWin()) {
-      try {
-        const thermalGuess = resolved.available.find(
-          (n) =>
-            /xp-?58|xprinter|thermal|receipt/i.test(n) &&
-            !/pdf|fax|onenote/i.test(n),
-        );
-        // ลิ้นชัก + พิมพ์คู่ขนาน — ส่งเข้าคิว Windows พร้อมกัน
-        const drawerP = wantDrawer
-          ? kickCashDrawerBestEffort([
-              preferred,
-              deviceName,
-              thermalGuess,
-            ]).then((r) => {
-              if (!r.ok) console.warn("[ap-pos] drawer kick skipped:", r.error);
-              return r;
-            })
-          : Promise.resolve({ ok: true as const });
-
-        console.log(
-          `[ap-pos] GDI text print ${slipText.length} chars → ${deviceName}`,
-        );
-        await Promise.all([
-          drawerP,
-          sendTextToWindowsPrinter(deviceName, slipText, gdiOpts),
-        ]);
+      const gdi = await printGdiWithFallback(
+        resolved.available,
+        deviceName,
+        slipText,
+        gdiOpts,
+        wantDrawer,
+      );
+      if (gdi.ok) {
+        const notes = [resolved.warning, gdi.note].filter(Boolean);
         return {
           ok: true,
-          message: resolved.warning
-            ? `ไดรเวอร์ · ${resolved.warning}`
+          message: notes.length
+            ? notes.join(" · ")
             : "พิมพ์ผ่านไดรเวอร์ Windows",
         };
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        console.warn("[ap-pos] GDI text print failed:", msg);
-        return {
-          ok: false,
-          message: resolved.warning
-            ? `พิมพ์ไม่สำเร็จ: ${msg} · ${resolved.warning}`
-            : `พิมพ์ไม่สำเร็จ: ${msg}`,
-        };
       }
+      console.warn("[ap-pos] GDI text print failed:", gdi.message);
+      return {
+        ok: false,
+        message: resolved.warning
+          ? `${gdi.message} · ${resolved.warning}`
+          : gdi.message,
+      };
     }
 
     if (!tempFile) {
@@ -694,4 +770,17 @@ export async function printReceiptHtml(
       }
     }
   }
+}
+
+/** เตะลิ้นชักอย่างเดียว — ใช้ตอนนับเงิน / นำเข้า-ออก */
+export async function kickCashDrawer(deviceName?: string) {
+  if (!isWin()) {
+    return { ok: false, error: "รองรับเฉพาะ Windows" };
+  }
+  return kickCashDrawerBestEffort([
+    deviceName,
+    "XP-58C",
+    "XP-58",
+    "POS-58",
+  ]);
 }

@@ -16,6 +16,7 @@
     "seed:export": "pnpm --filter @ap-pos/pos seed:export",
     "dist:pos": "pnpm --filter @ap-pos/pos dist",
     "dist:pos:win": "pnpm --filter @ap-pos/pos dist:win",
+    "dist:pos:win:local": "pnpm --filter @ap-pos/pos dist:win:local",
     "dist:pos:mac": "pnpm --filter @ap-pos/pos dist:mac",
     "dist:pos:win:fresh": "pnpm seed:export && pnpm dist:pos:win",
     "dist:pos:mac:fresh": "pnpm seed:export && pnpm dist:pos:mac"

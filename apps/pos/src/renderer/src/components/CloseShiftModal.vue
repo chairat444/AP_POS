@@ -30,6 +30,12 @@ const { storeName, storeTagline } = storeToRefs(settings);
 const countOpen = ref(false);
 const countBtn = ref<HTMLButtonElement | null>(null);
 const closing = ref(false);
+const syncError = ref("");
+const pendingCloseCount = ref<{
+  total: number;
+  denoms: DenomCount[];
+  note?: string;
+} | null>(null);
 const commission = ref<CommissionResult | null>(null);
 const commissionLoading = ref(false);
 
@@ -88,14 +94,12 @@ async function printClosedReport(
 }
 
 async function shutdownAfterClose() {
-  // ปิดจอลูกค้าก่อน แล้วค่อยปิดแอป — ไม่ให้จอ 2 ค้างหลังปิดรอบ
   try {
     window.apPos?.setCustomerScreenEnabled?.(false);
   } catch {
     // ignore
   }
   try {
-    // อย่า await ค้าง — ส่งคำสั่งปิดแล้วจบ
     void window.apPos?.quit?.();
   } catch {
     // fall through
@@ -103,19 +107,42 @@ async function shutdownAfterClose() {
   emit("closed");
 }
 
-async function closeWithoutCount() {
+async function runClose(opts?: {
+  count?: { total: number; denoms: DenomCount[]; note?: string } | null;
+  forceLocal?: boolean;
+}) {
   if (closing.value) return;
   closing.value = true;
-  session.markExiting();
+  syncError.value = "";
+  const count =
+    opts && "count" in opts ? opts.count : pendingCloseCount.value;
+  if (count) pendingCloseCount.value = count;
+  else if (opts?.count === null) pendingCloseCount.value = null;
+
   try {
-    const closed = await session.closeShift().catch(() => undefined);
+    const closed = await session
+      .closeShift(count ?? undefined, { forceLocal: opts?.forceLocal })
+      .catch(() => undefined);
+
+    if (closed && closed.synced === false && closed.cleared === false) {
+      syncError.value =
+        session.statusMessage ||
+        "ส่งเซิร์ฟไม่สำเร็จ — อย่าปิดเครื่อง กดลองส่งอีกครั้ง";
+      return;
+    }
+
+    session.markExiting();
     cart.clearHeldBills();
     await printClosedReport(closed);
-  } finally {
-    // ปิดระบบเสมอ — ออฟไลน์ข้อมูลค้าง outbox ไว้รอบถัดไป
     await shutdownAfterClose();
+  } finally {
     closing.value = false;
   }
+}
+
+async function closeWithoutCount() {
+  pendingCloseCount.value = null;
+  await runClose({ count: null });
 }
 
 async function onCounted(payload: {
@@ -123,21 +150,30 @@ async function onCounted(payload: {
   denoms: DenomCount[];
   note?: string;
 }) {
-  if (closing.value) return;
-  closing.value = true;
-  session.markExiting();
-  try {
-    const closed = await session.closeShift(payload).catch(() => undefined);
-    cart.clearHeldBills();
-    await printClosedReport(closed);
-  } finally {
-    await shutdownAfterClose();
-    closing.value = false;
-  }
+  countOpen.value = false;
+  await runClose({ count: payload });
+}
+
+async function retrySync() {
+  await runClose({
+    count: pendingCloseCount.value,
+  });
+}
+
+async function forceCloseLocal() {
+  await runClose({
+    count: pendingCloseCount.value,
+    forceLocal: true,
+  });
 }
 
 function cancel() {
   if (closing.value) return;
+  session.rollbackCloseCashCounts();
+  // กัน outbox ค้าง status:closed แล้ว sync พื้นหลังปิดรอบบนเซิร์ฟ
+  void session.requeueOpenShiftToOutbox().catch(() => undefined);
+  syncError.value = "";
+  pendingCloseCount.value = null;
   open.value = false;
 }
 
@@ -150,6 +186,8 @@ watch(open, (v) => {
   if (!v) {
     countOpen.value = false;
     commission.value = null;
+    syncError.value = "";
+    pendingCloseCount.value = null;
     return;
   }
   focusFirst();
@@ -168,6 +206,10 @@ function onKey(e: KeyboardEvent) {
   if (e.key === "Enter" && !closing.value) {
     e.preventDefault();
     e.stopPropagation();
+    if (syncError.value) {
+      void retrySync();
+      return;
+    }
     startCount();
   }
 }
@@ -216,20 +258,20 @@ function auditLabel(type: string) {
             <small>บาท</small>
           </div>
           <div class="shift-commission-meta">
-            ยอดขายวันนี้ {{ money(commission.daySales) }}฿
+            ยอดขายวันนี้ {{ money(commission.daySales) }}
             <template v-if="commission.amount > 0">
               · ได้ {{ commission.steps }} ขั้น
             </template>
             <template v-else-if="commission.nextTierAt != null">
-              · เริ่มได้คอมที่ {{ money(commission.nextTierAt) }}฿
+              · เริ่มได้คอมที่ {{ money(commission.nextTierAt) }}
             </template>
           </div>
           <div
             v-if="commission.nextTierAt != null && commission.amount > 0"
             class="shift-commission-next"
           >
-            ขั้นถัดไป {{ money(commission.nextTierAt) }}฿ → คอม
-            {{ money(commission.nextTierAmount ?? 0) }}฿
+            ขั้นถัดไป {{ money(commission.nextTierAt) }} → คอม
+            {{ money(commission.nextTierAmount ?? 0) }}
           </div>
         </div>
 
@@ -287,13 +329,13 @@ function auditLabel(type: string) {
           <div class="shift-cell" :class="{ 'shift-alert': summary.voidLineCount > 0 }">
             <span>ยกเลิกรายการ</span>
             <strong>
-              {{ summary.voidLineCount }} / {{ summary.voidLineAmount.toFixed(0) }}฿
+              {{ summary.voidLineCount }} / {{ summary.voidLineAmount.toFixed(0) }}
             </strong>
           </div>
           <div class="shift-cell" :class="{ 'shift-alert': summary.voidBillCount > 0 }">
             <span>ยกเลิกบิล</span>
             <strong>
-              {{ summary.voidBillCount }} / {{ summary.voidBillAmount.toFixed(0) }}฿
+              {{ summary.voidBillCount }} / {{ summary.voidBillAmount.toFixed(0) }}
             </strong>
           </div>
         </div>
@@ -322,9 +364,11 @@ function auditLabel(type: string) {
           </div>
         </div>
 
+        <div v-if="syncError" class="pay-warn">{{ syncError }}</div>
+
         <p class="pay-note pay-note-compact">
-          บันทึกในเครื่องก่อน · เช็ค API 3 รอบ ถ้าติดจะส่งให้เสร็จก่อนปิด ·
-          ไม่ติดปิดได้ ส่งตอนเปิดรอบวันใหม่
+          บันทึกในเครื่อง → ส่งเซิร์ฟ+Discord ทันที → ค่อยปิดแอป
+          ถ้าส่งไม่สำเร็จจะไม่ปิดเครื่องให้จนกว่าจะส่งได้
         </p>
       </div>
 
@@ -337,25 +381,45 @@ function auditLabel(type: string) {
         >
           ยกเลิก
         </button>
-        <button
-          type="button"
-          class="pay-cancel"
-          :disabled="closing"
-          @click="closeWithoutCount"
-        >
-          {{ closing ? "กำลังส่งข้อมูลแล้วปิด..." : "ปิดรอบเลย" }}
-          <small>ไม่นับเงิน · ปิดระบบ</small>
-        </button>
-        <button
-          ref="countBtn"
-          type="button"
-          class="pay-confirm"
-          :disabled="closing"
-          @click="startCount"
-        >
-          {{ closing ? "กำลังส่งข้อมูลแล้วปิด..." : "นับเงินแล้วปิด" }}
-          <small>Enter · ค่าเริ่มต้น</small>
-        </button>
+        <template v-if="syncError">
+          <button
+            type="button"
+            class="pay-cancel"
+            :disabled="closing"
+            @click="forceCloseLocal"
+          >
+            ปิดเครื่องทั้งที่ยังไม่ส่ง
+          </button>
+          <button
+            type="button"
+            class="pay-confirm"
+            :disabled="closing"
+            @click="retrySync"
+          >
+            {{ closing ? "กำลังส่งเซิร์ฟ..." : "ลองส่งเซิร์ฟอีกครั้ง" }}
+          </button>
+        </template>
+        <template v-else>
+          <button
+            type="button"
+            class="pay-cancel"
+            :disabled="closing"
+            @click="closeWithoutCount"
+          >
+            {{ closing ? "กำลังส่งเซิร์ฟ..." : "ปิดรอบเลย" }}
+            <small>ไม่นับเงิน</small>
+          </button>
+          <button
+            ref="countBtn"
+            type="button"
+            class="pay-confirm"
+            :disabled="closing"
+            @click="startCount"
+          >
+            {{ closing ? "กำลังส่งเซิร์ฟ..." : "นับเงินแล้วปิด" }}
+            <small>Enter</small>
+          </button>
+        </template>
       </footer>
     </div>
 

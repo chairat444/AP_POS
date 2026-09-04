@@ -10,10 +10,7 @@ const USER_KEY = "ap-pos-admin-user";
 
 export function useAuth() {
   const config = useRuntimeConfig();
-  const base = String(config.public.apiBase || "http://127.0.0.1:3000").replace(
-    /\/$/,
-    "",
-  );
+  const base = String(config.public.apiBase || "/api").replace(/\/$/, "");
 
   const token = useState<string | null>("auth-token", () => null);
   const user = useState<AuthUser | null>("auth-user", () => null);

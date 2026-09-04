@@ -21,7 +21,7 @@ const props = defineProps<{
 const emit = defineEmits<{ opened: [] }>();
 
 const session = useSessionStore();
-const { isOpen, staffDirectory, device } = storeToRefs(session);
+const { isOpen, device } = storeToRefs(session);
 
 const PIN_MAX_LEN = 4;
 const code = ref("");
@@ -59,6 +59,10 @@ const setupMode = ref(false);
 const savingSetup = ref(false);
 /** กำลังอัปเดต master data หลังเปิดรอบ */
 const refreshing = ref(false);
+/** มีรอบค้าง — ใส่ PIN แล้วกลับเข้ารอบเดิม (ไม่เปิดใหม่) */
+const resumePending = ref<{ staffName: string; billCount: number } | null>(
+  null,
+);
 let focusTimers: ReturnType<typeof setTimeout>[] = [];
 
 const selectedBranch = computed(
@@ -149,6 +153,7 @@ async function prepareOpen() {
   error.value = "";
   countOpen.value = false;
   savingSetup.value = false;
+  resumePending.value = null;
 
   const [dev] = await Promise.all([
     session.refreshDevice(),
@@ -168,7 +173,11 @@ async function prepareOpen() {
   );
   // ต้องลงทะเบียนถ้ายังไม่เสร็จ หรือ ID ในเครื่องไม่ตรงกับ Admin
   setupMode.value = !dev.setupDone || !terminalOk;
-  if (!setupMode.value) scheduleFocusCode();
+  if (!setupMode.value) {
+    // ไม่ unlock อัตโนมัติ — ต้องใส่ PIN ทุกครั้ง (มีรอบค้างก็กลับเข้ารอบเดิม)
+    resumePending.value = await session.peekActiveSession();
+    scheduleFocusCode();
+  }
 }
 
 watch(branchId, (id, prev) => {
@@ -308,6 +317,11 @@ async function submitWithCount() {
     error.value = "บันทึกสาขาและเครื่องก่อน";
     return;
   }
+  // รอบค้าง — ไม่นับทอนใหม่ แค่ unlock กลับเข้ารอบ
+  if (resumePending.value) {
+    await submitSkip();
+    return;
+  }
   if (refreshing.value || submittingPin.value) return;
   if (code.value.trim().length !== PIN_MAX_LEN) return;
   submittingPin.value = true;
@@ -443,12 +457,20 @@ onUnmounted(() => {
         </footer>
       </template>
 
-      <!-- เปิดรอบ — โฟกัส PIN -->
+      <!-- เปิดรอบ / กลับเข้ารอบค้าง — โฟกัส PIN ทุกครั้ง -->
       <template v-else>
         <div class="pin-login-meta">{{ deviceLabel }}</div>
         <header class="pay-head pin-login-head">
-          <h2>ใส่ PIN</h2>
+          <h2>{{ resumePending ? "ใส่ PIN เพื่อเข้าระบบ" : "ใส่ PIN" }}</h2>
         </header>
+
+        <p v-if="resumePending" class="pay-note pay-note-compact">
+          มีรอบค้างของ {{ resumePending.staffName }}
+          <template v-if="resumePending.billCount > 0">
+            · {{ resumePending.billCount }} บิล
+          </template>
+          — ใส่ PIN ของพนักงานคนนี้เพื่อกลับเข้ารอบเดิม
+        </p>
 
         <label class="pay-field pin-login-field">
           <input
@@ -466,13 +488,6 @@ onUnmounted(() => {
           />
         </label>
 
-        <p v-if="staffDirectory.length" class="pin-login-hint">
-          ตัวอย่าง PIN
-          <strong v-for="s in staffDirectory.slice(0, 3)" :key="s.id">
-            {{ s.pin }}
-          </strong>
-        </p>
-
         <div v-if="error" class="pay-warn">{{ error }}</div>
         <div v-if="refreshing" class="pay-warn" style="color: var(--text, #333)">
           กำลังอัปเดตข้อมูลก่อนขาย...
@@ -480,6 +495,7 @@ onUnmounted(() => {
 
         <footer class="open-shift-actions">
           <button
+            v-if="!resumePending"
             type="button"
             class="pay-cancel"
             :disabled="!canSubmit"
@@ -493,12 +509,23 @@ onUnmounted(() => {
             :disabled="!canSubmit"
             @click="submitSkip"
           >
-            {{ refreshing ? "กำลังอัปเดต..." : "เปิดรอบเลย" }}
+            {{
+              refreshing
+                ? "กำลังอัปเดต..."
+                : resumePending
+                  ? "เข้าระบบ"
+                  : "เปิดรอบเลย"
+            }}
             <small v-if="!refreshing">Enter</small>
           </button>
         </footer>
 
-        <button type="button" class="pin-login-change" @click="changeDevice">
+        <button
+          v-if="!resumePending"
+          type="button"
+          class="pin-login-change"
+          @click="changeDevice"
+        >
           เปลี่ยนสาขา / เครื่อง
         </button>
       </template>

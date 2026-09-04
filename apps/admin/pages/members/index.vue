@@ -190,7 +190,7 @@ onMounted(load);
 </script>
 
 <template>
-  <div>
+  <div class="ui-members">
     <div class="ui-page-head">
       <div>
         <h1 class="ui-page-title">สมาชิก</h1>
@@ -275,23 +275,30 @@ onMounted(load);
                 <strong>{{ row.points.toLocaleString("th-TH") }}</strong>
               </td>
               <td class="ui-table__actions">
-                <NuxtLink
-                  :to="`/members/points?id=${row.id}&q=${encodeURIComponent(row.phone || row.code)}`"
-                  class="ui-btn ui-btn--ghost"
-                >
-                  ประวัติแต้ม
-                </NuxtLink>
-                <button type="button" class="ui-btn ui-btn--ghost" @click="openEdit(row)">
-                  แก้ไข
-                </button>
-                <button
-                  type="button"
-                  class="ui-btn ui-btn--ghost-danger"
-                  :disabled="saving"
-                  @click="remove(row)"
-                >
-                  ลบ
-                </button>
+                <div class="ui-members__actions">
+                  <NuxtLink
+                    :to="`/members/points?id=${row.id}&q=${encodeURIComponent(row.phone || row.code)}`"
+                    class="ui-btn ui-btn--ghost"
+                    title="ประวัติแต้ม"
+                  >
+                    แต้ม
+                  </NuxtLink>
+                  <button
+                    type="button"
+                    class="ui-btn ui-btn--ghost"
+                    @click="openEdit(row)"
+                  >
+                    แก้ไข
+                  </button>
+                  <button
+                    type="button"
+                    class="ui-btn ui-btn--ghost-danger"
+                    :disabled="saving"
+                    @click="remove(row)"
+                  >
+                    ลบ
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -331,6 +338,7 @@ onMounted(load);
               <input v-model="form.points" class="ui-input" type="number" min="0" step="1" />
             </label>
           </div>
+          <p v-if="error && modalOpen" class="ui-members__form-error">{{ error }}</p>
         </div>
         <div class="ui-modal__foot">
           <button type="button" class="ui-btn ui-btn--ghost" @click="closeModal">ยกเลิก</button>
@@ -347,3 +355,38 @@ onMounted(load);
     </div>
   </div>
 </template>
+
+<style scoped>
+.ui-members :deep(.ui-table--fit .ui-table__actions) {
+  width: 11.5rem;
+  max-width: 11.5rem;
+  white-space: normal;
+  overflow: hidden;
+  text-align: right !important;
+  vertical-align: middle;
+  padding-left: 0.5rem;
+  padding-right: 0.85rem;
+}
+
+.ui-members__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.25rem;
+  max-width: 100%;
+}
+
+.ui-members__actions :deep(.ui-btn),
+.ui-members__actions .ui-btn {
+  margin: 0 !important;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
+.ui-members__form-error {
+  margin: 0.75rem 0 0;
+  color: #b91c1c;
+  font-size: 0.88rem;
+}
+</style>

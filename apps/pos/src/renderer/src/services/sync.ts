@@ -1201,17 +1201,28 @@ export async function enqueueSale(payload: SyncedSalePayload) {
   await window.apPos.db.saveSale(payload);
 }
 
-/** บันทึก local แล้ว push พื้นหลัง — ไม่รอเน็ตตอนจบบิล */
+/** กัน Vue proxy / ค่าที่ clone ไม่ได้ ตอนส่งผ่าน Electron IPC */
+function toIpcPlain<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** บันทึก local แล้ว push — ออนไลน์แล้วพยายามส่งทันที */
 export async function enqueueSaleAndSync(payload: SyncedSalePayload) {
   await enqueueSale(payload);
-  void syncPushOutbox().catch(() => {
+  try {
+    if (isApiOfflineKnown()) {
+      const online = await refreshApiOnline({ attempts: 1, timeoutMs: 700 });
+      if (!online) return;
+    }
+    await syncPushOutbox({ force: !isApiOfflineKnown() });
+  } catch {
     // offline / API พัง — ค้างใน outbox แล้วค่อย sync รอบถัดไป
-  });
+  }
 }
 
 export async function enqueueShift(payload: SyncedShiftPayload) {
   if (!window.apPos?.db?.enqueueShift) return;
-  await window.apPos.db.enqueueShift(payload);
+  await window.apPos.db.enqueueShift(toIpcPlain(payload));
 }
 
 /** เช็คว่า API ถึงได้จริง (ไม่ใช่แค่ Wi‑Fi ติด) */
@@ -1254,6 +1265,17 @@ export function markApiOnlineCacheCleared() {
 }
 
 export async function loadPosNetworkConfig() {
+  // pnpm dev — ใช้ .env ไม่ใช้ค่า prod ที่เคยบันทึกใน SQLite
+  if (import.meta.env.DEV) {
+    runtimeApiBase = DEFAULT_API_BASE;
+    const envAdmin = (
+      import.meta.env.VITE_ADMIN_URL as string | undefined
+    )?.trim();
+    if (envAdmin) runtimeAdminUrl = envAdmin.replace(/\/$/, "");
+    void window.apPos?.media?.setApiBase?.(getApiBase());
+    return;
+  }
+
   if (!window.apPos?.db?.getMeta) return;
   try {
     const api = await window.apPos.db.getMeta(API_BASE_META);
@@ -1336,11 +1358,13 @@ function markApiOffline() {
 export async function flushOutbox(opts?: {
   timeoutMs?: number;
   maxRounds?: number;
+  /** ข้ามแคช offline — ใช้หลัง probe ว่า API ติดแล้ว */
+  force?: boolean;
 }): Promise<{ ok: boolean; pending: number }> {
   const timeoutMs = opts?.timeoutMs ?? 12_000;
   const maxRounds = opts?.maxRounds ?? 3;
   for (let i = 0; i < maxRounds; i++) {
-    await syncPushOutbox({ timeoutMs });
+    await syncPushOutbox({ timeoutMs, force: opts?.force });
     const pending = await pendingOutboxCount();
     if (pending === 0) return { ok: true, pending: 0 };
   }
@@ -1348,59 +1372,79 @@ export async function flushOutbox(opts?: {
 }
 
 /**
- * ปิดรอบ / บันทึก shift:
- * 1) บันทึก SQLite เสมอ
- * 2) วนเช็ค API 3 รอบ
- * 3) API ไม่ติด → จบ (ค้าง outbox ปิดระบบได้)
- * 4) API ติด → ส่ง outbox ให้เสร็จก่อนค่อยจบ
+ * บันทึก shift ลง SQLite แล้ว POST ตรงไป /sync/shifts ทันที
+ * (เซิร์ฟรับแล้วค่อยยิง Discord) — ไม่รอ flush outbox ทั้งก้อน
  */
 export async function enqueueShiftAndSync(
   payload: SyncedShiftPayload,
   opts?: {
-    /** ปิดรอบ: เช็ค API แล้วค่อยตัดสินใจรอส่ง */
+    /** true = รอส่งเซิร์ฟให้จบ (เปิด/นับทอน/เงินเข้า-ออก/ปิด) */
     awaitIfOnline?: boolean;
-    /** จำนวนรอบเช็ค API (ค่าเริ่มต้น 3) */
     probeAttempts?: number;
     probeTimeoutMs?: number;
     pushTimeoutMs?: number;
-    /** เวลารอส่งสูงสุดเมื่อ API ใช้ได้ (ms) */
     onlineDeadlineMs?: number;
   },
-) {
-  // 1) บันทึกในเครื่องก่อนเสมอ
-  await enqueueShift(payload);
+): Promise<{ synced: boolean; pending: number; error?: string }> {
+  const plain = toIpcPlain(payload);
+  await enqueueShift(plain);
+  const outboxId = `${plain.id}:shift:outbox`;
 
   if (!opts?.awaitIfOnline) {
     void syncPushOutbox().catch(() => undefined);
-    return;
+    return { synced: false, pending: await pendingOutboxCount() };
   }
 
-  // 2) วนเช็ค API ~3 รอบ
-  const online = await probeApiOnline({
-    attempts: opts.probeAttempts ?? 3,
-    timeoutMs: opts.probeTimeoutMs ?? 800,
-    gapMs: 250,
-  });
+  const attempts = Math.max(1, opts.probeAttempts ?? 3);
+  const probeTimeoutMs = opts.probeTimeoutMs ?? 1200;
+  const pushTimeoutMs = opts.pushTimeoutMs ?? 12_000;
+  let lastError = "";
 
-  // 3) API ไม่ทำงาน = ออฟไลน์ → ข้อมูลอยู่ใน SQLite แล้ว พร้อมปิดระบบ
-  if (!online) return;
-
-  // 4) API ใช้ได้ → ส่งให้เสร็จก่อนปิด
-  const timeoutMs = opts.pushTimeoutMs ?? 12_000;
-  const deadlineMs = opts.onlineDeadlineMs ?? 45_000;
-  await raceTimeout(
-    (async () => {
-      const deadline = Date.now() + deadlineMs;
-      while (Date.now() < deadline) {
-        const result = await flushOutbox({ timeoutMs, maxRounds: 1 });
-        if (result.ok) return;
-        // ระหว่างส่ง API ดับ → เลิกรอ ค้าง SQLite ปิดได้
-        if (!(await isApiReachable(700))) return;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const reachable = await isApiReachable(probeTimeoutMs);
+      if (!reachable) {
+        lastError = "API ไม่ตอบ";
+        await new Promise((r) => setTimeout(r, 280));
+        continue;
       }
-    })(),
-    deadlineMs + 1_500,
-    undefined,
-  );
+      markApiOnline();
+      const data = await postJson<{ accepted?: string[] }>(
+        `${getApiBase()}/sync/shifts`,
+        { shifts: [plain] },
+        pushTimeoutMs,
+      );
+      const accepted = Array.isArray(data.accepted) ? data.accepted : [];
+      // กัน POST สำเร็จแต่ ack ไม่ทัน แล้ว flush ส่งซ้ำทันที — รอ ack ก่อน
+      if (accepted.includes(plain.id) || accepted.length > 0) {
+        try {
+          await window.apPos?.db?.ackOutbox?.([outboxId]);
+        } catch {
+          /* เซิร์ฟมีแล้ว — ถ้า ack ไม่ได้ รอบหลัง upsert ซ้ำได้ (Discord กันซ้ำแล้ว) */
+        }
+        // บิลค้างส่งพื้นหลัง (ปิดรอบจะ await เองแยก)
+        if (plain.status !== "closed") {
+          void syncPushOutbox({ force: true, timeoutMs: 8_000 }).catch(
+            () => undefined,
+          );
+        }
+        return {
+          synced: true,
+          pending: await pendingOutboxCount().catch(() => 0),
+        };
+      }
+      lastError = "เซิร์ฟไม่ยืนยันรับรอบ";
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : "ส่งรอบไม่สำเร็จ";
+      await new Promise((r) => setTimeout(r, 320));
+    }
+  }
+
+  return {
+    synced: false,
+    pending: await pendingOutboxCount().catch(() => -1),
+    error: lastError || "ส่งเซิร์ฟไม่สำเร็จ",
+  };
 }
 
 export async function enqueueAudit(payload: SyncedAuditPayload) {
@@ -1579,14 +1623,25 @@ export async function fetchSettingsFromApi(): Promise<
   }
 }
 
-export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
+export async function syncPushOutbox(opts?: {
+  timeoutMs?: number;
+  /** true = ส่งแม้แคชบอกว่า offline (ใช้ตอนปิดรอบหลัง probe แล้ว) */
+  force?: boolean;
+}) {
   if (!window.apPos?.db) return { accepted: 0 };
-  if (isApiOfflineKnown()) return { accepted: 0 };
+  if (!opts?.force && isApiOfflineKnown()) return { accepted: 0 };
 
   try {
     await flushPendingMemberCreates();
   } catch {
     /* keep pending */
+  }
+
+  // บิลที่ยังไม่ synced แต่อาจหลุดจาก outbox → ใส่กลับก่อนส่ง
+  try {
+    await window.apPos.db.requeueUnsyncedSales?.();
+  } catch {
+    /* ignore */
   }
 
   const outbox = (await window.apPos.db.listOutbox()) as SyncEnvelope[];
@@ -1597,6 +1652,8 @@ export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
   const shifts = outbox.filter((e) => e.type === "shift");
   const audits = outbox.filter((e) => e.type === "audit");
   const acceptedIds: string[] = [];
+  let anyOk = false;
+  let anyFail = false;
 
   if (sales.length) {
     try {
@@ -1606,7 +1663,9 @@ export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
         timeoutMs,
       );
       acceptedIds.push(...(data.acceptedIds ?? []));
+      anyOk = true;
     } catch {
+      anyFail = true;
       // keep sales in outbox
     }
   }
@@ -1623,7 +1682,9 @@ export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
         const env = audits.find((e) => e.payload.id === auditId);
         if (env) acceptedIds.push(env.id);
       }
+      anyOk = true;
     } catch {
+      anyFail = true;
       // keep audits in outbox
     }
   }
@@ -1640,7 +1701,9 @@ export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
         const env = shifts.find((e) => e.payload.id === shiftId);
         if (env) acceptedIds.push(env.id);
       }
+      anyOk = true;
     } catch {
+      anyFail = true;
       // keep shifts in outbox
     }
   }
@@ -1648,10 +1711,276 @@ export async function syncPushOutbox(opts?: { timeoutMs?: number }) {
   if (acceptedIds.length) {
     await window.apPos.db.ackOutbox(acceptedIds);
   }
+  if (anyOk) markApiOnline();
+  else if (anyFail && opts?.force) {
+    /* ตอน force ไม่สลับเป็น offline จาก fail ชั่วคราว — ให้ caller ตัดสิน */
+  }
   return { accepted: acceptedIds.length, acceptedIds };
 }
 
 export async function pendingOutboxCount() {
   if (!window.apPos?.db) return 0;
   return window.apPos.db.outboxCount();
+}
+
+export type LocalSaleSyncItem = {
+  id: string;
+  billNo: string;
+  shiftId: string | null;
+  total: number;
+  createdAt: string;
+  syncedAt: string | null;
+  status: "pending" | "synced";
+};
+
+export async function listLocalSaleSyncItems(opts?: {
+  limit?: number;
+  pendingOnly?: boolean;
+}): Promise<LocalSaleSyncItem[]> {
+  if (!window.apPos?.db?.listLocalSales) return [];
+  return window.apPos.db.listLocalSales(opts);
+}
+
+export async function countPendingLocalSales(): Promise<number> {
+  if (!window.apPos?.db?.countPendingSales) return 0;
+  return window.apPos.db.countPendingSales();
+}
+
+/** ส่งบิลที่ยังไม่ synced (requeue + push outbox) */
+export async function pushPendingSales(opts?: {
+  timeoutMs?: number;
+}): Promise<{ accepted: number; pending: number; requeued: number }> {
+  if (!window.apPos?.db) {
+    return { accepted: 0, pending: 0, requeued: 0 };
+  }
+  let requeued = 0;
+  try {
+    requeued = (await window.apPos.db.requeueUnsyncedSales?.()) ?? 0;
+  } catch {
+    requeued = 0;
+  }
+  const result = await syncPushOutbox({
+    force: true,
+    timeoutMs: opts?.timeoutMs ?? 15_000,
+  });
+  const pending = await countPendingLocalSales().catch(() => 0);
+  return {
+    accepted: result.accepted ?? 0,
+    pending,
+    requeued,
+  };
+}
+
+export type OutboxItemSummary = {
+  id: string;
+  type: "sale" | "shift" | "audit";
+  entityId: string;
+  label: string;
+  detail: string;
+  createdAt: string;
+  attempts: number;
+  lastError: string | null;
+};
+
+function describeOutboxEnvelope(env: SyncEnvelope): {
+  type: OutboxItemSummary["type"];
+  entityId: string;
+  label: string;
+  detail: string;
+} {
+  if (env.type === "sale") {
+    const p = env.payload;
+    return {
+      type: "sale",
+      entityId: p.id,
+      label: `บิล ${p.billNo}`,
+      detail: `${Number(p.total).toFixed(0)} บาท`,
+    };
+  }
+  if (env.type === "shift") {
+    const p = env.payload;
+    const floatNote =
+      Number(p.openCash) > 0
+        ? `ทอน ${Number(p.openCash).toFixed(0)}`
+        : "ยังไม่นับทอน";
+    const floatCounts = Array.isArray(p.cashCounts)
+      ? p.cashCounts.filter(
+          (c) => (c as { purpose?: string }).purpose === "float",
+        ).length
+      : 0;
+    const floatDetail =
+      floatCounts > 0 ? `${floatNote} · นับแล้ว` : floatNote;
+    return {
+      type: "shift",
+      entityId: p.id,
+      label: `รอบ · ${p.staffName}`,
+      detail: `${p.status === "closed" ? "ปิดแล้ว" : "เปิดอยู่"} · ${floatDetail} · ${p.billCount ?? 0} บิล`,
+    };
+  }
+  const p = env.payload;
+  const kind =
+    p.type === "bill_cancel"
+      ? "ยกเลิกบิล"
+      : p.type === "line_void"
+        ? "ยกเลิกรายการ"
+        : p.type;
+  return {
+    type: "audit",
+    entityId: p.id,
+    label: kind,
+    detail: `${p.staffName} · ${Number(p.amount).toFixed(0)} บาท`,
+  };
+}
+
+/** รายการค้างส่ง — สำหรับหน้าตั้งค่า */
+export async function listOutboxItems(): Promise<OutboxItemSummary[]> {
+  if (!window.apPos?.db?.listOutboxRows) {
+    const legacy = (await window.apPos?.db?.listOutbox?.()) as
+      | SyncEnvelope[]
+      | undefined;
+    if (!legacy?.length) return [];
+    return legacy.map((env) => {
+      const d = describeOutboxEnvelope(env);
+      return {
+        id: env.id,
+        ...d,
+        createdAt: "",
+        attempts: 0,
+        lastError: null,
+      };
+    });
+  }
+  const rows = await window.apPos.db.listOutboxRows();
+  return rows.map((row) => {
+    let env: SyncEnvelope;
+    try {
+      env = JSON.parse(row.payload) as SyncEnvelope;
+    } catch {
+      return {
+        id: row.id,
+        type: "sale" as const,
+        entityId: row.entityId,
+        label: row.entityType,
+        detail: "อ่านข้อมูลไม่ได้",
+        createdAt: row.createdAt,
+        attempts: row.attempts,
+        lastError: row.lastError,
+      };
+    }
+    const d = describeOutboxEnvelope(env);
+    return {
+      id: row.id,
+      ...d,
+      createdAt: row.createdAt,
+      attempts: row.attempts,
+      lastError: row.lastError,
+    };
+  });
+}
+
+/** ดันทุกอย่างใน outbox ขึ้นเซิร์ฟ (บิล / รอบ / ยกเลิก) */
+export async function pushAllPendingOutbox(): Promise<{
+  ok: boolean;
+  pending: number;
+  accepted: number;
+}> {
+  await refreshApiOnline({ attempts: 3, timeoutMs: 1200 });
+  let totalAccepted = 0;
+  for (let i = 0; i < 5; i++) {
+    const r = await syncPushOutbox({ force: true, timeoutMs: 15_000 });
+    totalAccepted += r.accepted;
+    const pendingOutbox = await pendingOutboxCount();
+    const pendingSales = await countPendingLocalSales().catch(() => 0);
+    if (pendingOutbox === 0 && pendingSales === 0) {
+      return { ok: true, pending: 0, accepted: totalAccepted };
+    }
+  }
+  const pendingOutbox = await pendingOutboxCount();
+  const pendingSales = await countPendingLocalSales().catch(() => 0);
+  const pending = Math.max(pendingOutbox, pendingSales);
+  return { ok: pending === 0, pending, accepted: totalAccepted };
+}
+
+/** ส่งรอบ (เปิดอยู่ + เงินทอน) ขึ้นเซิร์ฟซ้ำ */
+export async function resyncShiftToServer(
+  payload: SyncedShiftPayload,
+): Promise<{ synced: boolean; pending: number; error?: string }> {
+  return enqueueShiftAndSync(payload, {
+    awaitIfOnline: true,
+    probeAttempts: 5,
+    probeTimeoutMs: 1500,
+    pushTimeoutMs: 15_000,
+  });
+}
+
+export type ShiftServerSnapshot = {
+  found: boolean;
+  openCash?: number;
+  billCount?: number;
+  grossTotal?: number;
+  status?: string;
+};
+
+/** ดึงรอบจากเซิร์ฟ — ใช้ตรวจหลังส่งซ้ำ */
+export async function fetchShiftFromServer(
+  shiftId: string,
+): Promise<ShiftServerSnapshot> {
+  try {
+    const data = await fetchJson<{
+      id?: string;
+      openCash?: number | string;
+      billCount?: number;
+      grossTotal?: number | string;
+      status?: string;
+    }>(`${getApiBase()}/sync/shifts/${encodeURIComponent(shiftId)}`, 6000);
+    if (!data?.id) return { found: false };
+    return {
+      found: true,
+      openCash: Number(data.openCash ?? 0),
+      billCount: data.billCount ?? 0,
+      grossTotal: Number(data.grossTotal ?? 0),
+      status: data.status,
+    };
+  } catch {
+    return { found: false };
+  }
+}
+
+export type ShiftResyncResult = {
+  synced: boolean;
+  pending: number;
+  error?: string;
+  verifiedOnServer: boolean;
+  serverOpenCash?: number;
+  serverBillCount?: number;
+  billsPushed: number;
+};
+
+/**
+ * ส่งรอบซ้ำแบบเต็ม: snapshot ล่าสุด → POST → ดันบิลค้าง → ตรวจเซิร์ฟ
+ */
+export async function resyncShiftFull(
+  payload: SyncedShiftPayload,
+): Promise<ShiftResyncResult> {
+  await refreshApiOnline({ attempts: 3, timeoutMs: 1200 });
+  const sync = await resyncShiftToServer(payload);
+  if (!sync.synced) {
+    return {
+      synced: false,
+      pending: sync.pending,
+      error: sync.error,
+      verifiedOnServer: false,
+      billsPushed: 0,
+    };
+  }
+  const flush = await pushAllPendingOutbox();
+  const server = await fetchShiftFromServer(payload.id);
+  return {
+    synced: true,
+    pending: flush.pending,
+    verifiedOnServer: server.found,
+    serverOpenCash: server.openCash,
+    serverBillCount: server.billCount,
+    billsPushed: flush.accepted,
+  };
 }

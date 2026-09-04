@@ -9,12 +9,27 @@ import { DatabaseService } from "../db/database.service";
 import {
   normalizeBranchPromptPayId,
   normalizeBranchPromptPayName,
+  normalizeDiscordWebhookUrl,
   type BranchRecord,
   type UpsertBranchDto,
 } from "./branch.types";
 
 function now() {
   return new Date();
+}
+
+function parseDiscordWebhookInput(
+  raw: string | null | undefined,
+): string | null {
+  const trimmed = String(raw ?? "").trim();
+  if (!trimmed) return null;
+  const normalized = normalizeDiscordWebhookUrl(trimmed);
+  if (!normalized) {
+    throw new BadRequestException(
+      "Discord webhook ต้องเป็น URL รูปแบบ https://discord.com/api/webhooks/...",
+    );
+  }
+  return normalized;
 }
 
 function toRecord(row: typeof pg.branches.$inferSelect): BranchRecord {
@@ -25,6 +40,7 @@ function toRecord(row: typeof pg.branches.$inferSelect): BranchRecord {
     active: Boolean(row.active),
     promptPayId: normalizeBranchPromptPayId(row.promptPayId),
     promptPayName: normalizeBranchPromptPayName(row.promptPayName),
+    discordWebhookUrl: normalizeDiscordWebhookUrl(row.discordWebhookUrl),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -92,6 +108,7 @@ export class BranchesService {
       active: dto.active === false ? 0 : 1,
       promptPayId: normalizeBranchPromptPayId(dto.promptPayId),
       promptPayName: normalizeBranchPromptPayName(dto.promptPayName),
+      discordWebhookUrl: parseDiscordWebhookInput(dto.discordWebhookUrl),
       createdAt: ts,
       updatedAt: ts,
       deletedAt: null,
@@ -127,6 +144,10 @@ export class BranchesService {
           dto.promptPayName === undefined
             ? current.promptPayName
             : normalizeBranchPromptPayName(dto.promptPayName),
+        discordWebhookUrl:
+          dto.discordWebhookUrl === undefined
+            ? current.discordWebhookUrl
+            : parseDiscordWebhookInput(dto.discordWebhookUrl),
         updatedAt: now(),
       })
       .where(eq(pg.branches.id, id));

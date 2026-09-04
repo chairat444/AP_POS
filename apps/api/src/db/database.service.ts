@@ -41,6 +41,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ALTER TABLE branches ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
       ALTER TABLE branches ADD COLUMN IF NOT EXISTS prompt_pay_id TEXT;
       ALTER TABLE branches ADD COLUMN IF NOT EXISTS prompt_pay_name TEXT;
+      ALTER TABLE branches ADD COLUMN IF NOT EXISTS discord_webhook_url TEXT;
       CREATE TABLE IF NOT EXISTS product_units (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,

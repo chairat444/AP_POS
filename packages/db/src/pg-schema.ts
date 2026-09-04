@@ -17,6 +17,8 @@ export const branches = pgTable("branches", {
   promptPayId: text("prompt_pay_id"),
   /** ชื่อเจ้าของบัญชี PromptPay (บุคคล) — โชว์บนจอลูกค้า */
   promptPayName: text("prompt_pay_name"),
+  /** Discord webhook แจ้งยอดขายของสาขานี้ (ว่าง = ใช้ DISCORD_WEBHOOK_URL) */
+  discordWebhookUrl: text("discord_webhook_url"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),

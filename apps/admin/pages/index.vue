@@ -84,10 +84,11 @@ onMounted(load);
         </div>
         <div class="ui-page-head__actions" style="padding: 1.15rem 1.25rem 1.25rem">
           <NuxtLink to="/products" class="ui-btn ui-btn--primary">จัดการสินค้า</NuxtLink>
-          <NuxtLink to="/members" class="ui-btn ui-btn--ghost">จัดการสมาชิก</NuxtLink>
-          <NuxtLink to="/staff" class="ui-btn ui-btn--ghost">พนักงาน</NuxtLink>
-          <NuxtLink to="/reports" class="ui-btn ui-btn--ghost">สรุปยอดขาย</NuxtLink>
           <NuxtLink to="/sales" class="ui-btn ui-btn--ghost">บิลขาย</NuxtLink>
+          <NuxtLink to="/shifts" class="ui-btn ui-btn--ghost">รอบกะ</NuxtLink>
+          <NuxtLink to="/reports" class="ui-btn ui-btn--ghost">สรุปยอดขาย</NuxtLink>
+          <NuxtLink to="/members" class="ui-btn ui-btn--ghost">สมาชิก</NuxtLink>
+          <NuxtLink to="/staff" class="ui-btn ui-btn--ghost">พนักงาน</NuxtLink>
         </div>
       </div>
     </template>

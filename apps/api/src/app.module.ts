@@ -4,8 +4,7 @@ import { ScheduleModule } from "@nestjs/schedule";
 import { HealthController } from "./health.controller";
 import { SyncController } from "./sync/sync.controller";
 import { SyncService } from "./sync/sync.service";
-import { NotifyService } from "./notify/notify.service";
-import { SalesDigestJob } from "./notify/sales-digest.job";
+import { NotifyModule } from "./notify/notify.module";
 import { ProductsModule } from "./products/products.module";
 import { MembersModule } from "./members/members.module";
 import { SalesModule } from "./sales/sales.module";
@@ -39,12 +38,11 @@ import { DatabaseModule } from "./db/database.module";
     ShiftsModule,
     ExpensesModule,
     PurchasesModule,
+    NotifyModule,
   ],
   controllers: [HealthController, SyncController],
   providers: [
     SyncService,
-    NotifyService,
-    SalesDigestJob,
     { provide: APP_GUARD, useClass: AuthGuard },
   ],
 })

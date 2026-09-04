@@ -183,6 +183,7 @@ function setupIpc() {
     localDb.listAuditsByShift(shiftId),
   );
   ipcMain.handle("db:outbox:list", async () => localDb.listOutbox());
+  ipcMain.handle("db:outbox:listRows", async () => localDb.listOutboxRows());
   ipcMain.handle("db:outbox:ack", async (_e, ids: string[]) => {
     await localDb.ackOutbox(ids);
     return true;
@@ -190,6 +191,15 @@ function setupIpc() {
   ipcMain.handle("db:outbox:count", async () => localDb.pendingOutboxCount());
   ipcMain.handle("db:sales:purgeSynced", async () =>
     localDb.purgeSyncedSales(),
+  );
+  ipcMain.handle("db:sales:listLocal", async (_e, opts) =>
+    localDb.listLocalSales(opts),
+  );
+  ipcMain.handle("db:sales:countPending", async () =>
+    localDb.countPendingSales(),
+  );
+  ipcMain.handle("db:sales:requeueUnsynced", async () =>
+    localDb.requeueUnsyncedSales(),
   );
   ipcMain.handle("db:meta:get", async (_e, key: string) => localDb.getMeta(key));
   ipcMain.handle("db:meta:set", async (_e, key: string, value: string) => {
@@ -200,6 +210,7 @@ function setupIpc() {
     quitAfterCloseShift();
     return true;
   });
+  ipcMain.handle("app:get-version", () => app.getVersion());
   ipcMain.on("app:quit", () => {
     quitAfterCloseShift();
   });
@@ -264,6 +275,14 @@ function setupIpc() {
   ipcMain.handle("printers:list", async () => {
     return receiptPrint.listSystemPrinters();
   });
+  ipcMain.handle(
+    "drawer:kick",
+    async (_e, req?: { deviceName?: string }) => {
+      return receiptPrint.kickCashDrawer(
+        typeof req?.deviceName === "string" ? req.deviceName.trim() : "",
+      );
+    },
+  );
   ipcMain.handle(
     "receipt:preview",
     async (

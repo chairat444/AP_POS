@@ -1,3 +1,29 @@
+/** ข้อความท้ายสลิป — จาก package.json ผ่าน Electron */
+export function formatAppVersionLabel(version?: string | null): string {
+  const v = String(version ?? "").trim();
+  if (!v) return "AP POS";
+  return `AP Version ${v}`;
+}
+
+let cachedAppVersionLabel: string | null = null;
+let appVersionInflight: Promise<string> | null = null;
+
+export async function getAppVersionLabel(): Promise<string> {
+  if (cachedAppVersionLabel) return cachedAppVersionLabel;
+  if (!appVersionInflight) {
+    appVersionInflight = (async () => {
+      try {
+        const v = await window.apPos?.getVersion?.();
+        cachedAppVersionLabel = formatAppVersionLabel(v);
+      } catch {
+        cachedAppVersionLabel = "AP POS";
+      }
+      return cachedAppVersionLabel;
+    })();
+  }
+  return appVersionInflight;
+}
+
 /** เงิน: 1,234.56 — หลีกเลี่ยง toLocaleString (ช้าตอนเรนเดอร์ตารางบ่อย) */
 export function formatMoney(
   value: number | null | undefined,

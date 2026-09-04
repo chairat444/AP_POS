@@ -50,11 +50,29 @@ export MSSQL_PASSWORD='***'
 - ดึงบิลขายจาก SQL Server ใส่ใหม่
 - **ไม่** เขียนทับสินค้า หน่วย ลูกค้า พนักงาน
 
+## ลูกค้า + แต้ม + ยอดขาย (ไม่แตะสินค้า/พนักงาน)
+
+```bash
+export MSSQL_HOST=192.168.1.107
+export MSSQL_PASSWORD='***'
+.venv-migrate/bin/python scripts/migrate_pos_ap.py \
+  --branch-code 002 \
+  --branch-name 'สาขาเจ็ดเสมียน' \
+  --skip-products \
+  --dry-run
+```
+
+Apply:
+
+```bash
+... --skip-products --apply
+```
+
 ## Env อื่นๆ
 
 | ตัวแปร | ค่าเริ่มต้น |
 |--------|-------------|
-| `MSSQL_HOST` | `192.168.1.104` |
+| `MSSQL_HOST` | `192.168.1.107` |
 | `MSSQL_PORT` | `1433` |
 | `MSSQL_USER` | `sa` |
 | `MSSQL_DB` | `POS_AP` |
@@ -96,3 +114,38 @@ export MSSQL_PASSWORD='***'
 ```bash
 --branch-code 001 --branch-name 'สาขาหลุมดิน' --apply
 ```
+
+## Windows — รันที่เครื่อง POS สาขา (แนะนำ)
+
+คัดลอกโฟลเดอร์ `scripts/` ทั้งชุดไปเครื่อง Windows ที่ POS (หรือ clone repo)
+
+```
+scripts/
+  migrate_pos_ap.py
+  windows/
+    migrate-config.example.bat
+    MIGRATE-LUMDIN-SETUP.bat      ← ติดตั้ง venv + ทดสอบ MSSQL/Postgres
+    MIGRATE-LUMDIN-DRY-RUN.bat    ← ดูตัวเลข ไม่เขียน DB
+    MIGRATE-LUMDIN-APPLY.bat      ← apply จริง (พิมพ์ YES)
+```
+
+**เตรียมครั้งแรก**
+
+1. ติดตั้ง [Python 3.10+](https://www.python.org/downloads/) (ติ๊ก Add to PATH)
+2. `copy scripts\windows\migrate-config.example.bat scripts\windows\migrate-config.local.bat`
+3. แก้ใน `migrate-config.local.bat`:
+   - `MSSQL_HOST` — มักเป็น `localhost` ถ้า SQL Server อยู่เครื่องเดียวกัน
+   - `MSSQL_DB` — เช่น `pos_ap001`
+   - `MSSQL_PASSWORD`
+   - `DATABASE_URL` — Postgres ปลายทาง (local ทดสอบ หรือ server กลาง)
+4. ดับเบิลคลิก **MIGRATE-LUMDIN-SETUP.bat**
+5. **MIGRATE-LUMDIN-DRY-RUN.bat** → ตรวจจำนวนลูกค้า/บิล
+6. backup Postgres → **MIGRATE-LUMDIN-APPLY.bat**
+
+**หมายเหตุ**
+
+- `migrate-config.local.bat` ไม่ commit (มีรหัสผ่าน)
+- ใช้ `--skip-products` — ไม่แตะสินค้า/พนักงาน
+- ปิด AP POS ก่อน apply (สคริปต์หยุดให้อัตโนมัติ)
+- ทดสอบ local: `DATABASE_URL` ชี้ `localhost` + รัน API/Postgres บนเครื่อง POS
+- production: ชี้ `DATABASE_URL` ไป server กลาง (ข้อมูลไม่ผ่านเครื่อง dev เก่า)

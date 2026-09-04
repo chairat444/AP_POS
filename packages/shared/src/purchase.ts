@@ -29,6 +29,10 @@ export function purchaseDayStatusLabel(status: string) {
   );
 }
 
+export function isPurchaseDayStatus(v: string): v is PurchaseDayStatus {
+  return PURCHASE_DAY_STATUSES.some((s) => s.key === v);
+}
+
 export type ParsedPurchaseLine = {
   name: string;
   qtyText: string | null;
@@ -49,12 +53,61 @@ function cleanName(raw: string) {
   return raw
     .replace(/^\d{1,2}:\d{2}\s*/u, "")
     .replace(/^น้อง\S*\s+/u, "")
+    // หมูสับเอา1ถาด → หมูสับ1ถาด
+    .replace(/เอา(?=\s*\d)/gu, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
+function parseOneItem(raw: string): ParsedPurchaseLine | null {
+  let name = cleanName(raw);
+  let qtyText: string | null = null;
+  let note: string | null = null;
+  if (!name || name.length < 2) return null;
+
+  // ขนาดถุง/ถาด แบบ 6*9, 7x11 — เก็บทั้งชื่อ ไม่แยกจำนวน
+  if (/\d+\s*[x*×]\s*\d+/i.test(name)) {
+    return { name, qtyText: null, note: null };
+  }
+
+  // "xxx มี3" / "มี 1 ครึ่ง" / "มี1ถาดครึ่ง"
+  const hasMatch = name.match(/^(.*?)(มี\s*\d+(?:\.\d+)?.*)$/u);
+  if (hasMatch && hasMatch[1].trim().length >= 2) {
+    name = hasMatch[1].trim();
+    note = hasMatch[2].trim();
+    qtyText = note;
+  } else {
+    const numTail = name.match(
+      /^(.*?)(\d+(?:\.\d+)?(?:\s*[+＋]\s*\d+(?:\.\d+)?)?(?:\s*(?:โล|ขีด|มัด|ถุง|ถาด|กก|kg))?)$/iu,
+    );
+    if (numTail && numTail[1].trim().length >= 2) {
+      const before = numTail[1];
+      if (/[x*×]\s*$/i.test(before)) {
+        // keep full as name
+      } else {
+        name = before.trim();
+        qtyText = numTail[2].trim();
+      }
+    }
+  }
+
+  // สะโพกหมู สำรอง / หมึกกรอบสำรอง → ชื่อหลัก + โน้ตสำรอง (ให้ map แคตตาล็อกได้)
+  const spare = name.match(/^(.*?)\s*สำรอง\s*$/u);
+  if (spare && spare[1].trim().length >= 2) {
+    name = spare[1].trim();
+    note = note ? `${note} สำรอง` : "สำรอง";
+    if (!qtyText) qtyText = null;
+  }
+
+  if (!name || name.length < 2) return null;
+  if (/^\d+([:.]\d+)?$/.test(name)) return null;
+
+  return { name, qtyText, note };
+}
+
 /**
  * แยกบรรทัดรายการจากข้อความที่น้องส่ง
+ * 1 บรรทัดที่พิมพ์ = 1 รายการ (ไม่แตกหลายสินค้าในบรรทัดเดียว)
  * รองรับ: เห็ดเข็ม9 · ผักบุ้ง5 · สันคอสไลด์มี1ครึ่ง · ถุงร้อน6*9 · หมูสับมี1ถาดครึ่ง
  */
 export function parsePurchaseText(raw: string): ParsedPurchaseLine[] {
@@ -67,43 +120,8 @@ export function parsePurchaseText(raw: string): ParsedPurchaseLine[] {
   for (const line of lines) {
     if (shouldSkipLine(line)) continue;
     if (line.length < 2) continue;
-
-    let name = cleanName(line);
-    let qtyText: string | null = null;
-    let note: string | null = null;
-    if (!name || name.length < 2) continue;
-
-    if (/\d+\s*[x*×]\s*\d+/i.test(name)) {
-      out.push({ name, qtyText: null, note: null });
-      continue;
-    }
-
-    // "xxx มี3" / "มี 1 ครึ่ง" / "มี1ถาดครึ่ง"
-    // ต้องมีตัวเลขหลัง「มี」— กันตัดกลางชื่อเช่น เส้นบะหมี่ (ม+ี+่)
-    const hasMatch = name.match(/^(.*?)(มี\s*\d+(?:\.\d+)?.*)$/u);
-    if (hasMatch && hasMatch[1].trim().length >= 2) {
-      name = hasMatch[1].trim();
-      note = hasMatch[2].trim();
-      qtyText = note;
-    } else {
-      const numTail = name.match(
-        /^(.*?)(\d+(?:\.\d+)?(?:\s*[+＋]\s*\d+(?:\.\d+)?)?(?:\s*(?:โล|ขีด|มัด|ถุง|ถาด|กก|kg))?)$/iu,
-      );
-      if (numTail && numTail[1].trim().length >= 2) {
-        const before = numTail[1];
-        if (/[x*×]\s*$/i.test(before)) {
-          // keep full as name
-        } else {
-          name = before.trim();
-          qtyText = numTail[2].trim();
-        }
-      }
-    }
-
-    if (!name || name.length < 2) continue;
-    if (/^\d+([:.]\d+)?$/.test(name)) continue;
-
-    out.push({ name, qtyText, note });
+    const parsed = parseOneItem(line);
+    if (parsed) out.push(parsed);
   }
   return out;
 }
@@ -120,14 +138,20 @@ export function normalizePurchaseKey(name: string) {
     .replace(/กาดขาว|ผักกาด/g, "ผักกาด")
     .replace(/เบคอล|เบคอน/g, "เบคอน")
     .replace(/ซอสหอย|ซอลหอย/g, "ซอสหอย")
-    // หมูหั่น ≠ เนื้อหมูสไลด์ — รวมเฉพาะสไลด์
     .replace(/เนื้อหมูสไลด์/g, "หมูสไลด์")
-    // น่องไก่ = สะโพกไก่ (สั่งอันเดียวกัน)
-    .replace(/สะโพกไก่|น่องสะโพกไก่|น่องสะโพก/g, "น่องไก่");
+    .replace(/สะโพกไก่|น่องสะโพกไก่|น่องสะโพก/g, "น่องไก่")
+    // พิมพ์ผิดที่พบบ่อยจากแชทน้อง
+    .replace(/ใหย่|ใหญ่/g, "ใหญ่")
+    .replace(/เด้งใหย่|เด้งใหญ่/g, "เด้งใหญ่")
+    .replace(/ถึงหิว|ถุงหิว/g, "ถุงหิ้ว")
+    .replace(/ไวตามิ้ว|ไวตามิลค์|ไวตามิล/g, "ไวตามิลค์");
 }
 
 /** exact หรือคล้ายกันพอ (กันถ้วยใส่ชีสยืด ชน ชีสยืด) */
-export function purchaseKeysCompatible(a: string, b: string): "exact" | "fuzzy" | "none" {
+export function purchaseKeysCompatible(
+  a: string,
+  b: string,
+): "exact" | "fuzzy" | "none" {
   const key = normalizePurchaseKey(a);
   const ck = normalizePurchaseKey(b);
   if (!key || !ck) return "none";

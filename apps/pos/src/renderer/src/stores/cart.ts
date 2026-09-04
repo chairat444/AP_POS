@@ -26,6 +26,7 @@ import {
 import { useMembersStore } from "./members";
 import { useSessionStore } from "./session";
 import { useSettingsStore } from "./settings";
+import { getAppVersionLabel } from "../utils/format";
 
 export type { QuickProduct };
 export type PaymentMethod = "cash" | "transfer" | "government" | "points";
@@ -1003,6 +1004,7 @@ export const useCartStore = defineStore("cart", () => {
           return;
         }
         const brand = useSettingsStore();
+        const appVersion = await getAppVersionLabel();
         const payload: ReceiptPayload = {
           storeName: brand.storeName || "เอพี หมูสด",
           branchName: device.branchName || "",
@@ -1059,7 +1061,7 @@ export const useCartStore = defineStore("cart", () => {
           headerText: printer.headerText,
           footerHours: printer.footerHours,
           footerPhones: printer.footerPhones,
-          appVersion: "AP Version 0.1.0",
+          appVersion,
         };
         const result = await printReceipt(payload, {
           silent: printer.silent,

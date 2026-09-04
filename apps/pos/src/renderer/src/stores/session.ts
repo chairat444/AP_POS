@@ -10,13 +10,16 @@ import { sumDenomCounts } from "../data/cash-denoms";
 import {
   claimThisTerminal,
   enqueueAuditAndSync,
+  enqueueShift,
   enqueueShiftAndSync,
   fetchStaffDayPriorSales,
   getDeviceConfig,
   loadStaffDirectory,
   markDeviceSetupDone,
+  pendingOutboxCount,
   setDeviceBranch,
   setDeviceTerminal,
+  syncPushOutbox,
   type SyncBranch,
   type SyncStaff,
   type SyncedShiftPayload,
@@ -117,9 +120,203 @@ export type ShiftSummary = {
   floatCounted: boolean;
 };
 
+const ACTIVE_SHIFT_KEY = "active-shift-session";
+
+function bangkokDayKey(d = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/** YYMMDD ตามโซนไทย — ใช้ในเลขบิล */
+function bangkokBillDayToken(d = new Date()) {
+  return bangkokDayKey(d).slice(2).replace(/-/g, "");
+}
+
+function billSeqMetaKey(day = bangkokDayKey()) {
+  return `bill-seq-${day}`;
+}
+
+async function loadDayBillSeq(day = bangkokDayKey()): Promise<number> {
+  if (!window.apPos?.db?.getMeta) return 0;
+  const raw = await window.apPos.db.getMeta(billSeqMetaKey(day));
+  const n = Number(raw ?? 0);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
+}
+
+async function saveDayBillSeq(seq: number, day = bangkokDayKey()) {
+  if (!window.apPos?.db?.setMeta) return;
+  await window.apPos.db.setMeta(billSeqMetaKey(day), String(Math.max(0, Math.floor(seq))));
+}
+
+type PersistedShiftSession = {
+  version: 1;
+  branchId: string;
+  terminalId: string;
+  staff: {
+    id: string;
+    code: string;
+    name: string;
+    commissionEnabled?: boolean;
+    commissionStartSales?: number;
+    commissionStepSales?: number;
+    commissionPerStep?: number;
+  };
+  shiftId: string;
+  openedAt: string;
+  openCash: number;
+  floatCounted: boolean;
+  floatDenoms: DenomCount[];
+  sales: ShiftSale[];
+  audits: AuditEvent[];
+  cashMoves: CashMove[];
+  cashCounts: CashCountRecord[];
+  billSeq: number;
+};
+
+async function persistActiveSession(snapshot: {
+  staff: StaffUser;
+  shiftId: string;
+  openedAt: string;
+  openCash: number;
+  floatCounted: boolean;
+  floatDenoms: DenomCount[];
+  sales: ShiftSale[];
+  audits: AuditEvent[];
+  cashMoves: CashMove[];
+  cashCounts: CashCountRecord[];
+  billSeq: number;
+}) {
+  if (!window.apPos?.db?.setMeta) return;
+  const dev = deviceSync();
+  const payload: PersistedShiftSession = {
+    version: 1,
+    branchId: dev.branchId,
+    terminalId: dev.terminalId,
+    staff: {
+      id: snapshot.staff.id,
+      code: snapshot.staff.code,
+      name: snapshot.staff.name,
+      commissionEnabled: snapshot.staff.commissionEnabled,
+      commissionStartSales: snapshot.staff.commissionStartSales,
+      commissionStepSales: snapshot.staff.commissionStepSales,
+      commissionPerStep: snapshot.staff.commissionPerStep,
+    },
+    shiftId: snapshot.shiftId,
+    openedAt: snapshot.openedAt,
+    openCash: snapshot.openCash,
+    floatCounted: snapshot.floatCounted,
+    floatDenoms: snapshot.floatDenoms.map((d) => ({ ...d })),
+    sales: snapshot.sales.map((s) => ({ ...s, payments: [...s.payments] })),
+    audits: snapshot.audits.map((a) => ({ ...a })),
+    cashMoves: snapshot.cashMoves.map((m) => ({ ...m })),
+    cashCounts: snapshot.cashCounts.map((c) => ({
+      ...c,
+      denoms: c.denoms.map((d) => ({ ...d })),
+    })),
+    billSeq: snapshot.billSeq,
+  };
+  await window.apPos.db.setMeta(ACTIVE_SHIFT_KEY, JSON.stringify(payload));
+}
+
 function uid() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+function sessionSnapshotFromStore(state: {
+  staff: StaffUser | null;
+  shiftId: string | null;
+  openedAt: string | null;
+  openCash: number;
+  floatCounted: boolean;
+  floatDenoms: DenomCount[];
+  sales: ShiftSale[];
+  audits: AuditEvent[];
+  cashMoves: CashMove[];
+  cashCounts: CashCountRecord[];
+  billSeq: number;
+}) {
+  if (!state.staff || !state.shiftId || !state.openedAt) return null;
+  return {
+    staff: state.staff,
+    shiftId: state.shiftId,
+    openedAt: state.openedAt,
+    openCash: state.openCash,
+    floatCounted: state.floatCounted,
+    floatDenoms: state.floatDenoms,
+    sales: state.sales,
+    audits: state.audits,
+    cashMoves: state.cashMoves,
+    cashCounts: state.cashCounts,
+    billSeq: state.billSeq,
+  };
+}
+
+async function snapshotAndPersist(state: Parameters<typeof sessionSnapshotFromStore>[0]) {
+  const snap = sessionSnapshotFromStore(state);
+  if (snap) await persistActiveSession(snap);
+}
+
+async function clearActiveSession() {
+  if (!window.apPos?.db?.setMeta) return;
+  await window.apPos.db.setMeta(ACTIVE_SHIFT_KEY, "");
+}
+
+function staffFromPersisted(
+  saved: PersistedShiftSession["staff"],
+  directory: SyncStaff[],
+): StaffUser | null {
+  const found =
+    directory.find((s) => s.id === saved.id) ??
+    directory.find((s) => s.code === saved.code) ??
+    DEMO_STAFF.find((s) => s.id === saved.id || s.code === saved.code);
+  if (!found) return null;
+  return {
+    id: found.id,
+    code: found.code,
+    name: found.name,
+    pin: found.pin,
+    commissionEnabled: Boolean(
+      saved.commissionEnabled ?? found.commissionEnabled,
+    ),
+    commissionStartSales:
+      saved.commissionStartSales ?? found.commissionStartSales,
+    commissionStepSales: saved.commissionStepSales ?? found.commissionStepSales,
+    commissionPerStep: saved.commissionPerStep ?? found.commissionPerStep,
+  };
+}
+
+function storeStateRefs(store: {
+  staff: { value: StaffUser | null };
+  shiftId: { value: string | null };
+  openedAt: { value: string | null };
+  openCash: { value: number };
+  floatCounted: { value: boolean };
+  floatDenoms: { value: DenomCount[] };
+  sales: { value: ShiftSale[] };
+  audits: { value: AuditEvent[] };
+  cashMoves: { value: CashMove[] };
+  cashCounts: { value: CashCountRecord[] };
+  billSeq: { value: number };
+}) {
+  return {
+    staff: store.staff.value,
+    shiftId: store.shiftId.value,
+    openedAt: store.openedAt.value,
+    openCash: store.openCash.value,
+    floatCounted: store.floatCounted.value,
+    floatDenoms: store.floatDenoms.value,
+    sales: store.sales.value,
+    audits: store.audits.value,
+    cashMoves: store.cashMoves.value,
+    cashCounts: store.cashCounts.value,
+    billSeq: store.billSeq.value,
+  };
+}
+
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
@@ -232,14 +429,15 @@ export const useSessionStore = defineStore("session", () => {
     const d = deviceSync();
     billSeq.value += 1;
     const n = String(billSeq.value).padStart(6, "0");
-    const day = new Date().toISOString().slice(2, 10).replace(/-/g, "");
+    const day = bangkokBillDayToken();
+    void saveDayBillSeq(billSeq.value);
     return `S${day}-${branchCodeOf(d)}-${n}`;
   }
 
   function previewBillNo() {
     const d = deviceSync();
     const n = String(billSeq.value + 1).padStart(6, "0");
-    const day = new Date().toISOString().slice(2, 10).replace(/-/g, "");
+    const day = bangkokBillDayToken();
     return `S${day}-${branchCodeOf(d)}-${n}`;
   }
 
@@ -372,21 +570,63 @@ export const useSessionStore = defineStore("session", () => {
         voidBillCount: snap.voidBillCount,
         voidBillAmount: snap.voidBillAmount,
         floatCounted: snap.floatCounted,
-        audits: audits.value,
+        audits: audits.value.map((a) => ({ ...a })),
       },
       cashMoves: cashMoves.value.map((m) => ({ ...m })),
-      cashCounts: cashCounts.value.map((c) => ({ ...c })),
+      cashCounts: cashCounts.value.map((c) => ({
+        ...c,
+        denoms: c.denoms.map((d) => ({ ...d })),
+      })),
       ...extra,
     };
   }
 
-  function pushShiftSnapshot(
+  async function pushShiftSnapshot(
     status: "open" | "closed",
     extra: Partial<SyncedShiftPayload> = {},
+    opts?: { urgent?: boolean },
   ) {
     const payload = buildShiftPayload(status, extra);
-    if (!payload) return Promise.resolve();
-    return enqueueShiftAndSync(payload);
+    if (!payload) return { synced: false, pending: 0 };
+    // เปิด/นับทอน/เงินเข้า-ออก/ปิด — ออนไลน์แล้วส่งทันที (ไม่พึ่งแคช offline เก่า)
+    const urgent = Boolean(opts?.urgent) || status === "closed";
+    return enqueueShiftAndSync(payload, {
+      awaitIfOnline: true,
+      probeAttempts: urgent ? 5 : 3,
+      probeTimeoutMs: urgent ? 1500 : 1000,
+      pushTimeoutMs: urgent ? 15_000 : 10_000,
+    }).catch((e) => ({
+      synced: false,
+      pending: -1,
+      error: e instanceof Error ? e.message : "ส่งไม่สำเร็จ",
+    }));
+  }
+
+  /** มีรอบค้างในเครื่องไหม (ยังไม่ unlock ด้วย PIN) */
+  async function peekActiveSession(): Promise<{
+    staffName: string;
+    billCount: number;
+  } | null> {
+    if (!window.apPos?.db?.getMeta) return null;
+    const raw = await window.apPos.db.getMeta(ACTIVE_SHIFT_KEY);
+    if (!raw?.trim()) return null;
+    try {
+      const saved = JSON.parse(raw) as PersistedShiftSession;
+      if (saved.version !== 1 || !saved.shiftId || !saved.openedAt) return null;
+      const dev = deviceSync();
+      if (
+        saved.branchId !== dev.branchId ||
+        saved.terminalId !== dev.terminalId
+      ) {
+        return null;
+      }
+      return {
+        staffName: saved.staff?.name || "พนักงาน",
+        billCount: Array.isArray(saved.sales) ? saved.sales.length : 0,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /** เปิดรอบเร็ว — นับเงินทอนทีหลังได้ · พนักงานใช้ได้ทุกสาขา */
@@ -404,6 +644,32 @@ export const useSessionStore = defineStore("session", () => {
     if (!found) {
       statusMessage.value = "รหัสพนักงานหรือ PIN ไม่ถูกต้อง";
       return false;
+    }
+
+    // มีรอบค้าง → ต้อง PIN ของพนักงานคนเดิม แล้วกลับเข้ารอบนั้น (ไม่เปิดรอบใหม่)
+    if (window.apPos?.db?.getMeta) {
+      const existing = await window.apPos.db.getMeta(ACTIVE_SHIFT_KEY);
+      if (existing?.trim()) {
+        let saved: PersistedShiftSession | null = null;
+        try {
+          saved = JSON.parse(existing) as PersistedShiftSession;
+        } catch {
+          saved = null;
+        }
+        if (saved?.version === 1 && saved.shiftId && saved.openedAt) {
+          const sameStaff =
+            saved.staff?.id === found.id || saved.staff?.code === found.code;
+          if (!sameStaff) {
+            statusMessage.value = `รอบค้างของ ${saved.staff?.name || "พนักงานอื่น"} — ใส่ PIN ของพนักงานคนนั้น`;
+            return false;
+          }
+          const restored = await tryRestoreActiveSession();
+          if (restored) return true;
+          statusMessage.value =
+            "มีรอบค้างอยู่แต่กู้คืนไม่ได้ — ติดต่อผู้ดูแลหรือปิดรอบจากเครื่องเดิม";
+          return false;
+        }
+      }
     }
 
     try {
@@ -447,12 +713,119 @@ export const useSessionStore = defineStore("session", () => {
     audits.value = [];
     cashMoves.value = [];
     cashCounts.value = [];
-    billSeq.value = 0;
+    // เลขบิลต่อเนื่องทั้งวันต่อสาขา/เครื่อง — ไม่รีเซ็ตตอนเปิดรอบใหม่
+    billSeq.value = await loadDayBillSeq();
     const branchLabel = deviceSync().branchName || deviceSync().branchId;
-    statusMessage.value = floatCounted.value
-      ? `เปิดรอบ: ${found.name} · ${branchLabel} · ทอนเริ่ม ${openCash.value.toFixed(0)}฿`
+    const baseMsg = floatCounted.value
+      ? `เปิดรอบ: ${found.name} · ${branchLabel} · ทอนเริ่ม ${openCash.value.toFixed(0)}`
       : `เปิดรอบ: ${found.name} · ${branchLabel} · นับเงินทอนทีหลังได้`;
-    pushShiftSnapshot("open");
+    statusMessage.value = `${baseMsg} · กำลังส่งเซิร์ฟ…`;
+    const sync = await pushShiftSnapshot("open");
+    statusMessage.value =
+      sync.synced === true
+        ? `${baseMsg} · ส่งเซิร์ฟแล้ว`
+        : `${baseMsg} · จะซิงค์เมื่อออนไลน์`;
+    await snapshotAndPersist(
+      storeStateRefs({
+        staff,
+        shiftId,
+        openedAt,
+        openCash,
+        floatCounted,
+        floatDenoms,
+        sales,
+        audits,
+        cashMoves,
+        cashCounts,
+        billSeq,
+      }),
+    );
+    return true;
+  }
+
+  async function tryRestoreActiveSession(): Promise<boolean> {
+    if (!window.apPos?.db?.getMeta) return false;
+    const raw = await window.apPos.db.getMeta(ACTIVE_SHIFT_KEY);
+    if (!raw?.trim()) return false;
+
+    let saved: PersistedShiftSession;
+    try {
+      saved = JSON.parse(raw) as PersistedShiftSession;
+    } catch {
+      await clearActiveSession();
+      return false;
+    }
+    if (saved.version !== 1 || !saved.shiftId || !saved.openedAt) {
+      await clearActiveSession();
+      return false;
+    }
+
+    const dev = deviceSync();
+    if (
+      saved.branchId !== dev.branchId ||
+      saved.terminalId !== dev.terminalId
+    ) {
+      return false;
+    }
+
+    try {
+      const claimed = await claimThisTerminal({
+        id: dev.terminalId,
+        branchId: dev.branchId,
+      });
+      if (!claimed.ok) {
+        statusMessage.value = claimed.message;
+        return false;
+      }
+      cachedDevice = claimed.device;
+      device.value = claimed.device;
+    } catch (e) {
+      statusMessage.value =
+        e instanceof Error ? e.message : "ยืนยันเครื่อง POS ไม่สำเร็จ";
+      return false;
+    }
+
+    const directory = staffDirectory.value.length
+      ? staffDirectory.value
+      : DEMO_STAFF;
+    const restoredStaff = staffFromPersisted(saved.staff, directory);
+    if (!restoredStaff) {
+      statusMessage.value = "ไม่พบพนักงานของรอบค้าง — ติดต่อผู้ดูแล";
+      return false;
+    }
+
+    staff.value = restoredStaff;
+    shiftId.value = saved.shiftId;
+    openedAt.value = saved.openedAt;
+    openCash.value = saved.openCash;
+    floatCounted.value = saved.floatCounted;
+    floatDenoms.value = saved.floatDenoms.map((d) => ({ ...d }));
+    sales.value = saved.sales.map((s) => ({ ...s, payments: [...s.payments] }));
+    audits.value = saved.audits.map((a) => ({ ...a }));
+    cashMoves.value = saved.cashMoves.map((m) => ({ ...m }));
+    cashCounts.value = saved.cashCounts.map((c) => ({
+      ...c,
+      denoms: c.denoms.map((d) => ({ ...d })),
+    }));
+    let maxFromSales = 0;
+    for (const s of sales.value) {
+      const m = String(s.billNo ?? "").match(/(\d+)$/);
+      if (m) maxFromSales = Math.max(maxFromSales, Number(m[1]) || 0);
+    }
+    billSeq.value = Math.max(
+      saved.billSeq,
+      maxFromSales,
+      await loadDayBillSeq(),
+    );
+    void saveDayBillSeq(billSeq.value);
+    exiting.value = false;
+
+    const branchLabel = dev.branchName || dev.branchId;
+    const floatNote = floatCounted.value
+      ? ` · ทอน ${openCash.value.toFixed(0)}`
+      : "";
+    statusMessage.value = `กลับรอบเดิม: ${restoredStaff.name} · ${branchLabel} · ${sales.value.length} บิล${floatNote}`;
+    void pushShiftSnapshot("open");
     return true;
   }
 
@@ -470,6 +843,21 @@ export const useSessionStore = defineStore("session", () => {
       memberName: input.memberName,
     };
     sales.value = [...sales.value, sale];
+    void snapshotAndPersist(
+      storeStateRefs({
+        staff,
+        shiftId,
+        openedAt,
+        openCash,
+        floatCounted,
+        floatDenoms,
+        sales,
+        audits,
+        cashMoves,
+        cashCounts,
+        billSeq,
+      }),
+    );
     return sale;
   }
 
@@ -504,10 +892,26 @@ export const useSessionStore = defineStore("session", () => {
       itemCountBefore: event.itemCountBefore,
     }).catch(() => undefined);
 
+    void snapshotAndPersist(
+      storeStateRefs({
+        staff,
+        shiftId,
+        openedAt,
+        openCash,
+        floatCounted,
+        floatDenoms,
+        sales,
+        audits,
+        cashMoves,
+        cashCounts,
+        billSeq,
+      }),
+    );
+
     return event;
   }
 
-  function saveFloatCount(denoms: DenomCount[]) {
+  async function saveFloatCount(denoms: DenomCount[]) {
     if (!staff.value) return null;
     const total = sumDenomCounts(denoms);
     openCash.value = total;
@@ -523,12 +927,31 @@ export const useSessionStore = defineStore("session", () => {
       denoms: denoms.map((d) => ({ ...d })),
     };
     cashCounts.value = [...cashCounts.value, rec];
-    statusMessage.value = `บันทึกเงินทอนเริ่มรอบ ${total.toFixed(0)} บาท`;
-    pushShiftSnapshot("open");
+    statusMessage.value = `บันทึกเงินทอนเริ่มรอบ ${total.toFixed(0)} บาท · กำลังส่งเซิร์ฟ…`;
+    const sync = await pushShiftSnapshot("open");
+    statusMessage.value =
+      sync.synced === true
+        ? `บันทึกเงินทอนเริ่มรอบ ${total.toFixed(0)} บาท · ส่งเซิร์ฟแล้ว`
+        : `บันทึกเงินทอนเริ่มรอบ ${total.toFixed(0)} บาท · จะซิงค์เมื่อออนไลน์`;
+    await snapshotAndPersist(
+      storeStateRefs({
+        staff,
+        shiftId,
+        openedAt,
+        openCash,
+        floatCounted,
+        floatDenoms,
+        sales,
+        audits,
+        cashMoves,
+        cashCounts,
+        billSeq,
+      }),
+    );
     return rec;
   }
 
-  function recordCashMove(input: {
+  async function recordCashMove(input: {
     direction: "in" | "out";
     amount: number;
     reason: string;
@@ -551,11 +974,31 @@ export const useSessionStore = defineStore("session", () => {
       note: input.note?.trim() ?? "",
     };
     cashMoves.value = [...cashMoves.value, move];
-    statusMessage.value =
+    const base =
       input.direction === "out"
-        ? `นำเงินออก ${amount.toFixed(0)}฿ (${move.reason})`
-        : `นำเงินเข้า ${amount.toFixed(0)}฿ (${move.reason})`;
-    pushShiftSnapshot("open");
+        ? `นำเงินออก ${amount.toFixed(0)} (${move.reason})`
+        : `นำเงินเข้า ${amount.toFixed(0)} (${move.reason})`;
+    statusMessage.value = `${base} · กำลังส่งเซิร์ฟ…`;
+    const sync = await pushShiftSnapshot("open");
+    statusMessage.value =
+      sync.synced === true
+        ? `${base} · ส่งเซิร์ฟแล้ว`
+        : `${base} · จะซิงค์เมื่อออนไลน์`;
+    await snapshotAndPersist(
+      storeStateRefs({
+        staff,
+        shiftId,
+        openedAt,
+        openCash,
+        floatCounted,
+        floatDenoms,
+        sales,
+        audits,
+        cashMoves,
+        cashCounts,
+        billSeq,
+      }),
+    );
     return move;
   }
 
@@ -590,11 +1033,14 @@ export const useSessionStore = defineStore("session", () => {
     });
   }
 
-  async function closeShift(closeCount?: {
-    total: number;
-    denoms: DenomCount[];
-    note?: string;
-  }) {
+  async function closeShift(
+    closeCount?: {
+      total: number;
+      denoms: DenomCount[];
+      note?: string;
+    },
+    opts?: { forceLocal?: boolean },
+  ) {
     const snap = summary.value;
     const counted = closeCount?.total ?? null;
     const variance =
@@ -602,9 +1048,10 @@ export const useSessionStore = defineStore("session", () => {
     const closeNote = closeCount?.note?.trim() ?? "";
     const closedAt = new Date().toISOString();
 
+    // กันกดส่งซ้ำแล้วโปะ purpose:close ซ้ำหลายแถว
     if (closeCount && staff.value) {
       cashCounts.value = [
-        ...cashCounts.value,
+        ...cashCounts.value.filter((c) => c.purpose !== "close"),
         {
           id: uid(),
           at: closedAt,
@@ -615,9 +1062,10 @@ export const useSessionStore = defineStore("session", () => {
           denoms: closeCount.denoms.map((d) => ({ ...d })),
         },
       ];
+    } else if (!closeCount) {
+      cashCounts.value = cashCounts.value.filter((c) => c.purpose !== "close");
     }
 
-    // สร้าง payload ก่อนเคลียร์ state — sync ทำพื้นหลัง อย่าบล็อกการปิดแอป
     const commission = await getCloseCommission().catch(() => null);
     const payload = buildShiftPayload("closed", {
       closedAt,
@@ -646,7 +1094,7 @@ export const useSessionStore = defineStore("session", () => {
       };
     }
 
-    const closed = {
+    const closedBase = {
       staffName: staff.value?.name ?? "-",
       openedAt: openedAt.value,
       closedAt,
@@ -661,6 +1109,40 @@ export const useSessionStore = defineStore("session", () => {
       ...snap,
     };
 
+    // ส่งเซิร์ฟ+Discord ก่อนเคลียร์จอ — ปิดคอมหลัง ACK เท่านั้น
+    let sync: { synced: boolean; pending: number; error?: string } = {
+      synced: false,
+      pending: 0,
+    };
+    if (payload) {
+      sync = await enqueueShiftAndSync(payload, {
+        awaitIfOnline: true,
+        probeAttempts: 5,
+        probeTimeoutMs: 1500,
+        pushTimeoutMs: 15_000,
+      }).catch((e) => ({
+        synced: false,
+        pending: -1,
+        error: e instanceof Error ? e.message : "ส่งเซิร์ฟไม่สำเร็จ",
+      }));
+    }
+
+    if (!sync.synced && !opts?.forceLocal) {
+      // enqueueShift ใส่ closed ไปแล้ว — ต้องดึงกลับเป็น open ทันที
+      // ไม่งั้น sync พื้นหลัง/บิลถัดไปจะปิดรอบบนเซิร์ฟทั้งที่จอยังเปิด
+      await requeueOpenShiftToOutbox().catch(() => undefined);
+      statusMessage.value =
+        `ปิดรอบยังส่งเซิร์ฟไม่สำเร็จ${sync.error ? ` · ${sync.error}` : ""} · กดส่งอีกครั้ง อย่าปิดเครื่อง`;
+      return { ...closedBase, synced: false as const, cleared: false as const };
+    }
+
+    // หลังปิดรอบติดเซิร์ฟแล้ว ดันบิลค้างใน outbox ให้ทันก่อนปิดเครื่อง
+    if (sync.synced) {
+      await syncPushOutbox({ force: true, timeoutMs: 12_000 }).catch(
+        () => undefined,
+      );
+    }
+
     staff.value = null;
     shiftId.value = null;
     openedAt.value = null;
@@ -671,22 +1153,15 @@ export const useSessionStore = defineStore("session", () => {
     audits.value = [];
     cashMoves.value = [];
     cashCounts.value = [];
-    billSeq.value = 0;
-    statusMessage.value =
-      variance == null
-        ? "ปิดรอบเรียบร้อย"
-        : `ปิดรอบแล้ว · นับได้ ${counted?.toFixed(0)} ต่าง ${variance >= 0 ? "+" : ""}${variance.toFixed(0)}${closeNote ? ` · ${closeNote}` : ""}`;
+    void saveDayBillSeq(billSeq.value);
+    billSeq.value = await loadDayBillSeq();
+    await clearActiveSession();
 
-    // ปิดรอบ: บันทึก SQLite → เช็ค API 3 รอบ → ส่งถ้าติด / ปิดเลยถ้าไม่ติด
-    if (payload) {
-      await enqueueShiftAndSync(payload, {
-        awaitIfOnline: true,
-        probeAttempts: 3,
-        probeTimeoutMs: 800,
-        pushTimeoutMs: 12_000,
-        onlineDeadlineMs: 45_000,
-      }).catch(() => undefined);
-    }
+    statusMessage.value =
+      (variance == null
+        ? "ปิดรอบเรียบร้อย"
+        : `ปิดรอบแล้ว · นับได้ ${counted?.toFixed(0)} ต่าง ${variance >= 0 ? "+" : ""}${variance.toFixed(0)}${closeNote ? ` · ${closeNote}` : ""}`) +
+      (sync.synced ? " · ส่งเซิร์ฟแล้ว" : " · บันทึกในเครื่อง (ยังไม่ถึงเซิร์ฟ)");
     try {
       if (window.apPos?.db?.purgeSyncedSales) {
         await window.apPos.db.purgeSyncedSales();
@@ -694,7 +1169,61 @@ export const useSessionStore = defineStore("session", () => {
     } catch {
       // ignore
     }
-    return closed;
+    return { ...closedBase, synced: sync.synced, cleared: true as const };
+  }
+
+  /** ยกเลิกหน้าปิดรอบหลังส่งไม่สำเร็จ — เอาแถวนับปิดที่ค้างออก */
+  function rollbackCloseCashCounts() {
+    cashCounts.value = cashCounts.value.filter((c) => c.purpose !== "close");
+  }
+
+  /**
+   * แทนที่ outbox shift ที่อาจเป็น closed ด้วย snapshot เปิดอยู่
+   * (ใช้หลังปิดรอบไม่สำเร็จ / ยกเลิก modal)
+   */
+  async function requeueOpenShiftToOutbox() {
+    const payload = buildShiftPayload("open", {
+      closedAt: null,
+      closeCash: null,
+      variance: null,
+      closeNote: null,
+    });
+    if (!payload) return;
+    payload.cashCounts = (payload.cashCounts ?? []).filter(
+      (c) => (c as { purpose?: string }).purpose !== "close",
+    );
+    await enqueueShift(payload);
+  }
+
+  /** ส่ง snapshot รอบเปิดอยู่ (รวมเงินทอน) ขึ้นเซิร์ฟซ้ำ — ใช้จากหน้าตั้งค่า */
+  async function resyncOpenShift() {
+    if (!isOpen.value) {
+      return {
+        synced: false,
+        pending: await pendingOutboxCount().catch(() => 0),
+        error: "ไม่มีรอบเปิดอยู่",
+      };
+    }
+    return pushShiftSnapshot("open", {}, { urgent: true });
+  }
+
+  /** snapshot รอบเปิดอยู่ล่าสุด — สำหรับส่งซ้ำ/แสดงใน UI */
+  function buildOpenShiftPayload(): SyncedShiftPayload | null {
+    return buildShiftPayload("open");
+  }
+
+  function getOpenShiftSyncPreview() {
+    if (!isOpen.value || !staff.value || !shiftId.value) return null;
+    const snap = summary.value;
+    return {
+      shiftId: shiftId.value,
+      staffName: staff.value.name,
+      openCash: openCash.value,
+      floatCounted: floatCounted.value,
+      billCount: snap.billCount,
+      grossTotal: snap.grossTotal,
+      openedAt: openedAt.value,
+    };
   }
 
   return {
@@ -724,6 +1253,8 @@ export const useSessionStore = defineStore("session", () => {
     markExiting,
     getCloseCommission,
     loginAndOpen,
+    peekActiveSession,
+    tryRestoreActiveSession,
     recordSale,
     recordAudit,
     saveFloatCount,
@@ -731,5 +1262,10 @@ export const useSessionStore = defineStore("session", () => {
     nextBillNo,
     previewBillNo,
     closeShift,
+    rollbackCloseCashCounts,
+    requeueOpenShiftToOutbox,
+    resyncOpenShift,
+    buildOpenShiftPayload,
+    getOpenShiftSyncPreview,
   };
 });

@@ -142,7 +142,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
           <span>ยกเลิกรายการ</span>
           <strong>
             {{ summary.voidLineCount }} /
-            {{ formatMoney(summary.voidLineAmount) }}฿
+            {{ formatMoney(summary.voidLineAmount) }}
           </strong>
         </div>
         <div
@@ -152,7 +152,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
           <span>ยกเลิกบิล</span>
           <strong>
             {{ summary.voidBillCount }} /
-            {{ formatMoney(summary.voidBillAmount) }}฿
+            {{ formatMoney(summary.voidBillAmount) }}
           </strong>
         </div>
         <div class="shift-cell">

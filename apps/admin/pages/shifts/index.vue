@@ -352,7 +352,7 @@ onMounted(load);
       </div>
     </div>
 
-    <UiReportTabs />
+    <UiSalesTabs />
 
     <div class="ui-card ui-shift__filters">
       <UiReportDateFilters

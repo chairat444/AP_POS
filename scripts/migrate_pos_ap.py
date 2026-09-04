@@ -28,7 +28,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Iterable
 from zoneinfo import ZoneInfo
@@ -67,6 +67,7 @@ class TargetConfig:
     open_price_max: Decimal
     apply: bool
     sales_only: bool
+    skip_products: bool
     sales_from: date | None
     sales_limit: int | None
 
@@ -98,6 +99,11 @@ def parse_args() -> tuple[SourceConfig, TargetConfig]:
         help="Only clear+reimport sales for the branch (skip products/customers/staff)",
     )
     p.add_argument(
+        "--skip-products",
+        action="store_true",
+        help="Update customers+points+sales only (do not write products/units/staff)",
+    )
+    p.add_argument(
         "--sales-from",
         default=None,
         help="Only sales on/after YYYY-MM-DD (optional)",
@@ -110,9 +116,11 @@ def parse_args() -> tuple[SourceConfig, TargetConfig]:
     )
     args = p.parse_args()
     apply = bool(args.apply) and not bool(args.dry_run)
+    if args.sales_only and args.skip_products:
+        raise SystemExit("ใช้ได้แค่ --sales-only หรือ --skip-products อย่างใดอย่างหนึ่ง")
 
     src = SourceConfig(
-        host=os.environ.get("MSSQL_HOST", "192.168.1.104"),
+        host=os.environ.get("MSSQL_HOST", "192.168.1.107"),
         port=int(os.environ.get("MSSQL_PORT", "1433")),
         user=os.environ.get("MSSQL_USER", "sa"),
         password=env("MSSQL_PASSWORD"),
@@ -135,6 +143,7 @@ def parse_args() -> tuple[SourceConfig, TargetConfig]:
         open_price_max=Decimal("100"),
         apply=apply,
         sales_only=bool(args.sales_only),
+        skip_products=bool(args.skip_products),
         sales_from=date.fromisoformat(args.sales_from) if args.sales_from else None,
         sales_limit=args.sales_limit,
     )
@@ -363,9 +372,52 @@ def fetch_sales_only(ms: MsReader, tgt: TargetConfig) -> dict[str, Any]:
     }
 
 
+def fetch_customers(ms: MsReader) -> list[dict[str, Any]]:
+    customers_raw = ms.q(
+        """
+        SELECT
+          c.XVCstCode, c.XVCstName, c.XVCstPhone, c.XBCstIsActive,
+          ISNULL(p.pts, 0) AS pts
+        FROM TCstMCustomer c
+        LEFT JOIN (
+          SELECT XVCstCode, SUM(CAST(ISNULL(XICstPoint,0) AS INT)) AS pts
+          FROM TCstTCstPoint
+          GROUP BY XVCstCode
+        ) p ON p.XVCstCode = c.XVCstCode
+        WHERE ISNULL(c.XBCstIsActive, 1) = 1
+        """
+    )
+    customers: list[dict[str, Any]] = []
+    for r in customers_raw:
+        code = s(r["XVCstCode"])
+        if not code:
+            continue
+        customers.append(
+            {
+                "code": code,
+                "name": s(r["XVCstName"]) or code,
+                "phone": s(r["XVCstPhone"]) or None,
+                "points": max(0, i(r["pts"])),
+            }
+        )
+    return customers
+
+
+def fetch_customers_sales(ms: MsReader, tgt: TargetConfig) -> dict[str, Any]:
+    """ลูกค้า+แต้ม + ยอดขาย — ไม่ดึงสินค้า/พนักงาน"""
+    print("→ reading SQL Server customers + sales (SELECT only)…")
+    customers = fetch_customers(ms)
+    print(f"  customers: {len(customers)}")
+    data = fetch_sales_only(ms, tgt)
+    data["customers"] = customers
+    return data
+
+
 def fetch_all(ms: MsReader, tgt: TargetConfig) -> dict[str, Any]:
     if tgt.sales_only:
         return fetch_sales_only(ms, tgt)
+    if tgt.skip_products:
+        return fetch_customers_sales(ms, tgt)
 
     print("→ reading SQL Server (SELECT only)…")
 
@@ -510,33 +562,7 @@ def fetch_all(ms: MsReader, tgt: TargetConfig) -> dict[str, Any]:
 
     units = sorted(unit_names)
 
-    customers_raw = ms.q(
-        """
-        SELECT
-          c.XVCstCode, c.XVCstName, c.XVCstPhone, c.XBCstIsActive,
-          ISNULL(p.pts, 0) AS pts
-        FROM TCstMCustomer c
-        LEFT JOIN (
-          SELECT XVCstCode, SUM(CAST(ISNULL(XICstPoint,0) AS INT)) AS pts
-          FROM TCstTCstPoint
-          GROUP BY XVCstCode
-        ) p ON p.XVCstCode = c.XVCstCode
-        WHERE ISNULL(c.XBCstIsActive, 1) = 1
-        """
-    )
-    customers = []
-    for r in customers_raw:
-        code = s(r["XVCstCode"])
-        if not code:
-            continue
-        customers.append(
-            {
-                "code": code,
-                "name": s(r["XVCstName"]) or code,
-                "phone": s(r["XVCstPhone"]) or None,
-                "points": max(0, i(r["pts"])),
-            }
-        )
+    customers = fetch_customers(ms)
 
     staff_raw = ms.q(
         """
@@ -1062,9 +1088,202 @@ def insert_sales_block(
         )
 
 
+def resolve_branch_terminal(
+    cur,
+    tgt: TargetConfig,
+    ts: datetime,
+    *,
+    upsert_branch: bool,
+) -> tuple[str, str]:
+    term_code = f"{tgt.branch_code}-{tgt.terminal_code}"
+    if upsert_branch:
+        cur.execute(
+            """
+            INSERT INTO branches (id, code, name, active, created_at, updated_at, deleted_at)
+            VALUES (%s, %s, %s, 1, %s, %s, NULL)
+            ON CONFLICT (code) DO UPDATE SET
+              name = EXCLUDED.name,
+              active = 1,
+              updated_at = EXCLUDED.updated_at,
+              deleted_at = NULL
+            """,
+            (tgt.branch_id, tgt.branch_code, tgt.branch_name, ts, ts),
+        )
+    cur.execute("SELECT id FROM branches WHERE code = %s", (tgt.branch_code,))
+    brow = cur.fetchone()
+    if not brow:
+        raise SystemExit(
+            f"ไม่พบสาขา code={tgt.branch_code} ใน Postgres — สร้างสาขาก่อน"
+        )
+    branch_id = brow[0]
+
+    cur.execute("SELECT id FROM terminals WHERE code = %s", (term_code,))
+    trow = cur.fetchone()
+    if trow:
+        return branch_id, trow[0]
+
+    if upsert_branch:
+        cur.execute(
+            """
+            INSERT INTO terminals (
+              id, code, name, branch_id, active, last_seen_at, updated_at, deleted_at
+            ) VALUES (%s, %s, %s, %s, 1, NULL, %s, NULL)
+            ON CONFLICT (code) DO UPDATE SET
+              name = EXCLUDED.name,
+              branch_id = EXCLUDED.branch_id,
+              active = 1,
+              updated_at = EXCLUDED.updated_at,
+              deleted_at = NULL
+            """,
+            (
+                tgt.terminal_id,
+                term_code,
+                tgt.terminal_name,
+                branch_id,
+                ts,
+            ),
+        )
+        cur.execute("SELECT id FROM terminals WHERE code = %s", (term_code,))
+        return branch_id, cur.fetchone()[0]
+
+    cur.execute(
+        """
+        SELECT id FROM terminals
+        WHERE branch_id = %s AND deleted_at IS NULL
+        ORDER BY code LIMIT 1
+        """,
+        (branch_id,),
+    )
+    any_term = cur.fetchone()
+    if any_term:
+        return branch_id, any_term[0]
+    cur.execute(
+        """
+        INSERT INTO terminals (
+          id, code, name, branch_id, active, last_seen_at, updated_at, deleted_at
+        ) VALUES (%s, %s, %s, %s, 1, NULL, %s, NULL)
+        ON CONFLICT (code) DO UPDATE SET updated_at = EXCLUDED.updated_at
+        RETURNING id
+        """,
+        (
+            tgt.terminal_id,
+            term_code,
+            tgt.terminal_name,
+            branch_id,
+            ts,
+        ),
+    )
+    return branch_id, cur.fetchone()[0]
+
+
+def upsert_customers(
+    cur,
+    tgt: TargetConfig,
+    customers: list[dict[str, Any]],
+    branch_id: str,
+    ts: datetime,
+) -> None:
+    print(f"  upserting customers ({len(customers)})…")
+    # ลบ opening เดิม — จะใส่ residual หลัง migrate บิล (กันซ้ำกับประวัติ earn/redeem)
+    cur.execute(
+        """
+        DELETE FROM point_ledger
+        WHERE branch_id = %s
+          AND sale_id IS NULL
+          AND reason LIKE 'migrate opening%%'
+        """,
+        (branch_id,),
+    )
+    for c in customers:
+        cid = f"cust-{tgt.branch_code}-{c['code']}"
+        cur.execute(
+            """
+            INSERT INTO customers (
+              id, code, name, phone, points, updated_at, deleted_at
+            ) VALUES (%s,%s,%s,%s,%s,%s,NULL)
+            ON CONFLICT (code) DO UPDATE SET
+              name = EXCLUDED.name,
+              phone = EXCLUDED.phone,
+              points = EXCLUDED.points,
+              updated_at = EXCLUDED.updated_at,
+              deleted_at = NULL
+            """,
+            (cid, c["code"], c["name"], c["phone"], c["points"], ts),
+        )
+
+
+def insert_opening_residuals(
+    cur,
+    tgt: TargetConfig,
+    customers: list[dict[str, Any]],
+    branch_id: str,
+    ts: datetime,
+) -> None:
+    """ใส่ยอดยกมาเฉพาะส่วนที่ประวัติบิลยังไม่ครอบคลุม (ไม่บวกซ้ำเต็มยอด)"""
+    print("  inserting opening point residuals…")
+    n = 0
+    for c in customers:
+        cur.execute("SELECT id FROM customers WHERE code = %s", (c["code"],))
+        row = cur.fetchone()
+        if not row:
+            continue
+        cid = row[0]
+        points = int(c["points"] or 0)
+        cur.execute(
+            """
+            SELECT coalesce(sum(delta), 0)::int
+            FROM point_ledger
+            WHERE customer_id = %s
+              AND reason NOT LIKE 'migrate opening%%'
+            """,
+            (cid,),
+        )
+        summed = int(cur.fetchone()[0] or 0)
+        residual = points - summed
+        if residual == 0:
+            continue
+        cur.execute(
+            """
+            SELECT min(created_at) FROM point_ledger WHERE customer_id = %s
+            """,
+            (cid,),
+        )
+        min_at = cur.fetchone()[0]
+        if min_at is not None:
+            open_at = min_at - timedelta(seconds=1)
+        else:
+            open_at = ts
+        cur.execute(
+            """
+            INSERT INTO point_ledger (
+              id, customer_id, sale_id, delta, reason, branch_id, created_at
+            ) VALUES (%s,%s,NULL,%s,%s,%s,%s)
+            ON CONFLICT (id) DO UPDATE SET
+              customer_id = EXCLUDED.customer_id,
+              delta = EXCLUDED.delta,
+              created_at = EXCLUDED.created_at
+            """,
+            (
+                f"pt-open-{tgt.branch_code}-{c['code']}",
+                cid,
+                residual,
+                "migrate opening points",
+                branch_id,
+                open_at,
+            ),
+        )
+        n += 1
+    print(f"    residuals: {n}")
+
+
 def upsert_postgres(data: dict[str, Any], tgt: TargetConfig) -> None:
     mode = "APPLY" if tgt.apply else "DRY-RUN"
-    scope = "sales-only" if tgt.sales_only else "full"
+    if tgt.sales_only:
+        scope = "sales-only"
+    elif tgt.skip_products:
+        scope = "customers+points+sales"
+    else:
+        scope = "full"
     print(f"→ Postgres {mode} ({scope}): {tgt.database_url.split('@')[-1]}")
 
     units: list[str] = data["units"]
@@ -1085,15 +1304,16 @@ def upsert_postgres(data: dict[str, Any], tgt: TargetConfig) -> None:
         "shifts": len(shift_logs),
     }
     if not tgt.sales_only:
+        summary["customers"] = len(customers)
+        summary["points_total"] = sum(c["points"] for c in customers)
+    if not tgt.sales_only and not tgt.skip_products:
         summary.update(
             {
                 "units": len(units),
                 "products": len(products),
-                "customers": len(customers),
                 "staff": len(staff),
                 "sold_price_barcodes_skipped": len(data["sold_price"]),
                 "quick_bars_in_source": data["quick_count"],
-                "points_total": sum(c["points"] for c in customers),
             }
         )
     print("  plan:")
@@ -1105,54 +1325,14 @@ def upsert_postgres(data: dict[str, Any], tgt: TargetConfig) -> None:
         return
 
     ts = now_utc()
-    term_code = f"{tgt.branch_code}-{tgt.terminal_code}"
     with psycopg.connect(tgt.database_url) as pg:
         with pg.cursor() as cur:
-            if tgt.sales_only:
-                cur.execute(
-                    "SELECT id FROM branches WHERE code = %s", (tgt.branch_code,)
+            if tgt.sales_only or tgt.skip_products:
+                branch_id, terminal_id = resolve_branch_terminal(
+                    cur, tgt, ts, upsert_branch=False
                 )
-                brow = cur.fetchone()
-                if not brow:
-                    raise SystemExit(
-                        f"ไม่พบสาขา code={tgt.branch_code} ใน Postgres — สร้างสาขาก่อน"
-                    )
-                branch_id = brow[0]
-
-                cur.execute("SELECT id FROM terminals WHERE code = %s", (term_code,))
-                trow = cur.fetchone()
-                if trow:
-                    terminal_id = trow[0]
-                else:
-                    cur.execute(
-                        """
-                        SELECT id FROM terminals
-                        WHERE branch_id = %s AND deleted_at IS NULL
-                        ORDER BY code LIMIT 1
-                        """,
-                        (branch_id,),
-                    )
-                    any_term = cur.fetchone()
-                    if any_term:
-                        terminal_id = any_term[0]
-                    else:
-                        cur.execute(
-                            """
-                            INSERT INTO terminals (
-                              id, code, name, branch_id, active, last_seen_at, updated_at, deleted_at
-                            ) VALUES (%s, %s, %s, %s, 1, NULL, %s, NULL)
-                            ON CONFLICT (code) DO UPDATE SET updated_at = EXCLUDED.updated_at
-                            RETURNING id
-                            """,
-                            (
-                                tgt.terminal_id,
-                                term_code,
-                                tgt.terminal_name,
-                                branch_id,
-                                ts,
-                            ),
-                        )
-                        terminal_id = cur.fetchone()[0]
+                if tgt.skip_products:
+                    upsert_customers(cur, tgt, customers, branch_id, ts)
 
                 clear_branch_sales(cur, branch_id, tgt.branch_code)
                 staff_by_legacy = build_staff_by_legacy(staff, tgt.branch_code)
@@ -1180,46 +1360,12 @@ def upsert_postgres(data: dict[str, Any], tgt: TargetConfig) -> None:
                     ts,
                     shift_by_log,
                 )
+                if tgt.skip_products:
+                    insert_opening_residuals(cur, tgt, customers, branch_id, ts)
             else:
-                cur.execute(
-                    """
-                    INSERT INTO branches (id, code, name, active, created_at, updated_at, deleted_at)
-                    VALUES (%s, %s, %s, 1, %s, %s, NULL)
-                    ON CONFLICT (code) DO UPDATE SET
-                      name = EXCLUDED.name,
-                      active = 1,
-                      updated_at = EXCLUDED.updated_at,
-                      deleted_at = NULL
-                    """,
-                    (tgt.branch_id, tgt.branch_code, tgt.branch_name, ts, ts),
+                branch_id, terminal_id = resolve_branch_terminal(
+                    cur, tgt, ts, upsert_branch=True
                 )
-                cur.execute(
-                    "SELECT id FROM branches WHERE code = %s", (tgt.branch_code,)
-                )
-                branch_id = cur.fetchone()[0]
-
-                cur.execute(
-                    """
-                    INSERT INTO terminals (
-                      id, code, name, branch_id, active, last_seen_at, updated_at, deleted_at
-                    ) VALUES (%s, %s, %s, %s, 1, NULL, %s, NULL)
-                    ON CONFLICT (code) DO UPDATE SET
-                      name = EXCLUDED.name,
-                      branch_id = EXCLUDED.branch_id,
-                      active = 1,
-                      updated_at = EXCLUDED.updated_at,
-                      deleted_at = NULL
-                    """,
-                    (
-                        tgt.terminal_id,
-                        term_code,
-                        tgt.terminal_name,
-                        branch_id,
-                        ts,
-                    ),
-                )
-                cur.execute("SELECT id FROM terminals WHERE code = %s", (term_code,))
-                terminal_id = cur.fetchone()[0]
 
                 for name in units:
                     uid = f"unit-{name}"
@@ -1273,39 +1419,7 @@ def upsert_postgres(data: dict[str, Any], tgt: TargetConfig) -> None:
                         ),
                     )
 
-                for c in customers:
-                    cid = f"cust-{tgt.branch_code}-{c['code']}"
-                    cur.execute(
-                        """
-                        INSERT INTO customers (
-                          id, code, name, phone, points, updated_at, deleted_at
-                        ) VALUES (%s,%s,%s,%s,%s,%s,NULL)
-                        ON CONFLICT (id) DO UPDATE SET
-                          name = EXCLUDED.name,
-                          phone = EXCLUDED.phone,
-                          points = EXCLUDED.points,
-                          updated_at = EXCLUDED.updated_at,
-                          deleted_at = NULL
-                        """,
-                        (cid, c["code"], c["name"], c["phone"], c["points"], ts),
-                    )
-                    if c["points"]:
-                        cur.execute(
-                            """
-                            INSERT INTO point_ledger (
-                              id, customer_id, sale_id, delta, reason, branch_id, created_at
-                            ) VALUES (%s,%s,NULL,%s,%s,%s,%s)
-                            ON CONFLICT (id) DO NOTHING
-                            """,
-                            (
-                                f"pt-open-{tgt.branch_code}-{c['code']}",
-                                cid,
-                                c["points"],
-                                "migrate opening points",
-                                branch_id,
-                                ts,
-                            ),
-                        )
+                upsert_customers(cur, tgt, customers, branch_id, ts)
 
                 for st in staff:
                     sid = f"staff-{st['code']}"
@@ -1339,6 +1453,7 @@ def upsert_postgres(data: dict[str, Any], tgt: TargetConfig) -> None:
                     ],
                     tgt.branch_code,
                 )
+                clear_branch_sales(cur, branch_id, tgt.branch_code)
                 shift_by_log = insert_shift_logs(
                     cur,
                     tgt,
@@ -1359,10 +1474,11 @@ def upsert_postgres(data: dict[str, Any], tgt: TargetConfig) -> None:
                     ts,
                     shift_by_log,
                 )
+                insert_opening_residuals(cur, tgt, customers, branch_id, ts)
 
         pg.commit()
         print("✓ committed to Postgres")
-        if staff and not tgt.sales_only:
+        if staff and not tgt.sales_only and not tgt.skip_products:
             print("  staff PIN ที่สร้างใหม่:")
             for st in staff:
                 print(f"    {st['code']} / {st['name']} → PIN {st['pin']}")
@@ -1375,7 +1491,8 @@ def main() -> None:
     )
     print(
         f"Target branch: {tgt.branch_code} {tgt.branch_name} · "
-        f"apply={tgt.apply} · sales_only={tgt.sales_only}"
+        f"apply={tgt.apply} · sales_only={tgt.sales_only} · "
+        f"skip_products={tgt.skip_products}"
     )
     ms = MsReader(src)
     try:

@@ -12,6 +12,14 @@ function psEscapeSingle(s: string) {
   return s.replace(/'/g, "''");
 }
 
+function formatGdiPrintError(msg: string): string {
+  if (!msg) return msg;
+  if (/specified printer has been deleted/i.test(msg)) {
+    return "เครื่องพิมพ์ถูกลบหรือไดรเวอร์หลุด — ลบเครื่องพิมพ์เก่าใน Windows แล้วติดตั้งไดรเวอร์ใหม่";
+  }
+  return msg;
+}
+
 export type GdiTextPrintOpts = {
   paperWidthMm?: 58 | 80;
   fontSizePt?: number;
@@ -60,16 +68,34 @@ try {
   $pd.DefaultPageSettings.Margins = New-Object System.Drawing.Printing.Margins(0, 0, 0, 0)
   $pd.DefaultPageSettings.Landscape = $false
 
-  # ใช้ขนาดกระดาษจากไดรเวอร์ (อย่าสร้าง PaperSize เอง — มักทำให้พิมพ์ว่างบน XP-58)
+  # เลือก PaperSize จากไดรเวอร์ (อย่าสร้างเอง — XP-58 พิมพ์ว่าง)
+  # แต่ความกว้างวาดยึด config ด้านล่าง — รองรับ XP-80C + ม้วน 58
   $picked = $null
+  $bestDiff = 999999
   foreach ($psize in $pd.PrinterSettings.PaperSizes) {
     $n = [string]$psize.PaperName
-    if ($wantMm -eq 58 -and $n -match '58|720|72mm|Receipt') { $picked = $psize; break }
-    if ($wantMm -eq 80 -and $n -match '80|88|Receipt') { $picked = $psize; break }
+    if ($wantMm -eq 58 -and $n -match '80|88') { continue }
+    if ($wantMm -eq 80 -and $n -match '(^|[^0-9])58([^0-9]|$)') { continue }
+    $nameHit = $false
+    if ($wantMm -eq 58 -and $n -match '58|720|72\\s*mm|72mm') { $nameHit = $true }
+    if ($wantMm -eq 80 -and $n -match '80|88') { $nameHit = $true }
+    $diff = [Math]::Abs([int]$psize.Width - $widthHi)
+    if ($nameHit -and $diff -lt $bestDiff) {
+      $picked = $psize
+      $bestDiff = $diff
+    }
   }
   if (-not $picked) {
     foreach ($psize in $pd.PrinterSettings.PaperSizes) {
-      if ([string]$psize.PaperName -match 'Receipt|Roll|58|80') { $picked = $psize; break }
+      $n = [string]$psize.PaperName
+      if ($wantMm -eq 58 -and $n -match '80|88') { continue }
+      if ($wantMm -eq 80 -and $n -match '(^|[^0-9])58([^0-9]|$)') { continue }
+      if ($n -notmatch 'Receipt|Roll|58|80|72') { continue }
+      $diff = [Math]::Abs([int]$psize.Width - $widthHi)
+      if ($diff -lt $bestDiff) {
+        $picked = $psize
+        $bestDiff = $diff
+      }
     }
   }
   if ($picked) {
@@ -140,15 +166,18 @@ try {
       $g.PageUnit = [System.Drawing.GraphicsUnit]::Display
       $g.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
 
-      # ใช้ทั้งหน้า — เต็มความกว้างไดรเวอร์
+      # ความกว้างวาดยึด config (58/80) — ไม่ใช้เต็มหน้าไดรเวอร์
+      # XP-80C ไดรเวอร์มักเป็น 80 แต่สาขาใส่ม้วน 58 → ต้องบีบตาม config
       $page = $e.PageBounds
       if ($page.Width -lt 20) { $page = $e.MarginBounds }
       $pad = 2
       $x0 = [single]($page.X + $pad)
-      $fullW = [single]([Math]::Max(40, $page.Width - $pad * 2))
-      # ถ้าไดรเวอร์ให้หน้ากว้างเกิน ม้วน 58mm ให้จำกัดใกล้ความกว้างจริง
-      $maxRoll = [single]($widthHi * 1.05)
-      if ($fullW -gt $maxRoll -and $maxRoll -gt 40) { $fullW = $maxRoll }
+      # พื้นที่พิมพ์จริงแคบกว่าม้วน (ขอบหัวพิมพ์) — 58→52mm · 80→72mm
+      $printMm = if ($wantMm -eq 80) { 72 } else { 52 }
+      $configW = [single]([Math]::Round(($printMm / 25.4) * 100))
+      $pageW = [single]([Math]::Max(40, $page.Width - $pad * 2))
+      $fullW = $configW
+      if ($pageW -lt $fullW) { $fullW = $pageW }
 
       $y = [single]($page.Y + $pad)
       $maxY = [single]($page.Y + $page.Height - $pad)
@@ -291,7 +320,8 @@ try {
         } else {
           reject(
             new Error(
-              (stderr || stdout).trim() || `PowerShell text print exit ${code}`,
+              formatGdiPrintError((stderr || stdout).trim()) ||
+                `PowerShell text print exit ${code}`,
             ),
           );
         }

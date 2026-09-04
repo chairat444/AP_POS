@@ -43,6 +43,9 @@ const reasonLabel: Record<string, string> = {
   sale_earn: "ได้แต้มจากบิล",
   sale_redeem: "ใช้แต้มเป็นส่วนลด",
   admin_adjust: "ปรับจากแอดมิน",
+  "migrate sale earn": "ได้แต้มจากบิล (ย้ายข้อมูล)",
+  "migrate sale redeem": "ใช้แต้ม (ย้ายข้อมูล)",
+  "migrate opening points": "ยอดยกมาตอนย้ายข้อมูล",
 };
 
 function formatWhen(iso: string) {
@@ -58,14 +61,29 @@ function reasonText(reason: string) {
   return reasonLabel[reason] ?? reason;
 }
 
-async function search() {
+/** เปิดบิลด้วย saleId (ถ้ามี) — ไม่พึ่งกรองวันที่หน้า /sales */
+function saleLink(row: PointEntry) {
+  if (row.saleId) {
+    const q: Record<string, string> = { id: row.saleId };
+    if (row.billNo) q.q = row.billNo;
+    return { path: "/sales", query: q };
+  }
+  return {
+    path: "/sales",
+    query: { q: row.billNo ?? "" },
+  };
+}
+
+async function search(opts: { keepSelected?: boolean } = {}) {
   const term = q.value.trim();
   error.value = "";
   matches.value = [];
   if (!term) {
-    history.value = null;
-    selectedId.value = null;
-    await router.replace({ query: {} });
+    if (!opts.keepSelected) {
+      history.value = null;
+      selectedId.value = null;
+      await router.replace({ query: {} });
+    }
     return;
   }
   pending.value = true;
@@ -86,8 +104,11 @@ async function search() {
       selectedId.value &&
       !matches.value.some((m) => m.id === selectedId.value)
     ) {
-      selectedId.value = null;
-      history.value = null;
+      // มี id จากลิงก์ลึก — อย่าทิ้งแค่เพราะคำค้นไม่ครอบ
+      if (!opts.keepSelected) {
+        selectedId.value = null;
+        history.value = null;
+      }
     }
   } catch (e) {
     error.value = e instanceof Error ? e.message : "ค้นหาไม่สำเร็จ";
@@ -103,6 +124,13 @@ async function selectMember(id: string) {
   try {
     const data = await get<HistoryPayload>(`/members/${id}/points-history`);
     history.value = data;
+    // ถ้ามาจากลิงก์ด้วยชื่อแปลก ๆ ให้โชว์ชื่อ/เบอร์จริงในช่องค้น
+    if (data.member?.phone || data.member?.name) {
+      const nicer = data.member.phone || data.member.name;
+      if (!q.value.trim() || q.value.trim() === data.member.name) {
+        q.value = nicer;
+      }
+    }
     await router.replace({
       query: {
         ...(q.value.trim() ? { q: q.value.trim() } : {}),
@@ -118,8 +146,13 @@ async function selectMember(id: string) {
 }
 
 onMounted(async () => {
-  if (q.value.trim()) await search();
-  else if (selectedId.value) await selectMember(selectedId.value);
+  // ลิงก์จากรายงานมี id — โหลดประวัติก่อน อย่าให้ search ล้างทิ้ง
+  if (selectedId.value) {
+    await selectMember(selectedId.value);
+    if (q.value.trim()) await search({ keepSelected: true });
+  } else if (q.value.trim()) {
+    await search();
+  }
 });
 </script>
 
@@ -252,43 +285,48 @@ onMounted(async () => {
         <div v-if="!history.entries.length" class="ui-empty">
           ยังไม่มีประวัติแต้ม (ได้/ใช้แต้มจะขึ้นหลัง sync บิล)
         </div>
-        <div v-else class="ui-table-wrap">
-          <table class="ui-table ui-table--fit">
+        <div v-else class="ui-table-wrap ui-points-ledger-wrap">
+          <table class="ui-table ui-points-ledger">
             <thead>
               <tr>
                 <th>วันเวลา</th>
                 <th>รายการ</th>
                 <th>บิล</th>
                 <th>สาขา</th>
-                <th style="text-align: right">เปลี่ยนแปลง</th>
-                <th style="text-align: right">คงเหลือหลังรายการ</th>
+                <th class="ui-points-ledger__num">เปลี่ยนแปลง</th>
+                <th class="ui-points-ledger__num">คงเหลือหลังรายการ</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="row in history.entries" :key="row.id">
-                <td>{{ formatWhen(row.createdAt) }}</td>
+                <td class="ui-points-ledger__when">{{ formatWhen(row.createdAt) }}</td>
                 <td>{{ reasonText(row.reason) }}</td>
-                <td>
+                <td class="ui-points-ledger__bill">
                   <NuxtLink
-                    v-if="row.billNo"
-                    :to="`/sales?q=${encodeURIComponent(row.billNo)}`"
+                    v-if="row.saleId || row.billNo"
+                    :to="saleLink(row)"
                     class="ui-link"
+                    target="_blank"
+                    rel="noopener noreferrer"
                   >
-                    {{ row.billNo }}
+                    {{ row.billNo || row.saleId }}
                   </NuxtLink>
                   <span v-else>-</span>
                 </td>
-                <td>{{ row.branchName || row.branchId || "-" }}</td>
+                <td class="ui-points-ledger__branch">
+                  {{ row.branchName || row.branchId || "-" }}
+                </td>
                 <td
-                  style="text-align: right; font-weight: 700"
+                  class="ui-points-ledger__num"
                   :style="{
                     color: row.delta >= 0 ? '#15803d' : '#b91c1c',
+                    fontWeight: 700,
                   }"
                 >
                   {{ row.delta > 0 ? "+" : ""
                   }}{{ row.delta.toLocaleString("th-TH") }}
                 </td>
-                <td style="text-align: right">
+                <td class="ui-points-ledger__num">
                   {{ row.balanceAfter.toLocaleString("th-TH") }}
                 </td>
               </tr>
@@ -299,3 +337,46 @@ onMounted(async () => {
     </template>
   </div>
 </template>
+
+<style scoped>
+.ui-points-ledger-wrap {
+  overflow-x: auto !important;
+}
+
+.ui-points-ledger {
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
+  border-collapse: collapse;
+}
+
+.ui-points-ledger th,
+.ui-points-ledger td {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.ui-points-ledger__bill {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9rem;
+  padding-right: 1.25rem !important;
+}
+
+.ui-points-ledger__branch {
+  color: var(--ui-muted, #475569);
+  padding-left: 0.5rem !important;
+}
+
+.ui-points-ledger__when {
+  color: var(--ui-muted, #64748b);
+  font-size: 0.88rem;
+}
+
+.ui-points-ledger__num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+</style>

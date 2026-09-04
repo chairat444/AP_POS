@@ -7,9 +7,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const PROD_API_BASE = "https://pos.chinthurakij.com/api";
 
 process.env.CSC_IDENTITY_AUTO_DISCOVERY = "false";
 process.env.ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES = "true";
+if (!process.env.VITE_API_BASE) {
+  process.env.VITE_API_BASE = PROD_API_BASE;
+}
 
 function run(cmd, args) {
   const r = spawnSync(cmd, args, {

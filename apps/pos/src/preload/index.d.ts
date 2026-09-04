@@ -68,9 +68,36 @@ export type ApPosDbBridge = {
   saveAudit: (audit: unknown) => Promise<unknown>;
   listAuditsByShift: (shiftId: string) => Promise<unknown[]>;
   listOutbox: () => Promise<unknown[]>;
+  listOutboxRows: () => Promise<
+    Array<{
+      id: string;
+      entityType: string;
+      entityId: string;
+      payload: string;
+      createdAt: string;
+      attempts: number;
+      lastError: string | null;
+    }>
+  >;
   ackOutbox: (ids: string[]) => Promise<boolean>;
   outboxCount: () => Promise<number>;
   purgeSyncedSales: () => Promise<number>;
+  listLocalSales: (opts?: {
+    limit?: number;
+    pendingOnly?: boolean;
+  }) => Promise<
+    Array<{
+      id: string;
+      billNo: string;
+      shiftId: string | null;
+      total: number;
+      createdAt: string;
+      syncedAt: string | null;
+      status: "pending" | "synced";
+    }>
+  >;
+  countPendingSales: () => Promise<number>;
+  requeueUnsyncedSales: () => Promise<number>;
   getMeta: (key: string) => Promise<string | null>;
   setMeta: (key: string, value: string) => Promise<boolean>;
 };
@@ -100,9 +127,13 @@ export type ApPosPrintBridge = {
   listPrinters: () => Promise<{
     printers: Array<{ name: string; isDefault: boolean }>;
   }>;
+  kickDrawer: (req?: {
+    deviceName?: string;
+  }) => Promise<{ ok: boolean; used?: string; error?: string }>;
 };
 
 export type ApPosBridge = {
+  getVersion(): Promise<string>;
   publishCart(snapshot: CartSnapshot): void;
   getCart(): Promise<CartSnapshot | null>;
   publishSettings(snapshot: unknown): void;

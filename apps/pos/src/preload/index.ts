@@ -44,6 +44,9 @@ export type DeviceConfig = {
 };
 
 contextBridge.exposeInMainWorld("apPos", {
+  getVersion() {
+    return ipcRenderer.invoke("app:get-version") as Promise<string>;
+  },
   publishCart(snapshot: CartSnapshot) {
     ipcRenderer.send("cart:update", snapshot);
   },
@@ -130,6 +133,12 @@ contextBridge.exposeInMainWorld("apPos", {
       ipcRenderer.invoke("printers:list") as Promise<{
         printers: Array<{ name: string; isDefault: boolean }>;
       }>,
+    kickDrawer: (req?: { deviceName?: string }) =>
+      ipcRenderer.invoke("drawer:kick", req ?? {}) as Promise<{
+        ok: boolean;
+        used?: string;
+        error?: string;
+      }>,
   },
   db: {
     path: () => ipcRenderer.invoke("db:path") as Promise<string>,
@@ -166,12 +175,40 @@ contextBridge.exposeInMainWorld("apPos", {
     listAuditsByShift: (shiftId: string) =>
       ipcRenderer.invoke("db:audit:listByShift", shiftId) as Promise<unknown[]>,
     listOutbox: () => ipcRenderer.invoke("db:outbox:list") as Promise<unknown[]>,
+    listOutboxRows: () =>
+      ipcRenderer.invoke("db:outbox:listRows") as Promise<
+        Array<{
+          id: string;
+          entityType: string;
+          entityId: string;
+          payload: string;
+          createdAt: string;
+          attempts: number;
+          lastError: string | null;
+        }>
+      >,
     ackOutbox: (ids: string[]) =>
       ipcRenderer.invoke("db:outbox:ack", ids) as Promise<boolean>,
     outboxCount: () =>
       ipcRenderer.invoke("db:outbox:count") as Promise<number>,
     purgeSyncedSales: () =>
       ipcRenderer.invoke("db:sales:purgeSynced") as Promise<number>,
+    listLocalSales: (opts?: { limit?: number; pendingOnly?: boolean }) =>
+      ipcRenderer.invoke("db:sales:listLocal", opts) as Promise<
+        Array<{
+          id: string;
+          billNo: string;
+          shiftId: string | null;
+          total: number;
+          createdAt: string;
+          syncedAt: string | null;
+          status: "pending" | "synced";
+        }>
+      >,
+    countPendingSales: () =>
+      ipcRenderer.invoke("db:sales:countPending") as Promise<number>,
+    requeueUnsyncedSales: () =>
+      ipcRenderer.invoke("db:sales:requeueUnsynced") as Promise<number>,
     getMeta: (key: string) =>
       ipcRenderer.invoke("db:meta:get", key) as Promise<string | null>,
     setMeta: (key: string, value: string) =>

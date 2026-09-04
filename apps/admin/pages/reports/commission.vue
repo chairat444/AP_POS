@@ -473,7 +473,7 @@ onMounted(async () => {
             <span>ดูรายวัน · รอบขาย · ค่าคอมแบบเต็มที่นี่</span>
           </div>
 
-          <template v-else>
+          <div v-else class="ui-comm__detail-scroll">
             <header class="ui-comm__detail-head">
               <div>
                 <p class="ui-comm__detail-kicker">{{ monthLabel }}</p>
@@ -653,7 +653,7 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
-          </template>
+          </div>
         </section>
       </div>
     </template>
@@ -665,7 +665,6 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 0;
-  min-height: calc(100vh - 4.5rem);
 }
 
 .ui-comm :deep(.ui-page-head) {
@@ -714,27 +713,40 @@ onMounted(async () => {
 
 .ui-comm__split {
   display: grid;
-  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
   gap: 1rem;
   margin-top: 1rem;
-  flex: 1;
-  min-height: 0;
   align-items: stretch;
+  /* ความสูงคงที่พอให้รายวันเลื่อนในแผงได้ แม้จอสั้น */
+  height: min(70dvh, calc(100dvh - 15rem));
+  min-height: 22rem;
 }
 
 .ui-comm__list,
 .ui-comm__detail {
   display: flex;
   flex-direction: column;
-  min-height: 28rem;
-  max-height: calc(100vh - 16rem);
+  min-height: 0;
+  height: 100%;
   overflow: hidden;
 }
 
-.ui-comm__list-body,
-.ui-comm__days {
+.ui-comm__list-body {
   flex: 1;
+  min-height: 0;
   overflow: auto;
+  padding: 0.35rem 0.55rem 0.75rem;
+}
+
+.ui-comm__detail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 1.25rem;
+}
+
+.ui-comm__days {
   padding: 0.35rem 0.55rem 0.75rem;
 }
 
@@ -806,7 +818,7 @@ onMounted(async () => {
 }
 
 .ui-comm__detail {
-  padding-bottom: 0.5rem;
+  padding-bottom: 0;
 }
 
 .ui-comm__detail-empty {
@@ -864,9 +876,9 @@ onMounted(async () => {
 
 .ui-comm__detail-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.55rem;
-  padding: 0.75rem 1.15rem 0.85rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.45rem;
+  padding: 0.35rem 1rem 0.65rem;
 }
 
 .ui-comm__detail-grid > div {
@@ -1063,16 +1075,19 @@ onMounted(async () => {
 @media (max-width: 980px) {
   .ui-comm__split {
     grid-template-columns: 1fr;
-  }
-
-  .ui-comm__list,
-  .ui-comm__detail {
-    max-height: none;
+    height: auto;
     min-height: 0;
   }
 
-  .ui-comm__list-body {
-    max-height: 18rem;
+  .ui-comm__list {
+    height: auto;
+    max-height: 16rem;
+  }
+
+  .ui-comm__detail {
+    height: auto;
+    min-height: 24rem;
+    max-height: min(65dvh, 36rem);
   }
 
   .ui-comm__kpis {
@@ -1083,4 +1098,24 @@ onMounted(async () => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+@media (max-height: 820px) {
+  .ui-comm__split {
+    height: min(75dvh, calc(100dvh - 12rem));
+    min-height: 18rem;
+  }
+
+  .ui-comm__detail-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .ui-comm__detail-grid > div {
+    padding: 0.4rem 0.55rem;
+  }
+
+  .ui-comm__detail-grid strong {
+    font-size: 0.95rem;
+  }
+}
+
 </style>

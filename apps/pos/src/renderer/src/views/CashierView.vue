@@ -125,6 +125,7 @@ const productSearchOpen = ref(false);
 const holdOpen = ref(false);
 const summaryOpen = ref(false);
 const configOpen = ref(false);
+const appVersion = ref("…");
 const pulling = ref(false);
 const holdMode = ref<"hold" | "recall">("hold");
 const confirmOpen = ref(false);
@@ -320,7 +321,7 @@ async function runBackgroundSync() {
 
   // push แยกจาก pull — ปิดรอบออฟไลน์ค้าง outbox ไว้ ส่งตอนเน็ตกลับ / เปิดรอบวันใหม่
   try {
-    await syncPushOutbox();
+    await syncPushOutbox({ force: !isApiOfflineKnown() });
     if (window.apPos?.db?.purgeSyncedSales) {
       await window.apPos.db.purgeSyncedSales();
     }
@@ -396,6 +397,13 @@ watch(quickPageCount, (n) => {
 
 const selectedLine = computed(() =>
   selectedIndex.value >= 0 ? lines.value[selectedIndex.value] : null,
+);
+
+const hasSideDiscounts = computed(
+  () =>
+    appliedPromos.value.length > 0 ||
+    pointsDiscount.value > 0 ||
+    manualDiscount.value > 0,
 );
 
 type ActionBtn = {
@@ -903,6 +911,9 @@ function onKeydown(e: KeyboardEvent) {
 onMounted(() => {
   window.addEventListener("keydown", onKeydown, true);
   void members.loadLocal();
+  void window.apPos?.getVersion?.().then((v) => {
+    if (v) appVersion.value = v;
+  });
   void (async () => {
     await loadMediaIndex();
     const [promos, cachedSettings] = await Promise.all([
@@ -1008,6 +1019,9 @@ onUnmounted(() => {
             <span>รายการขาย</span>
             <span class="panel-head-meta">
               {{ lines.length }} รายการ
+              <template v-if="summary.itemCount !== lines.length">
+                · {{ summary.itemCount }} ชิ้น
+              </template>
               <template v-if="pendingQty > 1"> · คูณ x{{ pendingQty }}</template>
               <template v-if="heldBills.length"> · พัก {{ heldBills.length }}</template>
             </span>
@@ -1093,13 +1107,13 @@ onUnmounted(() => {
                     @error="onThumbError"
                   />
                 </span>
+                <span v-if="p.price != null" class="quick-price">
+                  {{ formatMoney(p.price) }}
+                  <small>บ.</small>
+                </span>
+                <span v-else class="quick-price quick-price--open">เปิดราคา</span>
                 <span class="quick-meta">
                   <span class="quick-name">{{ shortQuickName(p.name) }}</span>
-                  <span v-if="p.price != null" class="quick-price">
-                    {{ formatMoney(p.price) }}
-                    <small>บ.</small>
-                  </span>
-                  <span v-else class="quick-price quick-price--open">เปิดราคา</span>
                 </span>
               </button>
             </div>
@@ -1210,20 +1224,8 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="side-card side-summary">
-          <div class="count-row">
-            <span>จำนวนสินค้า</span>
-            <strong>{{ summary.itemCount }}</strong>
-          </div>
-
-          <div
-            v-if="
-              appliedPromos.length ||
-              pointsDiscount > 0 ||
-              manualDiscount > 0
-            "
-            class="disc-block"
-          >
+        <div v-if="hasSideDiscounts" class="side-card side-summary">
+          <div class="disc-block">
             <div v-for="p in appliedPromos" :key="p.promoId" class="disc-line">
               <span>โปร: {{ p.label }}</span>
               <strong>-{{ formatMoney(p.discount) }}</strong>
@@ -1240,17 +1242,14 @@ onUnmounted(() => {
               <strong>-{{ formatMoney(manualDiscount) }}</strong>
             </div>
           </div>
-
-          <div class="total-block">
-            <span>รวมเงิน</span>
-            <strong>{{ formatMoney(summary.total) }}</strong>
-          </div>
         </div>
 
         <div class="side-checkout">
           <div class="change-block" :class="{ 'has-change': lastChange > 0 }">
-            <span>{{ lastChange > 0 ? "ทอนบิลล่าสุด" : "เงินทอน" }}</span>
-            <strong>{{ formatMoney(lastChange) }}</strong>
+            <span class="change-block__label">เงินทอน</span>
+            <strong class="change-block__amount">{{
+              formatMoney(lastChange)
+            }}</strong>
           </div>
 
           <button type="button" class="pay-btn" @click.stop="openPayment">
@@ -1272,7 +1271,7 @@ onUnmounted(() => {
       >
         ⚙
       </button>
-      <span>AP Retail — Version 0.1.0</span>
+      <span>AP POS — Version {{ appVersion }}</span>
       <span class="status-bar__device" :title="`${device.branchId} / ${device.terminalId}`">
         {{ device.branchName }} · {{ device.terminalName || "เครื่อง POS" }}
         <template v-if="!device.setupDone"> · ยังไม่ลงทะเบียน</template>

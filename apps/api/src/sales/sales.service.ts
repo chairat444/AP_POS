@@ -418,7 +418,7 @@ export class SalesService {
       byPayment: [...byPaymentMap.values()].sort((a, b) => b.amount - a.amount),
       byBranch,
       series,
-      sales: filtered.slice(0, 100).map((r) =>
+      sales: filtered.map((r) =>
         this.mapSale(
           r,
           payments.filter((p) => p.saleId === r.id),

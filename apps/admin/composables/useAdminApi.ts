@@ -1,10 +1,7 @@
 export function useAdminApi() {
   const config = useRuntimeConfig();
   const { token, logout } = useAuth();
-  const base = String(config.public.apiBase || "http://127.0.0.1:3000").replace(
-    /\/$/,
-    "",
-  );
+  const base = String(config.public.apiBase || "/api").replace(/\/$/, "");
 
   function headers(): Record<string, string> {
     const h: Record<string, string> = {};

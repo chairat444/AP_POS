@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
 import { SyncService } from "./sync.service";
 
 import { Public } from "../auth/public.decorator";
@@ -29,6 +29,15 @@ export class SyncController {
     @Query("excludeShiftId") excludeShiftId?: string,
   ) {
     return this.sync.staffDaySales(staffId ?? "", excludeShiftId);
+  }
+
+  /** บิลรายวันของสาขา — ให้ POS / สคริปต์กู้รอบ (ไม่ต้อง login Admin) */
+  @Get("day-sales")
+  daySales(
+    @Query("branchId") branchId?: string,
+    @Query("day") day?: string,
+  ) {
+    return this.sync.daySales(branchId ?? "", day);
   }
 
   @Get("promos")
@@ -121,6 +130,12 @@ export class SyncController {
     },
   ) {
     return this.sync.acceptShifts(body.shifts ?? []);
+  }
+
+  /** ตรวจรอบหลัง sync — POS ใช้ได้โดยไม่ต้อง login Admin */
+  @Get("shifts/:id")
+  getShift(@Param("id") id: string) {
+    return this.sync.getShift(id);
   }
 
   @Post("audits")

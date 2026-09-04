@@ -5,7 +5,7 @@ const { login } = useAuth();
 const config = useRuntimeConfig();
 const appName = computed(() => String(config.public.appName || "AP POS Admin"));
 const apiBase = computed(() =>
-  String(config.public.apiBase || "http://127.0.0.1:3000").replace(/\/$/, ""),
+  String(config.public.apiBase || "/api").replace(/\/$/, ""),
 );
 
 const brandName = ref("");

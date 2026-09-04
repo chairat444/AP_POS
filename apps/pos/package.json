@@ -5,7 +5,7 @@
   "author": {
     "name": "AP หมูสด"
   },
-  "version": "0.1.6",
+  "version": "0.1.19",
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
@@ -19,6 +19,7 @@
     "seed:export": "node ./scripts/export-offline-seed.mjs",
     "dist": "pnpm build && electron-builder --config electron-builder.yml",
     "dist:win": "node ./scripts/dist-win.mjs",
+    "dist:win:local": "node ./scripts/dist-win-local.mjs",
     "dist:mac": "pnpm build && electron-builder --config electron-builder.yml --mac",
     "dist:dir": "pnpm build && electron-builder --config electron-builder.yml --dir"
   },

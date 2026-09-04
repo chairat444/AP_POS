@@ -964,14 +964,23 @@ function clearPointsDiscount() {
         <p id="pay-transfer-popup-title" class="pay-transfer-popup__msg">
           ตรวจสอบยอดเงิน/ถ่ายสลิปเรียบร้อยแล้ว
         </p>
-        <button
-          ref="transferConfirmBtn"
-          type="button"
-          class="pay-transfer-popup__btn"
-          @click="confirm"
-        >
-          ยืนยัน
-        </button>
+        <div class="pay-transfer-popup__actions">
+          <button
+            type="button"
+            class="pay-transfer-popup__btn pay-transfer-popup__btn--cancel"
+            @click="close"
+          >
+            ยกเลิก
+          </button>
+          <button
+            ref="transferConfirmBtn"
+            type="button"
+            class="pay-transfer-popup__btn pay-transfer-popup__btn--confirm"
+            @click="confirm"
+          >
+            ยืนยัน
+          </button>
+        </div>
       </div>
     </div>
   </div>

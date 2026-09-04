@@ -298,6 +298,78 @@ function pasteMentionsItem(itemName: string, lines: ParsedPurchaseLine[]) {
   return lines.some((line) => purchaseKeysCompatible(itemName, line.name) !== "none");
 }
 
+/** เช็ครายการครบไหม — เทียบข้อความน้องกับรายการบนแผงแยกต่อสาขา */
+type MissingItem = { name: string; qty: string };
+type BranchCheck = {
+  branchId: string;
+  branchName: string;
+  pasteCount: number;
+  boardCount: number;
+  missing: MissingItem[];
+  ok: boolean;
+};
+const branchChecks = computed<BranchCheck[]>(() => {
+  if (!board.value) return [];
+  return copyBranchOrder.value.map((br) => {
+    const lines = remainingLinesByBranch.value.get(br.id) ?? [];
+    // รายการบนแผงที่สาขานี้มีจำนวน
+    const boardNames = new Set<string>();
+    for (const col of board.value!.columns) {
+      for (const item of col.items) {
+        if (item.byBranch.some((b) => b.branchId === br.id && b.lineId)) {
+          boardNames.add(normalizePurchaseKey(item.name));
+        }
+      }
+    }
+    const missing: MissingItem[] = [];
+    for (const line of lines) {
+      const key = normalizePurchaseKey(line.name);
+      if (boardNames.has(key)) continue;
+      // เช็คชื่อที่ถูก map กับแคตตาล็อก
+      let found = false;
+      for (const bk of boardNames) {
+        if (purchaseKeysCompatible(line.name, bk) !== "none") {
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        missing.push({
+          name: line.name,
+          qty: (line.qtyText || line.note || "").trim(),
+        });
+      }
+    }
+    return {
+      branchId: br.id,
+      branchName: br.name,
+      pasteCount: lines.length,
+      boardCount: boardNames.size,
+      missing,
+      ok: missing.length === 0 && lines.length > 0,
+    };
+  });
+});
+const hasAnyPaste = computed(
+  () => branchChecks.value.some((c) => c.pasteCount > 0),
+);
+const allBranchesOk = computed(
+  () => hasAnyPaste.value && branchChecks.value.every((c) => c.ok),
+);
+const checkSummaryText = computed(() => {
+  if (!hasAnyPaste.value) return "";
+  if (allBranchesOk.value) return "✅ ทุกสาขาครบตามที่น้องสั่ง";
+  return branchChecks.value
+    .filter((c) => c.pasteCount > 0)
+    .map(
+      (c) =>
+        c.ok
+          ? `✅ ${shortBranchName(c.branchName)} ครบ (${c.pasteCount})`
+          : `⚠️ ${shortBranchName(c.branchName)} ขาด ${c.missing.length} จาก ${c.pasteCount}`,
+    )
+    .join(" · ");
+});
+
 /** tooltip ต่อรายการสินค้า — เช่น หลุมดิน 3 เจ็ดเสมียน 1 */
 function itemStockTip(item: BoardItem) {
   const parts = copyBranchOrder.value
@@ -337,6 +409,8 @@ async function saveQty(item: BoardItem, branchId: string) {
   const hit = item.byBranch.find((b) => b.branchId === branchId);
   const prev = sanitizeQtyInput(hit ? branchQty(hit) : "");
   if (qtyText === prev) return;
+  // มีแถวชื่ออย่างเดียวอยู่แล้ว — ช่องว่างตอน blur ต้องไม่ไปลบ
+  if (!qtyText && !prev && hit?.lineId) return;
 
   qtySavingKey.value = key;
   error.value = "";
@@ -350,6 +424,8 @@ async function saveQty(item: BoardItem, branchId: string) {
       catalogId: item.catalogId ?? null,
       lineId: hit?.lineId ?? null,
       qtyText: qtyText || null,
+      // แถวที่เคยว่างอยู่แล้ว ถ้ายังว่างต่อ ให้คงไว้บนแผง
+      forceCreate: !qtyText && !prev,
     });
     syncQtyDrafts();
   } catch (e) {
@@ -419,6 +495,21 @@ function onSheetEnter(e: KeyboardEvent, colKey?: string) {
     cur.blur();
     return;
   }
+
+  // แถวเพิ่ม: Enter ที่ช่องชื่อ = เพิ่มรายการเลย (จำนวนว่างได้) แล้วโฟกัสชื่อต่อ
+  if (
+    colKey &&
+    cur.closest(".ui-purchase-sheet__row--add") &&
+    cur.classList.contains("ui-purchase-sheet__add-name")
+  ) {
+    void submitAddRow(colKey).then(() => {
+      sheet
+        .querySelector<HTMLInputElement>(".ui-purchase-sheet__add-name")
+        ?.focus();
+    });
+    return;
+  }
+
   const inputs = Array.from(
     sheet.querySelectorAll<HTMLInputElement>("input[data-sheet-nav]"),
   ).filter((el) => !el.disabled);
@@ -433,7 +524,7 @@ function onSheetEnter(e: KeyboardEvent, colKey?: string) {
     next.select();
     return;
   }
-  // ช่องสุดท้ายของแถวเพิ่ม → บันทึกแถวใหม่ แล้วโฟกัสชื่อใหม่
+  // ช่องจำนวนสุดท้ายของแถวเพิ่ม → บันทึกแถวใหม่ แล้วโฟกัสชื่อใหม่
   if (colKey && cur.closest(".ui-purchase-sheet__row--add")) {
     void submitAddRow(colKey).then(() => {
       sheet
@@ -1161,10 +1252,25 @@ onUnmounted(() => {
     <div v-if="error" class="ui-empty">{{ error }}</div>
     <div v-else-if="message" class="ui-empty" style="color: #166534">{{ message }}</div>
 
+    <!-- เช็ครายการครบไหม -->
+    <div v-if="hasAnyPaste && board" class="ui-purchase-check" :class="{ 'is-ok': allBranchesOk }">
+      <div class="ui-purchase-check__summary">{{ checkSummaryText }}</div>
+      <template v-for="c in branchChecks" :key="c.branchId">
+        <div v-if="c.missing.length" class="ui-purchase-check__branch">
+          <strong>{{ shortBranchName(c.branchName) }} — ขาด {{ c.missing.length }} รายการ:</strong>
+          <ul>
+            <li v-for="(m, i) in c.missing" :key="i">
+              {{ m.name }}<template v-if="m.qty"> · {{ m.qty }}</template>
+            </li>
+          </ul>
+        </div>
+      </template>
+    </div>
+
     <p v-if="board" class="ui-field-hint" style="margin: 0.85rem 0 0">
       แผงสรุป · หลุมดินอยู่บน · เจ็ดเสมียนอยู่ล่าง
       <template v-if="branchCountLegend"> · {{ branchCountLegend }}</template>
-      · กด ⓘ ดูคงเหลือ · <strong>Enter</strong> ไปช่องถัดไป · คลิก ⋮⋮ ย้ายคอลัมน์
+      · กด ⓘ ดูคงเหลือ · <strong>Enter</strong> ที่ชื่อ = เพิ่มรายการ · ที่จำนวน = ช่องถัดไป · คลิก ⋮⋮ ย้ายคอลัมน์
       <template v-if="copyLegend"> · {{ copyLegend }}</template>
     </p>
 
@@ -1970,6 +2076,40 @@ onUnmounted(() => {
 .ui-purchase-share__table td.is-chetsamian {
   background: #fff59d;
   font-weight: 600;
+}
+/* เช็ครายการครบไหม */
+.ui-purchase-check {
+  margin-top: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.55rem;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  font-size: 0.82rem;
+  color: #78350f;
+}
+.ui-purchase-check.is-ok {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+  color: #166534;
+}
+.ui-purchase-check__summary {
+  font-weight: 700;
+  font-size: 0.88rem;
+  margin-bottom: 0.25rem;
+}
+.ui-purchase-check__branch {
+  margin-top: 0.35rem;
+}
+.ui-purchase-check__branch strong {
+  font-size: 0.82rem;
+}
+.ui-purchase-check__branch ul {
+  margin: 0.15rem 0 0 1.2rem;
+  padding: 0;
+}
+.ui-purchase-check__branch li {
+  margin: 0.05rem 0;
+  line-height: 1.35;
 }
 @media (max-width: 1180px) {
   .ui-purchase-board {

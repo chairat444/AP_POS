@@ -11,6 +11,7 @@ import { DatabaseService } from "../db/database.service";
 import {
   normalizePurchaseKey,
   parsePurchaseText,
+  purchaseKeysCompatible,
   PURCHASE_DAY_STATUSES,
   PURCHASE_GROUPS,
   isPurchaseDayStatus,
@@ -25,11 +26,11 @@ const SEED: SeedItem[] = [
   { name: "ปูอัด", group: "meatball", aliases: "ปูอัด|ทาอิจิ" },
   { name: "จานเด็ดหมู", group: "meatball", aliases: "จานเด็ด" },
   { name: "คอมโบ", group: "meatball" },
-  { name: "หมึกกรอบ", group: "meatball" },
-  { name: "แมงกะพรุน", group: "meatball" },
+  { name: "หมึกกรอบ", group: "meatball", aliases: "หมึกกรอบ|หมึกกรอบสำรอง" },
+  { name: "แมงกะพรุน", group: "meatball", aliases: "แมงกะพรุน|แมงกะพรุนสำรอง" },
   { name: "ปูอัดชีส", group: "meatball" },
   { name: "อังคณา", group: "meatball", aliases: "อังคณาสุกี้|อังคนะ|อังคนา|อังคณา" },
-  { name: "เด้งใหญ่", group: "meatball", aliases: "เด้งใหญ่|เดงใหญ่" },
+  { name: "เด้งใหญ่", group: "meatball", aliases: "เด้งใหญ่|ใหย่|เด้งใหย่|เดงใหญ่" },
   { name: "เด้งเล็ก", group: "meatball", aliases: "เด้งเล็ก|เดงเล็ก" },
   { name: "เด้งล้อ", group: "meatball" },
   { name: "เต้าหู้ไข่", group: "meatball", aliases: "เต้าหู้ไข่หลอด|เต้าหู้ไข่" },
@@ -52,7 +53,7 @@ const SEED: SeedItem[] = [
   { name: "ชีสดิป", group: "market" },
   { name: "ถุงร้อน 6*9", group: "market", aliases: "ถุงร้อน6*9|ถุงร้อน6x9" },
   { name: "ถุงร้อน 7*11", group: "market", aliases: "ถุงร้อน7*11|ถุงร้อน7x11" },
-  { name: "ถุงหิ้ว 9*18", group: "market", aliases: "ถุงหิ้ว9*18|ถุงหิว9*18|ถุงหิ้ว9x18" },
+  { name: "ถุงหิ้ว 9*18", group: "market", aliases: "ถุงหิ้ว9*18|ถุงหิว9*18|ถุงหิ้ว9x18|ถึงหิว9*18|ถึงหิว9x18" },
   { name: "ถ้วย 4oz", group: "market", aliases: "ถ้วย4oz|4oz" },
   { name: "ถ้วยใส่ชีสยืด", group: "market", aliases: "ถ้วยชีสยืด|ถ้วยใส่ชีส" },
   { name: "มะนาว", group: "market" },
@@ -77,8 +78,9 @@ const SEED: SeedItem[] = [
   { name: "ตับ", group: "transfer" },
   { name: "เนื้อหมูสไลด์", group: "transfer", aliases: "หมูสไลด์|เนื้อหมูสไลด์" },
   { name: "หมูหั่น", group: "transfer", aliases: "หมูหั่น" },
-  { name: "สะโพกหมู", group: "transfer" },
-  { name: "สันคอสไลด์", group: "transfer", aliases: "สันคอ" },
+  { name: "สะโพกหมู", group: "transfer", aliases: "สะโพกหมู|สะโพกหมูสำรอง" },
+  { name: "ซี่โครง", group: "transfer", aliases: "ซี่โครง|ซี่โครงหมู|ชี่โครง|ซี่โครงสำรอง" },
+  { name: "คอหมูย่าง", group: "transfer", aliases: "คอหมูย่าง|คอหมู|คอหมูย่างสำรอง" },
   { name: "สาหร่ายวากาเมะ", group: "transfer", aliases: "ว่ากาเมะ|วากาเมะ|ส่าหร่ายว่ากาเมะ" },
   { name: "น้ำจิ้มแจ่ว", group: "transfer", aliases: "น้ำจิ้มแจ๋ว|แจ่ว" },
   { name: "งาขาว", group: "transfer" },
@@ -171,12 +173,32 @@ export class PurchasesService implements OnModuleInit {
       {
         name: "ถุงหิ้ว 9*18",
         group: "market",
-        aliases: "ถุงหิ้ว9*18|ถุงหิว9*18|ถุงหิ้ว9x18",
+        aliases: "ถุงหิ้ว9*18|ถุงหิว9*18|ถุงหิ้ว9x18|ถึงหิว9*18",
       },
       {
         name: "น่องไก่",
         group: "market",
         aliases: "น่องไก่|สะโพกไก่|น่องสะโพก",
+      },
+      {
+        name: "สะโพกหมู",
+        group: "transfer",
+        aliases: "สะโพกหมู|สะโพกหมูสำรอง",
+      },
+      {
+        name: "หมึกกรอบ",
+        group: "meatball",
+        aliases: "หมึกกรอบ|หมึกกรอบสำรอง",
+      },
+      {
+        name: "ซี่โครง",
+        group: "transfer",
+        aliases: "ซี่โครง|ซี่โครงหมู|ชี่โครง|ซี่โครงสำรอง",
+      },
+      {
+        name: "คอหมูย่าง",
+        group: "transfer",
+        aliases: "คอหมูย่าง|คอหมู|คอหมูย่างสำรอง",
       },
     ];
     for (const item of upserts) {
@@ -361,25 +383,35 @@ export class PurchasesService implements OnModuleInit {
 
   private async matchCatalog(name: string) {
     const { items } = await this.listCatalog();
-    const key = normalizePurchaseKey(name);
+    const tryNames = [name];
+    // สะโพกหมู สำรอง → ลอง match ชื่อหลักด้วย
+    const spare = name.match(/^(.*?)\s*สำรอง\s*$/u);
+    if (spare?.[1]?.trim() && spare[1].trim().length >= 2) {
+      tryNames.push(spare[1].trim());
+    }
+
     let best: (typeof items)[0] | null = null;
     let bestScore = 0;
-    for (const item of items) {
-      if (!item.active) continue;
-      const candidates = [item.name, ...item.aliases.split("|").filter(Boolean)];
-      for (const c of candidates) {
-        const ck = normalizePurchaseKey(c);
-        if (!ck) continue;
-        if (key === ck) return item;
-        const shorter = key.length <= ck.length ? key : ck;
-        const longer = key.length <= ck.length ? ck : key;
-        if (!longer.includes(shorter)) continue;
-        // กันชื่อยาวที่มีคำสั้นข้างใน เช่น ถ้วยใส่ชีสยืด → ชีสยืด
-        if (shorter.length / longer.length < 0.72) continue;
-        const score = shorter.length;
-        if (score > bestScore) {
-          bestScore = score;
-          best = item;
+    for (const tryName of tryNames) {
+      const key = normalizePurchaseKey(tryName);
+      for (const item of items) {
+        if (!item.active) continue;
+        const candidates = [item.name, ...item.aliases.split("|").filter(Boolean)];
+        for (const c of candidates) {
+          // ไม่ match กับแคตตาล็อกที่ชื่อเป็น「xxx สำรอง」เอง — ให้ไปรายการหลัก
+          if (/\s*สำรอง\s*$/u.test(c.trim())) continue;
+          const ck = normalizePurchaseKey(c);
+          if (!ck) continue;
+          if (key === ck) return item;
+          const shorter = key.length <= ck.length ? key : ck;
+          const longer = key.length <= ck.length ? ck : key;
+          if (!longer.includes(shorter)) continue;
+          if (shorter.length / longer.length < 0.72) continue;
+          const score = shorter.length;
+          if (score > bestScore) {
+            bestScore = score;
+            best = item;
+          }
         }
       }
     }
@@ -450,6 +482,16 @@ export class PurchasesService implements OnModuleInit {
       )
       .limit(1);
 
+    // อ่านข้อความเก่าก่อนทับ — ใช้แยกรายการจาก paste กับที่เพิ่มเองบนแผง
+    const oldPasteKeys = new Set(
+      parsePurchaseText(rawRows[0]?.rawText ?? "")
+        .map((l) => normalizePurchaseKey(l.name))
+        .filter(Boolean),
+    );
+    const newPasteKeys = new Set(
+      parsed.map((l) => normalizePurchaseKey(l.name)).filter(Boolean),
+    );
+
     if (rawRows[0]) {
       await this.database.db
         .update(pg.purchaseRaw)
@@ -489,9 +531,8 @@ export class PurchasesService implements OnModuleInit {
       if (k && !prevGroupByKey.has(k)) prevGroupByKey.set(k, row.groupKey);
     }
 
-    // ลบเส้นเก่าของสาขานี้แล้วใส่ใหม่
     const old = await this.database.db
-      .select({ id: pg.purchaseLines.id })
+      .select()
       .from(pg.purchaseLines)
       .where(
         and(
@@ -500,7 +541,29 @@ export class PurchasesService implements OnModuleInit {
           isNull(pg.purchaseLines.deletedAt),
         ),
       );
+
+    const lineMatchesPasteKey = (
+      lineName: string,
+      pasteKeys: Set<string>,
+    ) => {
+      const k = normalizePurchaseKey(lineName);
+      if (k && pasteKeys.has(k)) return true;
+      for (const pk of pasteKeys) {
+        if (purchaseKeysCompatible(lineName, pk) !== "none") return true;
+      }
+      return false;
+    };
+
+    // รายการที่เพิ่มเองบนแผง (ไม่อยู่ในข้อความ paste เก่า) — คงไว้ถ้า paste ใหม่ก็ไม่มี
+    const manualsToKeep = old.filter(
+      (row) =>
+        !lineMatchesPasteKey(row.name, oldPasteKeys) &&
+        !lineMatchesPasteKey(row.name, newPasteKeys),
+    );
+
     for (const row of old) {
+      // ลบเฉพาะของจาก paste เดิม / ที่ถูกแทนด้วย paste ใหม่
+      if (manualsToKeep.some((m) => m.id === row.id)) continue;
       await this.database.db
         .update(pg.purchaseLines)
         .set({ deletedAt: now(), updatedAt: now() })
@@ -536,6 +599,7 @@ export class PurchasesService implements OnModuleInit {
       });
     }
 
+    // คืนรายการที่เพิ่มเอง — ไม่ soft-delete ไว้แล้วด้านบน
     return this.board(day.id);
   }
 
@@ -713,6 +777,13 @@ export class PurchasesService implements OnModuleInit {
       if (existing) {
         if (dto.forceCreate) {
           // มีแถวแล้ว + ไม่ใส่จำนวน = คงไว้บนแผง
+          return this.board(dayId);
+        }
+        const hadQty = Boolean(
+          (existing.qtyText ?? "").trim() || (existing.note ?? "").trim(),
+        );
+        // แถวที่เพิ่มชื่ออย่างเดียว (ยังไม่มีจำนวน) — ห้ามลบตอน blur/Enter ช่องว่าง
+        if (!hadQty) {
           return this.board(dayId);
         }
         await this.database.db

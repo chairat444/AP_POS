@@ -78,7 +78,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 
 function priceLabel(p: QuickProduct) {
   if (p.price == null) return "บาร์โค้ดราคา";
-  return `${p.price.toFixed(2)} ฿`;
+  return `${p.price.toFixed(2)}`;
 }
 </script>
 

@@ -10,6 +10,7 @@ import {
   type DenomCount,
 } from "../data/cash-denoms";
 import { useSessionStore } from "../stores/session";
+import { kickCashDrawer } from "../services/drawer";
 
 const open = defineModel<boolean>("open", { default: false });
 const props = defineProps<{
@@ -77,6 +78,7 @@ function loadRows() {
 
 watch(open, (v) => {
   if (!v) return;
+  void kickCashDrawer();
   loadRows();
   note.value = "";
   error.value = "";
@@ -95,23 +97,31 @@ function clearAll() {
   focusAt(0);
 }
 
-function save() {
+const saving = ref(false);
+
+async function save() {
   error.value = "";
   if (total.value <= 0) {
     error.value = "ยังไม่ได้ใส่จำนวนใบเงิน";
     focusAt(0);
     return;
   }
+  if (saving.value) return;
   const payload = {
     total: total.value,
     denoms: rows.value.filter((r) => r.qty > 0).map((r) => ({ ...r })),
     note: note.value.trim(),
   };
-  if (purpose.value === "float") {
-    session.saveFloatCount(rows.value);
+  saving.value = true;
+  try {
+    if (purpose.value === "float") {
+      await session.saveFloatCount(rows.value);
+    }
+    emit("saved", payload);
+    open.value = false;
+  } finally {
+    saving.value = false;
   }
-  emit("saved", payload);
-  open.value = false;
 }
 
 function close() {
@@ -170,12 +180,12 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
           </h2>
           <p v-if="purpose === 'float'" class="cash-count-sub">
             <template v-if="isEditingFloat">
-              ค่าเดิม {{ openCash.toFixed(0) }}฿ · แก้จำนวนแล้วกดบันทึก
+              ค่าเดิม {{ openCash.toFixed(0) }} · แก้จำนวนแล้วกดบันทึก
             </template>
             <template v-else>ใส่จำนวนใบ/เหรียญ</template>
           </p>
           <p v-else class="cash-count-sub">
-            ระบบคาดไว้ {{ (expected ?? 0).toFixed(0) }}฿
+            ระบบคาดไว้ {{ (expected ?? 0).toFixed(0) }}
           </p>
         </div>
         <span class="pay-esc-hint">Esc ปิด</span>
@@ -242,13 +252,20 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
         <div v-if="error" class="pay-warn cash-count-err">{{ error }}</div>
         <div class="cash-count-actions">
           <button type="button" class="pay-cancel" @click="clearAll">ล้าง</button>
-          <button type="button" class="pay-confirm" @click="save">
+          <button
+            type="button"
+            class="pay-confirm"
+            :disabled="saving"
+            @click="save"
+          >
             {{
-              purpose === "float"
-                ? isEditingFloat
-                  ? "บันทึกการแก้ไข"
-                  : "บันทึก"
-                : "ส่งข้อมูลแล้วปิดรอบ"
+              saving
+                ? "กำลังส่ง…"
+                : purpose === "float"
+                  ? isEditingFloat
+                    ? "บันทึกการแก้ไข"
+                    : "บันทึก"
+                  : "ส่งข้อมูลแล้วปิดรอบ"
             }}
           </button>
         </div>

@@ -431,20 +431,182 @@ function run(sql: string, params: unknown[] = []) {
   persist();
 }
 
-/** ลบบิลที่ sync ขึ้นส่วนกลางแล้ว (เก็บแค่ของที่ยังไม่ขึ้น) */
+/** เดิมลบบิลที่ sync แล้ว — ตอนนี้เก็บไว้ในเครื่องเสมอ (ดู synced_at) */
 export async function purgeSyncedSales() {
   await ensureDb();
-  const rows = queryAll<{ id: string }>(
-    "SELECT id FROM sales WHERE synced_at IS NOT NULL",
+  // no-op: เก็บประวัติบิลใน SQLite เพื่อกู้ / ส่งซ้ำได้
+  return 0;
+}
+
+export type LocalSaleStatusRow = {
+  id: string;
+  billNo: string;
+  shiftId: string | null;
+  total: number;
+  createdAt: string;
+  syncedAt: string | null;
+  status: "pending" | "synced";
+};
+
+/** รายการบิลในเครื่อง — สำหรับแท็บซิงค์ */
+export async function listLocalSales(opts?: {
+  limit?: number;
+  pendingOnly?: boolean;
+}): Promise<LocalSaleStatusRow[]> {
+  await ensureDb();
+  const limit = Math.max(1, Math.min(500, opts?.limit ?? 80));
+  const where = opts?.pendingOnly ? "WHERE synced_at IS NULL" : "";
+  const rows = queryAll<{
+    id: string;
+    bill_no: string;
+    shift_id: string | null;
+    total: number;
+    created_at: string;
+    synced_at: string | null;
+  }>(
+    `SELECT id, bill_no, shift_id, total, created_at, synced_at
+     FROM sales ${where}
+     ORDER BY created_at DESC
+     LIMIT ${limit}`,
   );
-  if (!rows.length) return 0;
-  for (const row of rows) {
-    exec("DELETE FROM sale_lines WHERE sale_id = ?", [row.id]);
-    exec("DELETE FROM sale_payments WHERE sale_id = ?", [row.id]);
-    exec("DELETE FROM sales WHERE id = ?", [row.id]);
+  return rows.map((r) => ({
+    id: r.id,
+    billNo: r.bill_no,
+    shiftId: r.shift_id,
+    total: Number(r.total) || 0,
+    createdAt: r.created_at,
+    syncedAt: r.synced_at,
+    status: r.synced_at ? "synced" : "pending",
+  }));
+}
+
+export async function countPendingSales(): Promise<number> {
+  await ensureDb();
+  const rows = queryAll<{ c: number }>(
+    "SELECT COUNT(*) AS c FROM sales WHERE synced_at IS NULL",
+  );
+  return Number(rows[0]?.c ?? 0);
+}
+
+function buildSaleEnvelopeFromDb(saleId: string): {
+  id: string;
+  type: "sale";
+  payload: LocalSaleInput;
+} | null {
+  const sales = queryAll<{
+    id: string;
+    bill_no: string;
+    branch_id: string;
+    terminal_id: string;
+    shift_id: string | null;
+    customer_id: string | null;
+    customer_name: string | null;
+    subtotal: number;
+    discount: number;
+    points_redeemed: number;
+    points_earned: number;
+    total: number;
+    paid: number;
+    change: number;
+    created_at: string;
+  }>("SELECT * FROM sales WHERE id = ?", [saleId]);
+  const sale = sales[0];
+  if (!sale) return null;
+
+  const lines = queryAll<{
+    id: string;
+    barcode: string;
+    product_code: string | null;
+    name: string;
+    qty: number;
+    unit: string;
+    unit_price: number;
+    discount: number;
+    line_total: number;
+  }>("SELECT * FROM sale_lines WHERE sale_id = ?", [saleId]);
+  if (!lines.length) return null;
+
+  const pays = queryAll<{
+    method: string;
+    amount: number;
+    tendered: number | null;
+  }>("SELECT method, amount, tendered FROM sale_payments WHERE sale_id = ?", [
+    saleId,
+  ]);
+
+  const payload: LocalSaleInput = {
+    id: sale.id,
+    billNo: sale.bill_no,
+    branchId: sale.branch_id,
+    terminalId: sale.terminal_id,
+    shiftId: sale.shift_id,
+    customerId: sale.customer_id,
+    customerName: sale.customer_name,
+    subtotal: Number(sale.subtotal) || 0,
+    discount: Number(sale.discount) || 0,
+    pointsRedeemed: Number(sale.points_redeemed) || 0,
+    pointsEarned: Number(sale.points_earned) || 0,
+    total: Number(sale.total) || 0,
+    paid: Number(sale.paid) || 0,
+    change: Number(sale.change) || 0,
+    createdAt: sale.created_at,
+    payments: pays.map((p) => ({
+      method: p.method,
+      amount: Number(p.amount) || 0,
+      tendered: p.tendered == null ? undefined : Number(p.tendered),
+    })),
+    lines: lines.map((l) => ({
+      id: l.id,
+      barcode: l.barcode,
+      productCode: l.product_code ?? undefined,
+      name: l.name,
+      qty: Number(l.qty) || 0,
+      unit: l.unit,
+      unitPrice: Number(l.unit_price) || 0,
+      discount: Number(l.discount) || 0,
+      lineTotal: Number(l.line_total) || 0,
+    })),
+  };
+
+  const outboxId = `${sale.id}:outbox`;
+  return { id: outboxId, type: "sale", payload };
+}
+
+/**
+ * ใส่บิลที่ยังไม่ synced กลับเข้า outbox (ถ้ายังไม่อยู่)
+ * ใช้ตอนกดส่งบิลค้าง / ก่อน flush outbox
+ */
+export async function requeueUnsyncedSales(): Promise<number> {
+  await ensureDb();
+  const pending = queryAll<{ id: string }>(
+    "SELECT id FROM sales WHERE synced_at IS NULL ORDER BY created_at ASC",
+  );
+  let n = 0;
+  for (const row of pending) {
+    const outboxId = `${row.id}:outbox`;
+    const exists = queryAll("SELECT id FROM sync_outbox WHERE id = ?", [
+      outboxId,
+    ]);
+    if (exists.length) continue;
+    const env = buildSaleEnvelopeFromDb(row.id);
+    if (!env) continue;
+    exec(
+      `INSERT INTO sync_outbox(id, entity_type, entity_id, payload, created_at, attempts, last_error)
+       VALUES (?,?,?,?,?,?,?)`,
+      [
+        env.id,
+        "sale",
+        row.id,
+        JSON.stringify(env),
+        nowIso(),
+        0,
+        null,
+      ],
+    );
+    n += 1;
   }
-  persist();
-  return rows.length;
+  if (n) persist();
+  return n;
 }
 
 export async function getSqlitePath() {
@@ -703,6 +865,40 @@ export async function listOutbox() {
   ).map((row) => JSON.parse(row.payload));
 }
 
+export type OutboxRow = {
+  id: string;
+  entityType: string;
+  entityId: string;
+  payload: string;
+  createdAt: string;
+  attempts: number;
+  lastError: string | null;
+};
+
+export async function listOutboxRows(): Promise<OutboxRow[]> {
+  await ensureDb();
+  return queryAll<{
+    id: string;
+    entity_type: string;
+    entity_id: string;
+    payload: string;
+    created_at: string;
+    attempts: number;
+    last_error: string | null;
+  }>(
+    `SELECT id, entity_type, entity_id, payload, created_at, attempts, last_error
+     FROM sync_outbox ORDER BY created_at ASC`,
+  ).map((row) => ({
+    id: row.id,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    payload: row.payload,
+    createdAt: row.created_at,
+    attempts: row.attempts ?? 0,
+    lastError: row.last_error ?? null,
+  }));
+}
+
 export async function ackOutbox(ids: string[]) {
   await ensureDb();
   if (!ids.length) return;
@@ -728,12 +924,9 @@ export async function ackOutbox(ids: string[]) {
       ]);
       continue;
     }
-    const saleId = id.replace(/:outbox$/, "");
-    // mark แล้วลบทันที — แหล่งจริงอยู่ Postgres
+    const saleId = rows[0]?.entity_id ?? id.replace(/:outbox$/, "");
+    // เก็บบิลใน SQLite — แค่ติดสถานะ synced_at
     exec("UPDATE sales SET synced_at = ? WHERE id = ?", [at, saleId]);
-    exec("DELETE FROM sale_lines WHERE sale_id = ?", [saleId]);
-    exec("DELETE FROM sale_payments WHERE sale_id = ?", [saleId]);
-    exec("DELETE FROM sales WHERE id = ?", [saleId]);
   }
   persist();
 }

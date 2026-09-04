@@ -6,6 +6,7 @@ import {
   type PaperWidth,
   type PrinterConfig,
 } from "./receipt";
+import { getAppVersionLabel } from "../utils/format";
 
 export type ShiftCloseMove = {
   at: string;
@@ -358,6 +359,7 @@ export async function printShiftCloseReport(
   opts?: { silent?: boolean; preview?: boolean; printer?: PrinterConfig },
 ): Promise<{ ok: boolean; message?: string }> {
   const printer = opts?.printer ?? (await loadPrinterConfig());
+  const appVersion = await getAppVersionLabel();
   const closeCount = [...closed.cashCounts]
     .reverse()
     .find((c) => c.purpose === "close");
@@ -393,7 +395,7 @@ export async function printShiftCloseReport(
     closeDenoms: closeCount?.denoms ?? [],
     commission: closed.commission,
     paperWidth: printer.paperWidth,
-    appVersion: "AP Version 0.1.0",
+    appVersion,
   };
 
   if (!window.apPos?.print?.receipt && !window.apPos?.print?.previewReceipt) {
@@ -422,6 +424,7 @@ export async function printShiftCloseReport(
         paperWidth,
         silent: opts?.silent ?? printer.silent,
         deviceName: printer.printerName || undefined,
+        openDrawer: true,
       });
     } catch (e) {
       return {

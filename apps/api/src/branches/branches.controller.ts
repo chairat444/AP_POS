@@ -1,10 +1,22 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+} from "@nestjs/common";
 import type { UpsertBranchDto } from "./branch.types";
 import { BranchesService } from "./branches.service";
+import { NotifyService } from "../notify/notify.service";
 
 @Controller("branches")
 export class BranchesController {
-  constructor(private readonly branches: BranchesService) {}
+  constructor(
+    private readonly branches: BranchesService,
+    private readonly notify: NotifyService,
+  ) {}
 
   @Get()
   list() {
@@ -24,6 +36,12 @@ export class BranchesController {
   @Post()
   create(@Body() body: UpsertBranchDto) {
     return this.branches.create(body);
+  }
+
+  @Post(":id/discord-test")
+  async testDiscord(@Param("id") id: string) {
+    await this.branches.get(id);
+    return this.notify.testBranchWebhook(id);
   }
 
   @Patch(":id")

@@ -8,6 +8,7 @@ type Branch = {
   active: boolean;
   promptPayId?: string | null;
   promptPayName?: string | null;
+  discordWebhookUrl?: string | null;
 };
 
 type BranchForm = {
@@ -16,6 +17,7 @@ type BranchForm = {
   active: boolean;
   promptPayId: string;
   promptPayName: string;
+  discordWebhookUrl: string;
 };
 
 const emptyForm = (): BranchForm => ({
@@ -24,13 +26,16 @@ const emptyForm = (): BranchForm => ({
   active: true,
   promptPayId: "",
   promptPayName: "",
+  discordWebhookUrl: "",
 });
 
 const { get, post, patch, del } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
+const testingId = ref<string | null>(null);
 const error = ref("");
+const notice = ref("");
 const q = ref("");
 const rows = ref<Branch[]>([]);
 const modalOpen = ref(false);
@@ -96,6 +101,7 @@ function openEdit(row: Branch) {
     active: row.active,
     promptPayId: String(row.promptPayId || "").replace(/\D/g, ""),
     promptPayName: String(row.promptPayName || "").trim(),
+    discordWebhookUrl: String(row.discordWebhookUrl || "").trim(),
   };
   modalOpen.value = true;
 }
@@ -118,6 +124,7 @@ async function save() {
       active: form.value.active,
       promptPayId: form.value.promptPayId.replace(/\D/g, "") || null,
       promptPayName: form.value.promptPayName.trim() || null,
+      discordWebhookUrl: form.value.discordWebhookUrl.trim() || null,
     };
     if (editingId.value) {
       await patch(`/branches/${editingId.value}`, body);
@@ -147,6 +154,7 @@ async function remove(row: Branch) {
   if (!ok) return;
   saving.value = true;
   error.value = "";
+  notice.value = "";
   try {
     await del(`/branches/${row.id}`);
     await load();
@@ -161,6 +169,38 @@ async function remove(row: Branch) {
   }
 }
 
+async function testDiscord(row: Branch) {
+  if (!row.discordWebhookUrl) {
+    error.value = "ยังไม่ได้ตั้ง Discord webhook ของสาขานี้";
+    return;
+  }
+  testingId.value = row.id;
+  error.value = "";
+  notice.value = "";
+  try {
+    const res = await post<{
+      ok: boolean;
+      skipped?: boolean;
+      error?: string;
+    }>(`/branches/${row.id}/discord-test`, {});
+    if (res.ok) {
+      notice.value = `ส่งทดสอบไป Discord สาขา ${row.name} แล้ว — เช็คช่องได้เลย`;
+    } else if (res.skipped) {
+      error.value = res.error || "ข้าม — ไม่พบ webhook";
+    } else {
+      error.value = res.error || "ส่งทดสอบไม่สำเร็จ";
+    }
+  } catch (e: unknown) {
+    const msg =
+      (e as { data?: { message?: string | string[] } })?.data?.message ??
+      (e as Error)?.message ??
+      "ทดสอบไม่สำเร็จ";
+    error.value = Array.isArray(msg) ? msg.join(", ") : String(msg);
+  } finally {
+    testingId.value = null;
+  }
+}
+
 onMounted(load);
 </script>
 
@@ -170,7 +210,7 @@ onMounted(load);
       <div>
         <h1 class="ui-page-title">สาขา</h1>
         <p class="ui-page-sub">
-          จัดการสาขาสำหรับ POS · ตั้ง PromptPay รับเงินแยกตามสาขา · พนักงานเลือกสาขาตอนเปิดรอบ
+          จัดการสาขาสำหรับ POS · PromptPay / Discord แจ้งยอด แยกตามสาขา · พนักงานเลือกสาขาตอนเปิดรอบ
         </p>
       </div>
       <div class="ui-page-head__actions">
@@ -196,6 +236,7 @@ onMounted(load);
     </div>
 
     <div v-if="error" class="ui-empty">{{ error }}</div>
+    <div v-else-if="notice" class="ui-empty">{{ notice }}</div>
 
     <div class="ui-card">
       <div class="ui-card__toolbar">
@@ -213,6 +254,7 @@ onMounted(load);
               <th>ชื่อสาขา</th>
               <th>PromptPay</th>
               <th>ชื่อบัญชี</th>
+              <th>Discord</th>
               <th>สถานะ</th>
               <th class="ui-table__actions">จัดการ</th>
             </tr>
@@ -223,6 +265,20 @@ onMounted(load);
               <td>{{ row.name }}</td>
               <td>{{ row.promptPayId || "—" }}</td>
               <td>{{ row.promptPayName || "—" }}</td>
+              <td>
+                <div v-if="row.discordWebhookUrl" class="branches-discord">
+                  <span>ตั้งแล้ว</span>
+                  <button
+                    type="button"
+                    class="ui-btn ui-btn--ghost branches-discord__test"
+                    :disabled="testingId === row.id"
+                    @click="testDiscord(row)"
+                  >
+                    {{ testingId === row.id ? "กำลังส่ง..." : "ทดสอบ" }}
+                  </button>
+                </div>
+                <template v-else>—</template>
+              </td>
               <td>{{ row.active ? "ใช้งาน" : "ปิด" }}</td>
               <td class="ui-table__actions">
                 <button type="button" class="ui-btn ui-btn--ghost" @click="openEdit(row)">
@@ -295,6 +351,20 @@ onMounted(load);
                 ชื่อบุคคลที่โชว์ใต้ QR บนจอลูกค้า
               </small>
             </label>
+            <label class="ui-field">
+              <span>Discord webhook แจ้งยอดขาย</span>
+              <input
+                v-model="form.discordWebhookUrl"
+                class="ui-input"
+                type="url"
+                maxlength="300"
+                placeholder="https://discord.com/api/webhooks/..."
+                autocomplete="off"
+              />
+              <small class="ui-field-hint">
+                แยกช่องต่อสาขา · ว่าง = ไม่ส่ง · หลังบันทึกกด「ทดสอบ」ในตารางได้
+              </small>
+            </label>
             <label class="ui-field ui-field--check">
               <input v-model="form.active" type="checkbox" />
               <span>เปิดใช้งาน</span>
@@ -316,3 +386,17 @@ onMounted(load);
     </div>
   </div>
 </template>
+
+<style scoped>
+.branches-discord {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
+
+.branches-discord__test {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.85em;
+}
+</style>

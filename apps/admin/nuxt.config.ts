@@ -64,10 +64,16 @@ export default defineNuxtConfig({
     },
   },
   runtimeConfig: {
+    // NestJS ต้นทางที่ Nitro proxy ไป (ไม่เปิดให้ browser) — โปรดตั้งบนเซิร์ฟเวอร์
+    // เช่น NUXT_API_PROXY_TARGET=http://127.0.0.1:8123
+    apiProxyTarget:
+      process.env.NUXT_API_PROXY_TARGET || "http://127.0.0.1:3000",
     public: {
-      apiBase: process.env.NUXT_PUBLIC_API_BASE || "http://127.0.0.1:3000",
+      // ใช้ same-origin /api เพื่อให้ HTTPS admin ไม่โดน mixed-content block
+      apiBase: process.env.NUXT_PUBLIC_API_BASE || "/api",
       appName: process.env.NUXT_PUBLIC_APP_NAME || "AP POS Admin",
       appShortName: process.env.NUXT_PUBLIC_APP_SHORT_NAME || "AP",
     },
   },
 });
+

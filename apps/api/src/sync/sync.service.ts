@@ -1,5 +1,5 @@
 import { Injectable } from "@nestjs/common";
-import { eq } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
 import { pg } from "@ap-pos/db";
 import { MembersService } from "../members/members.service";
 import { ProductsService } from "../products/products.service";
@@ -9,6 +9,7 @@ import { PromosService } from "../promos/promos.service";
 import { SettingsService } from "../settings/settings.service";
 import { TerminalsService } from "../terminals/terminals.service";
 import { ShiftsService } from "../shifts/shifts.service";
+import { NotifyService } from "../notify/notify.service";
 import type { RegisterTerminalDto } from "../terminals/terminal.types";
 import type { SyncedShiftPayload } from "../shifts/shift.types";
 import { DatabaseService } from "../db/database.service";
@@ -66,6 +67,23 @@ function maxIso(values: Array<string | undefined | null>) {
   return values.filter(Boolean).sort().at(-1) ?? nowIso();
 }
 
+function bangkokDayStart(isoDate: string) {
+  return new Date(`${isoDate}T00:00:00.000+07:00`);
+}
+
+function bangkokDayEnd(isoDate: string) {
+  return new Date(`${isoDate}T23:59:59.999+07:00`);
+}
+
+function bangkokToday() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 @Injectable()
 export class SyncService {
   constructor(
@@ -78,6 +96,7 @@ export class SyncService {
     private readonly terminals: TerminalsService,
     private readonly shifts: ShiftsService,
     private readonly database: DatabaseService,
+    private readonly notify: NotifyService,
   ) {}
 
   listProducts() {
@@ -101,6 +120,17 @@ export class SyncService {
 
   acceptShifts(shifts: SyncedShiftPayload[]) {
     return this.shifts.acceptMany(shifts);
+  }
+
+  async getShift(id: string) {
+    const row = await this.shifts.get(id);
+    return {
+      id: row.id,
+      openCash: row.openCash,
+      billCount: row.billCount,
+      grossTotal: row.grossTotal,
+      status: row.status,
+    };
   }
 
   acceptAudits(
@@ -149,6 +179,70 @@ export class SyncService {
 
   async staffDaySales(staffId: string, excludeShiftId?: string) {
     return this.shifts.priorClosedGrossToday({ staffId, excludeShiftId });
+  }
+
+  /** บิลทั้งวันของสาขา — สำหรับกู้รอบ / รวม session บน POS */
+  async daySales(branchId: string, day?: string) {
+    const dayKey =
+      day && /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : bangkokToday();
+    if (!branchId) return { day: dayKey, branchId, sales: [] as unknown[] };
+
+    const rows = await this.database.db
+      .select()
+      .from(pg.sales)
+      .where(
+        and(
+          eq(pg.sales.branchId, branchId),
+          eq(pg.sales.status, "completed"),
+          gte(pg.sales.createdAt, bangkokDayStart(dayKey)),
+          lte(pg.sales.createdAt, bangkokDayEnd(dayKey)),
+        ),
+      )
+      .orderBy(asc(pg.sales.createdAt))
+      .limit(500);
+
+    const payments = rows.length
+      ? await this.database.db
+          .select()
+          .from(pg.salePayments)
+          .where(
+            inArray(
+              pg.salePayments.saleId,
+              rows.map((r) => r.id),
+            ),
+          )
+      : [];
+
+    const payBySale = new Map<string, typeof payments>();
+    for (const p of payments) {
+      const list = payBySale.get(p.saleId) ?? [];
+      list.push(p);
+      payBySale.set(p.saleId, list);
+    }
+
+    return {
+      day: dayKey,
+      branchId,
+      sales: rows.map((r) => {
+        const pays = payBySale.get(r.id) ?? [];
+        return {
+          id: r.id,
+          billNo: r.billNo,
+          shiftId: r.shiftId ?? null,
+          total: Number(r.total),
+          change: Number(r.change),
+          pointsRedeemed: r.pointsRedeemed,
+          pointsEarned: r.pointsEarned,
+          customerName: r.customerName,
+          createdAt: r.createdAt.toISOString(),
+          payments: pays.map((p) => ({
+            method: p.method,
+            amount: Number(p.amount),
+            tendered: p.tendered == null ? null : Number(p.tendered),
+          })),
+        };
+      }),
+    };
   }
 
   async listPromos() {
@@ -218,6 +312,7 @@ export class SyncService {
   ) {
     let accepted = 0;
     const acceptedIds: string[] = [];
+    const newlyAccepted: SyncedSale[] = [];
 
     for (const entry of entries) {
       if (entry.type !== "sale") continue;
@@ -323,6 +418,37 @@ export class SyncService {
 
       accepted += 1;
       acceptedIds.push(entry.id);
+      newlyAccepted.push({ ...sale, total: finalTotal });
+    }
+
+    if (newlyAccepted.length) {
+      // แยกแจ้งต่อสาขา (หลุมดิน / เจ็ดเสมียน ไม่ปนกัน)
+      const byBranch = new Map<string, SyncedSale[]>();
+      for (const s of newlyAccepted) {
+        const list = byBranch.get(s.branchId) ?? [];
+        list.push(s);
+        byBranch.set(s.branchId, list);
+      }
+      for (const [branchId, sales] of byBranch) {
+        const last = sales[sales.length - 1];
+        let branchName: string | undefined;
+        let branchCode: string | undefined;
+        try {
+          const b = await this.branches.get(branchId);
+          branchName = b?.name;
+          branchCode = b?.code;
+        } catch {
+          /* ignore */
+        }
+        void this.notify.notifyDaySalesUpdate({
+          branchId,
+          branchName,
+          branchCode,
+          billNo: last.billNo,
+          total: Number(last.total),
+          newCount: sales.length,
+        });
+      }
     }
 
     const totalStored = await this.database.db.select().from(pg.sales);

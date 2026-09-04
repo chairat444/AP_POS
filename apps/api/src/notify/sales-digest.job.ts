@@ -1,29 +1,34 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
-import { SyncService } from "../sync/sync.service";
 import { NotifyService } from "./notify.service";
 
 @Injectable()
 export class SalesDigestJob {
   private readonly logger = new Logger(SalesDigestJob.name);
-  private lastCount = 0;
 
-  constructor(
-    private readonly sync: SyncService,
-    private readonly notify: NotifyService,
-  ) {}
+  constructor(private readonly notify: NotifyService) {}
 
-  /** Every 5 minutes — summarize if new sales arrived. */
-  @Cron("*/5 * * * *")
-  async handle() {
-    const count = await this.sync.recentSalesCount();
-    if (count === this.lastCount) {
-      this.logger.debug("No new sales since last digest");
-      return;
+  /** ปล่อยคิวข้อความสั้นที่ค้างจาก throttle */
+  @Cron("* * * * *")
+  async flushBrief() {
+    try {
+      await this.notify.flushPendingBriefs();
+    } catch (err) {
+      this.logger.warn(
+        `flush brief failed: ${err instanceof Error ? err.message : err}`,
+      );
     }
-    const delta = count - this.lastCount;
-    this.lastCount = count;
-    const msg = `AP POS: มีบิลใหม่ ${delta} ใบ (รวมที่ sync แล้ว ${count} ใบ)`;
-    await this.notify.sendDiscord(msg);
+  }
+
+  /** cron สำรอง — ถ้ายอดเปลี่ยนและยังไม่ได้ brief */
+  @Cron("*/5 * * * *")
+  async digestBackup() {
+    try {
+      await this.notify.notifyAllBranchesDigest();
+    } catch (err) {
+      this.logger.warn(
+        `digest failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
   }
 }

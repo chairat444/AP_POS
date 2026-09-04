@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { and, desc, eq, gte, inArray, isNull, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { pg } from "@ap-pos/db";
 import { DatabaseService } from "../db/database.service";
 import { ExpensesService } from "../expenses/expenses.service";
+import { NotifyService } from "../notify/notify.service";
 import { TerminalsService } from "../terminals/terminals.service";
 import type { ShiftRecord, SyncedShiftAudit, SyncedShiftPayload } from "./shift.types";
 
@@ -89,7 +90,35 @@ export class ShiftsService {
     private readonly database: DatabaseService,
     private readonly terminals: TerminalsService,
     private readonly expenses: ExpensesService,
+    private readonly notify: NotifyService,
   ) {}
+
+  private async liveSalesByShift(shiftIds: string[]) {
+    const map = new Map<string, { billCount: number; grossTotal: number }>();
+    if (!shiftIds.length) return map;
+    const rows = await this.database.db
+      .select({
+        shiftId: pg.sales.shiftId,
+        billCount: sql<number>`count(*)::int`,
+        grossTotal: sql<string>`coalesce(sum(${pg.sales.total}), 0)`,
+      })
+      .from(pg.sales)
+      .where(
+        and(
+          inArray(pg.sales.shiftId, shiftIds),
+          eq(pg.sales.status, "completed"),
+        ),
+      )
+      .groupBy(pg.sales.shiftId);
+    for (const r of rows) {
+      if (!r.shiftId) continue;
+      map.set(r.shiftId, {
+        billCount: Number(r.billCount ?? 0),
+        grossTotal: num(r.grossTotal),
+      });
+    }
+    return map;
+  }
 
   async list(opts: {
     branchId?: string;
@@ -164,6 +193,8 @@ export class ShiftsService {
       }
     }
 
+    const liveSales = await this.liveSalesByShift(rows.map((r) => r.id));
+
     return {
       shifts: rows.map((row) => {
         const rec = toRecord(row);
@@ -176,8 +207,12 @@ export class ShiftsService {
           billCount: Number(summary.voidBillCount ?? 0),
           billAmount: Number(summary.voidBillAmount ?? 0),
         };
+        const live = liveSales.get(row.id);
         return {
           ...rec,
+          // ยอดจากบิลที่ sync แล้ว — ไม่พึ่งสแนปช็อตกะที่อาจค้าง
+          billCount: live?.billCount ?? rec.billCount,
+          grossTotal: live?.grossTotal ?? rec.grossTotal,
           terminalCode: term?.code ?? null,
           terminalName: term?.name ?? null,
           branchName: branchMap.get(row.branchId) ?? null,
@@ -207,8 +242,11 @@ export class ShiftsService {
       .from(pg.branches)
       .where(eq(pg.branches.id, rec.branchId))
       .limit(1);
+    const live = (await this.liveSalesByShift([id])).get(id);
     return {
       ...rec,
+      billCount: live?.billCount ?? rec.billCount,
+      grossTotal: live?.grossTotal ?? rec.grossTotal,
       terminalCode: terminal?.code ?? null,
       terminalName: terminal?.name ?? null,
       branchName: branchRows[0]?.name ?? null,
@@ -393,10 +431,33 @@ export class ShiftsService {
 
   async upsertFromSync(payload: SyncedShiftPayload) {
     const existing = await this.database.db
-      .select({ id: pg.shifts.id })
+      .select({
+        id: pg.shifts.id,
+        status: pg.shifts.status,
+        cashCountsJson: pg.shifts.cashCountsJson,
+        cashMovesJson: pg.shifts.cashMovesJson,
+      })
       .from(pg.shifts)
       .where(eq(pg.shifts.id, payload.id))
       .limit(1);
+    const wasClosed = existing[0]?.status === "closed";
+    // outbox/restore เก่าห้ามเปิดรอบที่ปิดบนเซิร์ฟแล้ว
+    if (wasClosed && payload.status !== "closed") {
+      return { id: payload.id };
+    }
+    const prevFloatIds = new Set(
+      parseJson<Array<{ id?: string; purpose?: string }>>(
+        existing[0]?.cashCountsJson,
+        [],
+      )
+        .filter((c) => c?.purpose === "float" && c.id)
+        .map((c) => String(c.id)),
+    );
+    const prevMoveIds = new Set(
+      parseJson<Array<{ id?: string }>>(existing[0]?.cashMovesJson, [])
+        .filter((m) => m?.id)
+        .map((m) => String(m.id)),
+    );
 
     const values = {
       id: payload.id,
@@ -481,6 +542,53 @@ export class ShiftsService {
         itemCountBefore:
           a.itemCountBefore == null ? null : Number(a.itemCountBefore),
       }).catch(() => undefined);
+    }
+
+    // Discord — เปิดรอบ / นับทอน / เข้า-ออกเงิน / ปิดรอบ (กัน sync ซ้ำ)
+    if (payload.status === "open" && !existing[0]) {
+      void this.notify.notifyShiftOpen(payload);
+    }
+    if (payload.status === "open" && existing[0] && !wasClosed) {
+      const newFloat = (Array.isArray(payload.cashCounts) ? payload.cashCounts : [])
+        .filter((c) => {
+          const row = c as { id?: string; purpose?: string };
+          return (
+            row?.purpose === "float" &&
+            row.id &&
+            !prevFloatIds.has(String(row.id))
+          );
+        });
+      if (newFloat.length) {
+        void this.notify.notifyFloatCount(payload);
+      }
+
+      const newMoves = (Array.isArray(payload.cashMoves) ? payload.cashMoves : [])
+        .filter((m) => {
+          const row = m as { id?: string };
+          return row?.id && !prevMoveIds.has(String(row.id));
+        }) as Array<{
+          id?: string;
+          direction?: string;
+          amount?: number;
+          reason?: string;
+          note?: string;
+          at?: string;
+          staffName?: string;
+        }>;
+      for (const move of newMoves) {
+        void this.notify.notifyCashMove(
+          {
+            branchId: payload.branchId,
+            staffName: payload.staffName,
+            terminalId: payload.terminalId,
+            terminalName: payload.terminalName,
+          },
+          move,
+        );
+      }
+    }
+    if (payload.status === "closed" && !wasClosed) {
+      void this.notify.notifyShiftClose(payload);
     }
 
     return { id: payload.id };
@@ -741,7 +849,7 @@ export class ShiftsService {
 
       const dailyWageDefault = Math.round(cfg.dailyWage * 100) / 100;
       const days = [...daysMap.values()]
-        .sort((a, b) => a.date.localeCompare(b.date))
+        .sort((a, b) => b.date.localeCompare(a.date))
         .map((d) => {
           const calc = calcDailyCommission(d.daySales, {
             enabled: cfg.enabled,

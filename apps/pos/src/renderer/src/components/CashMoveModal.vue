@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { CASH_IN_REASONS, CASH_OUT_REASONS } from "../data/cash-denoms";
+import { kickCashDrawer } from "../services/drawer";
 import { useSessionStore } from "../stores/session";
 
 const open = defineModel<boolean>("open", { default: false });
@@ -41,7 +42,9 @@ watch(direction, () => {
   reason.value = reasons.value[0] ?? "อื่นๆ";
 });
 
-function submit() {
+const submitting = ref(false);
+
+async function submit() {
   error.value = "";
   const amount = Number(amountText.value.replace(/\D/g, ""));
   if (!amount || amount <= 0) {
@@ -49,17 +52,24 @@ function submit() {
     focusAmount();
     return;
   }
-  const ok = session.recordCashMove({
-    direction: direction.value,
-    amount,
-    reason: reason.value,
-    note: note.value,
-  });
-  if (!ok) {
-    error.value = session.statusMessage || "บันทึกไม่สำเร็จ";
-    return;
+  if (submitting.value) return;
+  submitting.value = true;
+  try {
+    const ok = await session.recordCashMove({
+      direction: direction.value,
+      amount,
+      reason: reason.value,
+      note: note.value,
+    });
+    if (!ok) {
+      error.value = session.statusMessage || "บันทึกไม่สำเร็จ";
+      return;
+    }
+    void kickCashDrawer();
+    open.value = false;
+  } finally {
+    submitting.value = false;
   }
-  open.value = false;
 }
 
 function close() {
@@ -128,7 +138,14 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 
       <footer class="pay-actions">
         <button type="button" class="pay-cancel" @click="close">ยกเลิก</button>
-        <button type="button" class="pay-confirm" @click="submit">บันทึก</button>
+        <button
+          type="button"
+          class="pay-confirm"
+          :disabled="submitting"
+          @click="submit"
+        >
+          {{ submitting ? "กำลังส่ง…" : "บันทึก" }}
+        </button>
       </footer>
     </div>
   </div>

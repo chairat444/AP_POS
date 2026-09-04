@@ -96,6 +96,7 @@ const groups: NavGroup[] = [
     icon: "receipt",
     items: [
       { to: "/sales", label: "บิลขาย", icon: "receipt" },
+      { to: "/shifts", label: "รอบกะ / เงินสด", icon: "shift" },
     ],
   },
   {
@@ -105,23 +106,37 @@ const groups: NavGroup[] = [
     items: [
       { to: "/reports", label: "สรุปยอดขาย", icon: "chart" },
       { to: "/reports/cashflow", label: "รายรับ–รายจ่าย", icon: "coin" },
-      { to: "/shifts", label: "รอบกะ / เงินสด", icon: "shift" },
       { to: "/reports/commission", label: "ค่าแรงและค่าคอม", icon: "coin" },
     ],
   },
   {
-    id: "people",
+    id: "members",
+    label: "สมาชิก",
+    icon: "user",
+    items: [
+      { to: "/members", label: "รายชื่อสมาชิก", icon: "user" },
+      { to: "/members/points", label: "ประวัติแต้ม", icon: "coin" },
+    ],
+  },
+  {
+    id: "finance",
+    label: "ค่าใช้จ่าย / จัดซื้อ",
+    icon: "coin",
+    items: [
+      { to: "/expenses", label: "ค่าใช้จ่าย", icon: "coin" },
+      { to: "/expenses/categories", label: "ประเภทค่าใช้จ่าย", icon: "tag" },
+      { to: "/purchases", label: "แผงสรุปซื้อของ", icon: "box" },
+      { to: "/purchases/catalog", label: "รายการซื้อของ", icon: "box" },
+    ],
+  },
+  {
+    id: "org",
     label: "องค์กร",
     icon: "users",
     items: [
       { to: "/branches", label: "สาขา", icon: "store" },
       { to: "/terminals", label: "เครื่อง POS", icon: "terminal" },
-      { to: "/members", label: "สมาชิก", icon: "user" },
-      { to: "/members/points", label: "ประวัติแต้ม", icon: "coin" },
       { to: "/staff", label: "พนักงาน", icon: "badge" },
-      { to: "/expenses", label: "ค่าใช้จ่าย", icon: "coin" },
-      { to: "/expenses/categories", label: "ประเภทค่าใช้จ่าย", icon: "tag" },
-      { to: "/purchases", label: "รายการซื้อของ", icon: "box" },
     ],
   },
   {

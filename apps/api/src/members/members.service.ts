@@ -212,23 +212,61 @@ export class MembersService implements OnModuleInit {
     const s = q.trim().toLowerCase();
     const digits = s.replace(/\D/g, "");
     if (!s) return [];
+    const tokens = s.split(/\s+/).filter(Boolean);
+    const alpha = s.replace(/[0-9０-９]+/g, " ").replace(/\s+/g, " ").trim();
     const rows = await this.database.db
       .select()
       .from(pg.customers)
       .where(isNull(pg.customers.deletedAt))
       .orderBy(asc(pg.customers.name));
-    return rows
-      .map(toRecord)
-      .filter((m) => {
-        const phone = (m.phone ?? "").replace(/\D/g, "");
-        return (
-          m.name.toLowerCase().includes(s) ||
-          m.code.toLowerCase().includes(s) ||
-          (digits.length > 0 && phone.includes(digits)) ||
-          (m.phone ?? "").toLowerCase().includes(s)
-        );
-      })
-      .slice(0, 30);
+
+    type Scored = ReturnType<typeof toRecord> & { _score: number };
+    const scored: Scored[] = [];
+
+    for (const raw of rows) {
+      const m = toRecord(raw);
+      const name = m.name.toLowerCase();
+      const code = m.code.toLowerCase();
+      const phoneRaw = (m.phone ?? "").toLowerCase();
+      const phone = phoneRaw.replace(/\D/g, "");
+
+      let score = 0;
+      if (name === s || code === s || phone === digits) score = 100;
+      else if (name.includes(s) || code.includes(s)) score = 80;
+      else if (digits.length >= 6 && phone.includes(digits)) score = 70;
+      else if (digits.length >= 9 && phone.endsWith(digits.slice(-9))) score = 75;
+      else if (
+        alpha &&
+        digits.length >= 3 &&
+        name.includes(alpha) &&
+        phone.includes(digits)
+      ) {
+        score = 85;
+      } else if (tokens.length > 1) {
+        const ok = tokens.every((t) => {
+          const tDigits = t.replace(/\D/g, "");
+          return (
+            name.includes(t) ||
+            code.includes(t) ||
+            phoneRaw.includes(t) ||
+            (tDigits.length >= 3 && phone.includes(tDigits))
+          );
+        });
+        if (ok) score = 60;
+      } else if (digits.length >= 6 && phone.includes(digits)) {
+        score = 50;
+      } else if (phoneRaw.includes(s)) {
+        score = 40;
+      }
+      // ไม่ใช้เบอร์สั้น ๆ อย่าง "092" เดี่ยว ๆ — ชนคนเยอะจนคนที่ถูกหลุดจาก top 30
+
+      if (score > 0) scored.push({ ...m, _score: score });
+    }
+
+    return scored
+      .sort((a, b) => b._score - a._score || a.name.localeCompare(b.name, "th"))
+      .slice(0, 30)
+      .map(({ _score: _s, ...m }) => m);
   }
 
   async pointsHistory(customerId: string) {
@@ -250,10 +288,25 @@ export class MembersService implements OnModuleInit {
       .where(eq(pg.pointLedger.customerId, customerId))
       .orderBy(asc(pg.pointLedger.createdAt), asc(pg.pointLedger.id));
 
+    const isOpening = (reason: string) =>
+      reason.startsWith("migrate opening");
+
+    // migrate เคยใส่ opening = แต้มปัจจุบัน ทั้งที่มีประวัติบิลแล้ว → รวมซ้ำ
+    // ถ้ายอดจากรายการอื่นตรงกับแต้มปัจจุบันแล้ว ไม่นับ opening ซ้ำ
+    const nonOpeningSum = rows
+      .filter((r) => !isOpening(r.reason))
+      .reduce((s, r) => s + r.delta, 0);
+    const skipRedundantOpening =
+      rows.some((r) => isOpening(r.reason)) &&
+      rows.some((r) => !isOpening(r.reason)) &&
+      nonOpeningSum === member.points;
+
     let running = 0;
-    const entries: PointHistoryEntry[] = rows.map((r) => {
+    const entries: PointHistoryEntry[] = [];
+    for (const r of rows) {
+      if (skipRedundantOpening && isOpening(r.reason)) continue;
       running += r.delta;
-      return {
+      entries.push({
         id: r.id,
         delta: r.delta,
         reason: r.reason,
@@ -264,8 +317,8 @@ export class MembersService implements OnModuleInit {
           r.branchId === "admin" ? "แอดมิน" : (r.branchName ?? null),
         createdAt: r.createdAt.toISOString(),
         balanceAfter: running,
-      };
-    });
+      });
+    }
 
     return {
       member,
