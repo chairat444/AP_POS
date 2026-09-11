@@ -79,6 +79,19 @@ export class SyncController {
     return this.sync.claimTerminal(body);
   }
 
+  /** สร้างสมาชิกจาก POS — ต้องออนไลน์ · ไม่ต้อง login Admin */
+  @Post("members")
+  createMember(
+    @Body()
+    body: {
+      name: string;
+      phone?: string;
+      points?: number;
+    },
+  ) {
+    return this.sync.createMember(body);
+  }
+
   @Get("bootstrap")
   bootstrap() {
     return this.sync.bootstrap();

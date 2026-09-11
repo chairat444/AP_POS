@@ -1099,7 +1099,7 @@ async function savePendingMemberCreates(rows: PendingMemberCreate[]) {
   );
 }
 
-/** สร้างสมาชิก — ชื่อ+เบอร์จำเป็น · เบอร์เก็บแบบไม่มีช่องว่าง */
+/** สร้างสมาชิก — ออนไลน์เท่านั้น · บันทึก server แล้วค่อยลงเครื่อง */
 export async function createMember(input: {
   name: string;
   phone?: string;
@@ -1113,45 +1113,35 @@ export async function createMember(input: {
   if (phone.length < 9) throw new Error("เบอร์โทรไม่ครบ");
   const points = Math.max(0, Math.floor(Number(input.points) || 0));
 
-  if (await isApiReachable(1200)) {
-    const created = await postJson<{
-      id: string;
-      code: string;
-      name: string;
-      phone: string;
-      points: number;
-      updatedAt: string;
-    }>(`${getApiBase()}/members`, { name, phone, points }, 6000);
-    const member: Member = {
-      id: created.id,
-      code: created.code,
-      name: created.name,
-      phone: String(created.phone ?? "").replace(/\D/g, "") || phone,
-      points: created.points,
-    };
-    if (window.apPos?.db) {
-      await window.apPos.db.upsertMembers([
-        { ...member, updatedAt: created.updatedAt },
-      ]);
-    }
-    return member;
+  if (!(await isApiReachable(1200))) {
+    throw new Error("ต้องเชื่อมต่อเซิร์ฟเวอร์ถึงจะเพิ่มสมาชิกได้");
   }
 
-  const localId = `m-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
-  const code = `L${String(Date.now()).slice(-5)}`;
-  const member: Member = { id: localId, code, name, phone, points };
+  // /sync/members เป็น Public สำหรับ POS — /members ต้อง login Admin
+  const created = await postJson<{
+    id: string;
+    code: string;
+    name: string;
+    phone: string;
+    points: number;
+    updatedAt: string;
+  }>(`${getApiBase()}/sync/members`, { name, phone, points }, 6000);
+  const member: Member = {
+    id: created.id,
+    code: created.code,
+    name: created.name,
+    phone: String(created.phone ?? "").replace(/\D/g, "") || phone,
+    points: created.points,
+  };
   if (window.apPos?.db) {
     await window.apPos.db.upsertMembers([
-      { ...member, updatedAt: new Date().toISOString() },
+      { ...member, updatedAt: created.updatedAt },
     ]);
   }
-  const pending = await loadPendingMemberCreates();
-  pending.push({ localId, code, name, phone, points });
-  await savePendingMemberCreates(pending);
   return member;
 }
 
-/** ดันสมาชิกที่สร้างตอนออฟไลน์ขึ้นเซิร์ฟเวอร์ */
+/** ดันสมาชิกค้างจากรุ่นเก่า (เคยสร้างออฟไลน์ได้) ขึ้นเซิร์ฟเวอร์ */
 export async function flushPendingMemberCreates(): Promise<number> {
   if (!window.apPos?.db) return 0;
   if (!(await isApiReachable(1000))) return 0;
@@ -1170,7 +1160,7 @@ export async function flushPendingMemberCreates(): Promise<number> {
         points: number;
         updatedAt: string;
       }>(
-        `${getApiBase()}/members`,
+        `${getApiBase()}/sync/members`,
         { name: row.name, phone: row.phone, points: row.points },
         6000,
       );

@@ -30,7 +30,7 @@ const nameEl = ref<HTMLInputElement | null>(null);
 
 const hint = computed(() => {
   if (mode.value === "create") {
-    return "ชื่อและเบอร์โทรจำเป็น · เบอร์ไม่เว้นวรรค · บันทึกขึ้นเซิร์ฟเวอร์เมื่อออนไลน์";
+    return "ชื่อและเบอร์โทรจำเป็น · ต้องออนไลน์ · บันทึกที่เซิร์ฟเวอร์แล้วลงเครื่อง";
   }
   if (!query.value.trim()) {
     return "พิมพ์เบอร์โทรหรือชื่อ · หรือกดเพิ่มสมาชิกใหม่";

@@ -118,6 +118,11 @@ export class SyncService {
     return this.terminals.claim(dto);
   }
 
+  /** POS สร้างสมาชิกตอนออนไลน์ (ไม่ต้อง login Admin) */
+  createMember(dto: { name: string; phone?: string; points?: number }) {
+    return this.members.create(dto);
+  }
+
   acceptShifts(shifts: SyncedShiftPayload[]) {
     return this.shifts.acceptMany(shifts);
   }

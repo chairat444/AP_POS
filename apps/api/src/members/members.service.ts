@@ -4,7 +4,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { and, asc, eq, gt, isNull } from "drizzle-orm";
+import { and, asc, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -75,6 +75,26 @@ export class MembersService implements OnModuleInit {
     }
   }
 
+  /** หาสมาชิกที่ยังไม่ลบและเบอร์ตรง (normalize แล้ว) · ไม่แก้ข้อมูลเก่าที่ซ้ำอยู่แล้ว */
+  private async findActiveByPhone(phone: string, excludeId?: string) {
+    if (!phone) return null;
+    const phoneMatch = sql`regexp_replace(coalesce(${pg.customers.phone}, ''), '[^0-9]', '', 'g') = ${phone}`;
+    const rows = await this.database.db
+      .select()
+      .from(pg.customers)
+      .where(
+        excludeId
+          ? and(
+              isNull(pg.customers.deletedAt),
+              phoneMatch,
+              ne(pg.customers.id, excludeId),
+            )
+          : and(isNull(pg.customers.deletedAt), phoneMatch),
+      )
+      .limit(1);
+    return rows[0] ? toRecord(rows[0]) : null;
+  }
+
   async list() {
     const rows = await this.database.db
       .select()
@@ -140,6 +160,12 @@ export class MembersService implements OnModuleInit {
     if (!name) throw new BadRequestException("กรอกชื่อสมาชิก");
     if (!phone) throw new BadRequestException("กรอกเบอร์โทร");
     if (phone.length < 9) throw new BadRequestException("เบอร์โทรไม่ครบ");
+    const dup = await this.findActiveByPhone(phone);
+    if (dup) {
+      throw new BadRequestException(
+        `เบอร์นี้มีสมาชิกแล้ว (${dup.code} ${dup.name})`,
+      );
+    }
     await this.database.db.insert(pg.customers).values({
       id,
       code,
@@ -166,6 +192,14 @@ export class MembersService implements OnModuleInit {
       dto.points == null ? current.points : clampPoints(dto.points);
     const nextPhone =
       dto.phone == null ? current.phone : normalizePhone(dto.phone);
+    if (nextPhone && nextPhone !== normalizePhone(current.phone)) {
+      const dup = await this.findActiveByPhone(nextPhone, id);
+      if (dup) {
+        throw new BadRequestException(
+          `เบอร์นี้มีสมาชิกแล้ว (${dup.code} ${dup.name})`,
+        );
+      }
+    }
     await this.database.db
       .update(pg.customers)
       .set({
