@@ -158,8 +158,17 @@ export class NotifyService {
   private lastNotifiedNetByBranch = new Map<string, number>();
   private lastBriefSentAt = new Map<string, number>();
   private pendingBrief = new Map<string, PendingBrief>();
+  /** หลังบูต: จำยอดปัจจุบันไว้ก่อน ไม่ให้ cron สำรองยิงซ้ำหลัง restart */
+  private digestSeeded = false;
 
   constructor(private readonly database: DatabaseService) {}
+
+  private discordDisabled() {
+    const v = (process.env.NOTIFY_DISCORD ?? process.env.DISCORD_NOTIFY ?? "1")
+      .trim()
+      .toLowerCase();
+    return v === "0" || v === "false" || v === "off" || v === "no";
+  }
 
   /**
    * ลำดับหา webhook:
@@ -209,6 +218,10 @@ export class NotifyService {
       }>;
     },
   ): Promise<{ ok: boolean; skipped?: boolean; status?: number; error?: string }> {
+    if (this.discordDisabled()) {
+      this.logger.debug(`[discord:disabled] ${message.slice(0, 120)}`);
+      return { ok: false, skipped: true, error: "Discord ถูกปิด (NOTIFY_DISCORD=0)" };
+    }
     const webhook = await this.resolveWebhook(opts ?? {});
     if (!webhook) {
       this.logger.debug(`[discord:skip] ${message.slice(0, 120)}`);
@@ -787,7 +800,7 @@ export class NotifyService {
 
   /**
    * สำรอง — ถ้ายอดเปลี่ยนและยังไม่เคย brief ในรอบนี้ (เช่น sync พลาด)
-   * ไม่ส่งซ้ำยอดเดิม
+   * ไม่ส่งซ้ำยอดเดิม · หลัง restart จะ seed ยอดปัจจุบันโดยไม่ส่ง
    */
   async notifyAllBranchesDigest() {
     await this.flushPendingBriefs();
@@ -809,6 +822,18 @@ export class NotifyService {
         ),
       )
       .groupBy(pg.sales.branchId);
+
+    if (!this.digestSeeded) {
+      for (const row of rows) {
+        const net = Math.round(num(row.total) * 100) / 100;
+        this.lastNotifiedNetByBranch.set(row.branchId, net);
+      }
+      this.digestSeeded = true;
+      this.logger.log(
+        `digest seeded for ${rows.length} branch(es) — skip rebroadcast after boot`,
+      );
+      return;
+    }
 
     for (const row of rows) {
       const net = Math.round(num(row.total) * 100) / 100;

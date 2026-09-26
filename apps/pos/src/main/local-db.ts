@@ -438,6 +438,33 @@ export async function purgeSyncedSales() {
   return 0;
 }
 
+/** ล้างข้อมูลขาย/กะ/outbox ในเครื่อง — ใช้โหมดทดสอบเท่านั้น (กันล้างเครื่องขายจริง) */
+export async function wipeTestSalesData(): Promise<{ sales: number }> {
+  await ensureDb();
+  const mode = queryAll<{ value: string }>(
+    "SELECT value FROM meta WHERE key = ?",
+    ["pos-env-mode"],
+  )[0]?.value;
+  if (mode !== "test") {
+    throw new Error("ล้างข้อมูลได้เฉพาะโหมดทดสอบ");
+  }
+  const rows = queryAll<{ c: number }>("SELECT COUNT(*) AS c FROM sales");
+  const sales = Number(rows[0]?.c ?? 0);
+  exec("DELETE FROM sale_payments");
+  exec("DELETE FROM sale_lines");
+  exec("DELETE FROM sales");
+  exec("DELETE FROM sync_outbox");
+  exec("DELETE FROM shift_audits");
+  exec("DELETE FROM shifts");
+  exec(
+    `DELETE FROM meta WHERE key = 'active-shift-session'
+      OR key = 'pending-member-creates'
+      OR key LIKE 'bill-seq-%'`,
+  );
+  persist();
+  return { sales };
+}
+
 export type LocalSaleStatusRow = {
   id: string;
   billNo: string;
@@ -524,7 +551,6 @@ function buildSaleEnvelopeFromDb(saleId: string): {
     discount: number;
     line_total: number;
   }>("SELECT * FROM sale_lines WHERE sale_id = ?", [saleId]);
-  if (!lines.length) return null;
 
   const pays = queryAll<{
     method: string;
@@ -533,6 +559,34 @@ function buildSaleEnvelopeFromDb(saleId: string): {
   }>("SELECT method, amount, tendered FROM sale_payments WHERE sale_id = ?", [
     saleId,
   ]);
+
+  // บิลที่รายการหาย (พังตอนเซฟ) — สร้างบรรทัดรวมจากยอดบิล เพื่อให้ส่งขึ้นเซิร์ฟได้
+  const linePayload =
+    lines.length > 0
+      ? lines.map((l) => ({
+          id: l.id,
+          barcode: l.barcode,
+          productCode: l.product_code ?? undefined,
+          name: l.name,
+          qty: Number(l.qty) || 0,
+          unit: l.unit,
+          unitPrice: Number(l.unit_price) || 0,
+          discount: Number(l.discount) || 0,
+          lineTotal: Number(l.line_total) || 0,
+        }))
+      : [
+          {
+            id: `${sale.id}:line:recovered`,
+            barcode: "RECOVERED",
+            productCode: undefined,
+            name: `บิลรวม ${sale.bill_no} (กู้รายการ)`,
+            qty: 1,
+            unit: "บิล",
+            unitPrice: Number(sale.total) || 0,
+            discount: 0,
+            lineTotal: Number(sale.total) || 0,
+          },
+        ];
 
   const payload: LocalSaleInput = {
     id: sale.id,
@@ -550,22 +604,20 @@ function buildSaleEnvelopeFromDb(saleId: string): {
     paid: Number(sale.paid) || 0,
     change: Number(sale.change) || 0,
     createdAt: sale.created_at,
-    payments: pays.map((p) => ({
-      method: p.method,
-      amount: Number(p.amount) || 0,
-      tendered: p.tendered == null ? undefined : Number(p.tendered),
-    })),
-    lines: lines.map((l) => ({
-      id: l.id,
-      barcode: l.barcode,
-      productCode: l.product_code ?? undefined,
-      name: l.name,
-      qty: Number(l.qty) || 0,
-      unit: l.unit,
-      unitPrice: Number(l.unit_price) || 0,
-      discount: Number(l.discount) || 0,
-      lineTotal: Number(l.line_total) || 0,
-    })),
+    payments:
+      pays.length > 0
+        ? pays.map((p) => ({
+            method: p.method,
+            amount: Number(p.amount) || 0,
+            tendered: p.tendered == null ? undefined : Number(p.tendered),
+          }))
+        : [
+            {
+              method: "cash",
+              amount: Number(sale.total) || 0,
+            },
+          ],
+    lines: linePayload,
   };
 
   const outboxId = `${sale.id}:outbox`;
@@ -573,8 +625,8 @@ function buildSaleEnvelopeFromDb(saleId: string): {
 }
 
 /**
- * ใส่บิลที่ยังไม่ synced กลับเข้า outbox (ถ้ายังไม่อยู่)
- * ใช้ตอนกดส่งบิลค้าง / ก่อน flush outbox
+ * ใส่บิลที่ยังไม่ synced กลับเข้า outbox — รีเฟรช payload จาก DB เสมอ
+ * (กันแถว outbox เก่า/พัง แล้ว skip จนบิลค้างส่งไม่ได้)
  */
 export async function requeueUnsyncedSales(): Promise<number> {
   await ensureDb();
@@ -583,30 +635,45 @@ export async function requeueUnsyncedSales(): Promise<number> {
   );
   let n = 0;
   for (const row of pending) {
-    const outboxId = `${row.id}:outbox`;
+    const env = buildSaleEnvelopeFromDb(row.id);
+    if (!env) continue;
+    const outboxId = env.id;
     const exists = queryAll("SELECT id FROM sync_outbox WHERE id = ?", [
       outboxId,
     ]);
-    if (exists.length) continue;
-    const env = buildSaleEnvelopeFromDb(row.id);
-    if (!env) continue;
-    exec(
-      `INSERT INTO sync_outbox(id, entity_type, entity_id, payload, created_at, attempts, last_error)
-       VALUES (?,?,?,?,?,?,?)`,
-      [
-        env.id,
-        "sale",
-        row.id,
-        JSON.stringify(env),
-        nowIso(),
-        0,
-        null,
-      ],
-    );
+    const payload = JSON.stringify(env);
+    if (exists.length) {
+      exec(
+        `UPDATE sync_outbox SET payload = ?, entity_type = 'sale', entity_id = ?, last_error = NULL WHERE id = ?`,
+        [payload, row.id, outboxId],
+      );
+    } else {
+      exec(
+        `INSERT INTO sync_outbox(id, entity_type, entity_id, payload, created_at, attempts, last_error)
+         VALUES (?,?,?,?,?,?,?)`,
+        [outboxId, "sale", row.id, payload, nowIso(), 0, null],
+      );
+    }
     n += 1;
   }
   if (n) persist();
   return n;
+}
+
+/** บันทึก error บน outbox หลัง sync ล้มเหลว (ให้ UI แสดงได้) */
+export async function markOutboxErrors(
+  errors: Array<{ id: string; message: string }>,
+): Promise<void> {
+  await ensureDb();
+  if (!errors.length) return;
+  for (const e of errors) {
+    const msg = String(e.message || "sync failed").slice(0, 500);
+    exec(
+      `UPDATE sync_outbox SET attempts = COALESCE(attempts, 0) + 1, last_error = ? WHERE id = ?`,
+      [msg, e.id],
+    );
+  }
+  persist();
 }
 
 export async function getSqlitePath() {
@@ -860,9 +927,64 @@ export async function saveSale(input: LocalSaleInput) {
 
 export async function listOutbox() {
   await ensureDb();
-  return queryAll<{ payload: string }>(
-    "SELECT payload FROM sync_outbox ORDER BY created_at ASC",
-  ).map((row) => JSON.parse(row.payload));
+  return queryAll<{
+    id: string;
+    entity_type: string;
+    entity_id: string;
+    payload: string;
+  }>(
+    `SELECT id, entity_type, entity_id, payload FROM sync_outbox ORDER BY created_at ASC`,
+  ).map((row) => {
+    try {
+      const parsed = JSON.parse(row.payload) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== "object") {
+        return { id: row.id, type: row.entity_type, payload: null };
+      }
+      // envelope มาตรฐาน
+      if (parsed.type === "sale" || parsed.type === "shift" || parsed.type === "audit") {
+        return parsed;
+      }
+      // entity_type บอก sale แต่ payload รูปผิด
+      if (row.entity_type === "sale") {
+        const nested = parsed.payload as Record<string, unknown> | undefined;
+        if (nested && typeof nested === "object" && nested.billNo) {
+          return { id: row.id, type: "sale", payload: nested };
+        }
+        if ((parsed as { billNo?: string }).billNo) {
+          return { id: row.id, type: "sale", payload: parsed };
+        }
+      }
+      if (row.entity_type === "shift") {
+        return { id: row.id, type: "shift", payload: parsed };
+      }
+      if (row.entity_type === "audit") {
+        return { id: row.id, type: "audit", payload: parsed };
+      }
+      return parsed;
+    } catch {
+      return { id: row.id, type: row.entity_type, payload: null };
+    }
+  });
+}
+
+/**
+ * สร้าง envelope จากบิลค้างใน sales โดยตรง (ไม่พึ่ง payload outbox เก่า)
+ * ใช้ตอนกดส่งบิลค้าง — กันรูป payload พังแล้วถูก filter ออก
+ */
+export async function listPendingSaleEnvelopes(): Promise<
+  Array<{ id: string; type: "sale"; payload: LocalSaleInput }>
+> {
+  await ensureDb();
+  const pending = queryAll<{ id: string }>(
+    "SELECT id FROM sales WHERE synced_at IS NULL ORDER BY created_at ASC",
+  );
+  const out: Array<{ id: string; type: "sale"; payload: LocalSaleInput }> = [];
+  for (const row of pending) {
+    const env = buildSaleEnvelopeFromDb(row.id);
+    if (!env) continue;
+    out.push(env);
+  }
+  return out;
 }
 
 export type OutboxRow = {

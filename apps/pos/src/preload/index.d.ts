@@ -80,8 +80,12 @@ export type ApPosDbBridge = {
     }>
   >;
   ackOutbox: (ids: string[]) => Promise<boolean>;
+  markOutboxErrors: (
+    errors: Array<{ id: string; message: string }>,
+  ) => Promise<boolean>;
   outboxCount: () => Promise<number>;
   purgeSyncedSales: () => Promise<number>;
+  wipeTestSales: () => Promise<{ sales: number }>;
   listLocalSales: (opts?: {
     limit?: number;
     pendingOnly?: boolean;
@@ -98,6 +102,9 @@ export type ApPosDbBridge = {
   >;
   countPendingSales: () => Promise<number>;
   requeueUnsyncedSales: () => Promise<number>;
+  listPendingSaleEnvelopes: () => Promise<
+    Array<{ id: string; type: "sale"; payload: unknown }>
+  >;
   getMeta: (key: string) => Promise<string | null>;
   setMeta: (key: string, value: string) => Promise<boolean>;
 };
@@ -118,6 +125,7 @@ export type ApPosPrintBridge = {
     silent?: boolean;
     deviceName?: string;
     openDrawer?: boolean;
+    logoDataUrl?: string;
   }) => Promise<{ ok: boolean; message?: string }>;
   previewReceipt: (req: {
     html: string;

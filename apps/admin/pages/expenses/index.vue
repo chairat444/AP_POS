@@ -184,7 +184,7 @@ async function save() {
 
 async function remove(row: Expense) {
   const ok = await askConfirm({
-    title: "ลบค่าใช้จ่าย",
+    title: "ลบค่าใช้จ่ายหน้าร้าน",
     message: `ลบรายการ ${row.categoryName || ""} ${baht(row.amount)} บาท?`,
     confirmLabel: "ลบรายการ",
   });
@@ -214,7 +214,7 @@ onMounted(async () => {
   <div>
     <div class="ui-page-head">
       <div>
-        <h1 class="ui-page-title">ค่าใช้จ่าย</h1>
+        <h1 class="ui-page-title">ค่าใช้จ่ายหน้าร้าน</h1>
         <p class="ui-page-sub">
           กดประเภท ใส่ยอด แล้วบันทึก · ไม่ระบุสาขาได้ (กลาง) · เบิกจาก POS เข้าอัตโนมัติเมื่อ sync
         </p>
@@ -369,7 +369,7 @@ onMounted(async () => {
 
     <div class="ui-card ui-expense-form">
       <div class="ui-expense-form__head">
-        <strong>{{ editingId ? "แก้ไขรายการ" : "บันทึกค่าใช้จ่าย" }}</strong>
+        <strong>{{ editingId ? "แก้ไขรายการ" : "บันทึกค่าใช้จ่ายหน้าร้าน" }}</strong>
         <button
           v-if="editingId"
           type="button"

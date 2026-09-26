@@ -146,6 +146,19 @@ export class SyncController {
   }
 
   /** ตรวจรอบหลัง sync — POS ใช้ได้โดยไม่ต้อง login Admin */
+  @Get("shifts/open-by-staff")
+  openShiftByStaff(
+    @Query("staffId") staffId?: string,
+    @Query("staffCode") staffCode?: string,
+    @Query("excludeTerminalId") excludeTerminalId?: string,
+  ) {
+    return this.sync.findOpenShiftByStaff({
+      staffId,
+      staffCode,
+      excludeTerminalId,
+    });
+  }
+
   @Get("shifts/:id")
   getShift(@Param("id") id: string) {
     return this.sync.getShift(id);

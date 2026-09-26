@@ -35,6 +35,7 @@ watch(open, (v) => {
   reason.value = reasons.value[0] ?? "อื่นๆ";
   note.value = "";
   error.value = "";
+  kickCashDrawer();
   focusAmount();
 });
 
@@ -55,6 +56,8 @@ async function submit() {
   if (submitting.value) return;
   submitting.value = true;
   try {
+    // เตะกับบันทึก/sync คนละทาง — ไม่รอซึ่งกันและกัน
+    kickCashDrawer();
     const ok = await session.recordCashMove({
       direction: direction.value,
       amount,
@@ -65,7 +68,6 @@ async function submit() {
       error.value = session.statusMessage || "บันทึกไม่สำเร็จ";
       return;
     }
-    void kickCashDrawer();
     open.value = false;
   } finally {
     submitting.value = false;

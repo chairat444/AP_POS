@@ -105,8 +105,21 @@ const groups: NavGroup[] = [
     icon: "chart",
     items: [
       { to: "/reports", label: "สรุปยอดขาย", icon: "chart" },
+      { to: "/reports/profit", label: "กำไร", icon: "chart" },
       { to: "/reports/cashflow", label: "รายรับ–รายจ่าย", icon: "coin" },
       { to: "/reports/commission", label: "ค่าแรงและค่าคอม", icon: "coin" },
+    ],
+  },
+  {
+    id: "finance",
+    label: "บัญชี / จัดซื้อ",
+    icon: "coin",
+    items: [
+      { to: "/cash-book", label: "สมุดรายวัน", icon: "coin" },
+      { to: "/expenses", label: "ค่าใช้จ่ายหน้าร้าน", icon: "coin" },
+      { to: "/expenses/categories", label: "ประเภทค่าใช้จ่ายหน้าร้าน", icon: "tag" },
+      { to: "/purchases", label: "แผงสรุปซื้อของ", icon: "box" },
+      { to: "/purchases/catalog", label: "รายการซื้อของ", icon: "box" },
     ],
   },
   {
@@ -116,17 +129,6 @@ const groups: NavGroup[] = [
     items: [
       { to: "/members", label: "รายชื่อสมาชิก", icon: "user" },
       { to: "/members/points", label: "ประวัติแต้ม", icon: "coin" },
-    ],
-  },
-  {
-    id: "finance",
-    label: "ค่าใช้จ่าย / จัดซื้อ",
-    icon: "coin",
-    items: [
-      { to: "/expenses", label: "ค่าใช้จ่าย", icon: "coin" },
-      { to: "/expenses/categories", label: "ประเภทค่าใช้จ่าย", icon: "tag" },
-      { to: "/purchases", label: "แผงสรุปซื้อของ", icon: "box" },
-      { to: "/purchases/catalog", label: "รายการซื้อของ", icon: "box" },
     ],
   },
   {
@@ -148,6 +150,7 @@ const groups: NavGroup[] = [
       { to: "/settings/points", label: "ตั้งค่าแต้ม", icon: "coin" },
       { to: "/settings/display", label: "ตั้งค่าจอ", icon: "terminal" },
       { to: "/settings/keybindings", label: "คีย์ลัด POS", icon: "terminal" },
+      { to: "/settings/backup", label: "สำรอง DB", icon: "settings" },
     ],
   },
 ];

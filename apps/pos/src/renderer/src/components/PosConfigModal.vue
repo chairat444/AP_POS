@@ -1,25 +1,29 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import {
-  buildReceiptPrintPayload,
-  buildReceiptText,
   loadPrinterConfig,
+  printReceipt,
   savePrinterConfig,
   type PaperWidth,
   type PrinterConfig,
 } from "../services/receipt";
 import {
   countPendingLocalSales,
+  clearTestLocalData,
+  envMode,
   fetchShiftFromServer,
   getAdminUrl,
   getApiBase,
   getDefaultApiBase,
+  isTestMode,
   listLocalSaleSyncItems,
   listOutboxItems,
+  pendingOutboxCount,
   pushAllPendingOutbox,
   pushPendingSales,
   refreshApiOnline,
   resyncShiftFull,
+  savePosEnvMode,
   savePosNetworkConfig,
   type LocalSaleSyncItem,
   type OutboxItemSummary,
@@ -27,10 +31,11 @@ import {
   type SyncedShiftPayload,
 } from "../services/sync";
 import { useSessionStore } from "../stores/session";
+import { useSettingsStore } from "../stores/settings";
 import { getAppVersionLabel } from "../utils/format";
 
 const open = defineModel<boolean>("open", { default: false });
-const emit = defineEmits<{ saved: [] }>();
+const emit = defineEmits<{ saved: []; "test-reset": [] }>();
 
 const session = useSessionStore();
 
@@ -39,6 +44,8 @@ type TabId = "network" | "printer" | "slip" | "sync";
 const tab = ref<TabId>("network");
 const apiBase = ref("");
 const adminUrl = ref("");
+const envModeDraft = ref<"prod" | "test">("prod");
+const clearingTest = ref(false);
 const saving = ref(false);
 const testing = ref(false);
 const testingPrint = ref(false);
@@ -188,6 +195,10 @@ function outboxTypeLabel(type: OutboxItemSummary["type"]) {
 
 async function pushAllOutbox() {
   if (syncing.value) return;
+  if (isTestMode()) {
+    error.value = "โหมดทดสอบ — ไม่ส่งข้อมูลขึ้นเซิร์ฟเวอร์";
+    return;
+  }
   syncing.value = true;
   error.value = "";
   message.value = "";
@@ -208,12 +219,16 @@ async function pushAllOutbox() {
 
 async function pushPendingBills() {
   if (pushingPendingSales.value) return;
+  if (isTestMode()) {
+    error.value = "โหมดทดสอบ — ไม่ส่งบิลขึ้นเซิร์ฟเวอร์";
+    return;
+  }
   pushingPendingSales.value = true;
   error.value = "";
   message.value = "";
   tab.value = "sync";
   try {
-    const r = await pushPendingSales({ timeoutMs: 15_000 });
+    const r = await pushPendingSales({ timeoutMs: 45_000 });
     await loadSyncStatus();
     if (r.pending === 0) {
       message.value =
@@ -221,7 +236,7 @@ async function pushPendingBills() {
           ? `ส่งบิลค้างครบแล้ว (${r.accepted} รายการ)`
           : "ไม่มีบิลค้างส่ง";
     } else {
-      message.value = `ยังค้าง ${r.pending} บิล — ตรวจ API / เน็ต`;
+      message.value = `ส่งได้ ${r.accepted} · ยังค้าง ${r.pending} — ดูข้อความแดงใต้บิล`;
       error.value = message.value;
     }
   } catch (e) {
@@ -233,6 +248,10 @@ async function pushPendingBills() {
 
 async function resyncShift() {
   if (resyncingShift.value) return;
+  if (isTestMode()) {
+    error.value = "โหมดทดสอบ — ไม่ส่งรอบขึ้นเซิร์ฟเวอร์";
+    return;
+  }
   resyncingShift.value = true;
   error.value = "";
   message.value = "";
@@ -326,6 +345,7 @@ async function loadPrinters() {
 async function hydrate() {
   apiBase.value = getApiBase();
   adminUrl.value = getAdminUrl();
+  envModeDraft.value = envMode.value === "test" ? "test" : "prod";
   error.value = "";
   message.value = "";
   tab.value = "network";
@@ -384,17 +404,64 @@ async function save() {
   error.value = "";
   message.value = "";
   try {
+    if (envMode.value === "test" && envModeDraft.value === "prod") {
+      const pendingSales = await countPendingLocalSales().catch(() => 0);
+      const pendingOut = await pendingOutboxCount().catch(() => 0);
+      if (pendingSales > 0 || pendingOut > 0 || session.isOpen) {
+        const ok = confirm(
+          "มีข้อมูลทดสอบในเครื่อง\nจะล้างบิล/กะก่อนเปลี่ยนเป็นใช้งานจริง\nข้อมูลนี้จะไม่ถูกส่งขึ้นเซิร์ฟเวอร์",
+        );
+        if (!ok) {
+          envModeDraft.value = "test";
+          message.value = "ยังเป็นโหมดทดสอบ";
+          return;
+        }
+        await session.abandonShiftForTestReset();
+        await clearTestLocalData();
+        emit("test-reset");
+      }
+    }
+    await savePosEnvMode(envModeDraft.value);
     await savePosNetworkConfig({
       apiBase: apiBase.value,
       adminUrl: adminUrl.value,
     });
     await savePrinterConfig(printerPatch());
-    message.value = "บันทึกแล้ว · ใช้ค่าใหม่ทันที";
+    const { setDrawerPrinterName } = await import("../services/drawer");
+    setDrawerPrinterName(printerName.value.trim() || undefined);
+    message.value =
+      envModeDraft.value === "test"
+        ? "บันทึกแล้ว · โหมดทดสอบ ไม่ส่งขึ้นเซิร์ฟเวอร์"
+        : "บันทึกแล้ว · ใช้ค่าใหม่ทันที";
     emit("saved");
   } catch (e) {
     error.value = e instanceof Error ? e.message : "บันทึกไม่สำเร็จ";
   } finally {
     saving.value = false;
+  }
+}
+
+async function clearTestData() {
+  if (clearingTest.value || !isTestMode()) return;
+  const ok = confirm(
+    "ล้างบิลขาย กะ และ outbox ในเครื่อง?\nแต้มสมาชิกจะถูกดึงจากเซิร์ฟเวอร์ใหม่\nใช้สำหรับเริ่มทดสอบรอบใหม่",
+  );
+  if (!ok) return;
+  clearingTest.value = true;
+  error.value = "";
+  message.value = "";
+  try {
+    await session.abandonShiftForTestReset();
+    const res = await clearTestLocalData();
+    message.value = res.pulled
+      ? `ล้างแล้ว ${res.sales} บิล · ดึงแต้มจากเซิร์ฟเวอร์แล้ว`
+      : `ล้างแล้ว ${res.sales} บิล · ดึงแต้มไม่สำเร็จ (ออฟไลน์)`;
+    emit("test-reset");
+    await refreshOutbox();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "ล้างข้อมูลไม่สำเร็จ";
+  } finally {
+    clearingTest.value = false;
   }
 }
 
@@ -437,10 +504,11 @@ async function testPrint() {
     }
     await savePrinterConfig(printerPatch());
     const appVersion = await getAppVersionLabel();
+    const brand = useSettingsStore();
     const sample = {
-      storeName: "เอพี หมูสด",
+      storeName: brand.storeName || "เอพี หมูสด",
       branchName: "ทดสอบ",
-      tagline: "มาตรฐาน สะอาด ปลอดภัย",
+      tagline: brand.storeTagline || "มาตรฐาน สะอาด ปลอดภัย",
       headerText: headerText.value,
       billNo: "TEST-001",
       at: new Date().toISOString(),
@@ -465,17 +533,11 @@ async function testPrint() {
       footerHours: footerHours.value,
       footerPhones: footerPhones.value,
       appVersion,
+      logoUrl: brand.logoUrl,
     };
-    const text = buildReceiptPrintPayload(sample);
-    const preview = buildReceiptText(sample);
-    const html = `<pre style="font:11px/1.3 monospace;white-space:pre-wrap;margin:8px">${preview
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")}</pre>`;
-    const res = await window.apPos?.print?.receipt?.({
-      html,
-      text,
-      paperWidth: paperWidth.value,
+    const res = await printReceipt(sample, {
       silent: silent.value,
+      preview: false,
       deviceName: printerName.value.trim() || undefined,
       openDrawer: openDrawer.value,
     });
@@ -605,6 +667,30 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
 
       <div class="pos-config-panel">
         <section v-show="tab === 'network'" class="pos-config-section">
+          <div class="pos-config-chips">
+            <span class="pos-config-chip-label">โหมด</span>
+            <label class="pos-config-chip">
+              <input v-model="envModeDraft" type="radio" value="prod" />
+              ใช้งานจริง
+            </label>
+            <label class="pos-config-chip">
+              <input v-model="envModeDraft" type="radio" value="test" />
+              ทดสอบ
+            </label>
+          </div>
+          <p class="pos-config-note" style="margin: 0 0 0.75rem">
+            ทั้งสองโหมดดึงสินค้า/แต้มจากเซิร์ฟเวอร์ได้ ·
+            โหมดทดสอบไม่ส่งบิล กะ หรือสมาชิกขึ้นไป
+          </p>
+          <button
+            v-if="isTestMode()"
+            type="button"
+            class="pay-cancel"
+            :disabled="clearingTest"
+            @click="clearTestData"
+          >
+            {{ clearingTest ? "กำลังล้าง…" : "ล้างข้อมูลทดสอบ" }}
+          </button>
           <label class="pos-config-field">
             <span>API Base</span>
             <input

@@ -153,7 +153,7 @@ async function toggleActive(row: Category) {
 
 async function remove(row: Category) {
   const ok = await askConfirm({
-    title: "ลบประเภทค่าใช้จ่าย",
+    title: "ลบประเภทค่าใช้จ่ายหน้าร้าน",
     message: `ลบ「${row.name}」ใช่หรือไม่?`,
     detail: "ถ้ายังมีรายการใช้ประเภทนี้ จะลบไม่ได้ — ให้ปิดการใช้งานแทน",
     confirmLabel: "ลบประเภท",
@@ -178,13 +178,13 @@ onMounted(load);
   <div>
     <div class="ui-page-head">
       <div>
-        <h1 class="ui-page-title">ประเภทค่าใช้จ่าย</h1>
+        <h1 class="ui-page-title">ประเภทค่าใช้จ่ายหน้าร้าน</h1>
         <p class="ui-page-sub">
-          ลาก ⋮⋮ เพื่อจัดลำดับที่แสดงตอนบันทึกค่าใช้จ่าย
+          ลาก ⋮⋮ เพื่อจัดลำดับที่แสดงตอนบันทึกค่าใช้จ่ายหน้าร้าน
         </p>
       </div>
       <div class="ui-page-head__actions">
-        <NuxtLink to="/expenses" class="ui-btn ui-btn--ghost">กลับค่าใช้จ่าย</NuxtLink>
+        <NuxtLink to="/expenses" class="ui-btn ui-btn--ghost">กลับค่าใช้จ่ายหน้าร้าน</NuxtLink>
         <button type="button" class="ui-btn ui-btn--primary" @click="openCreate">
           + เพิ่มประเภท
         </button>

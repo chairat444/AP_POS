@@ -13,6 +13,11 @@ const links = [
     hint: "เงินสด/โอน · ค่าใช้จ่าย",
   },
   {
+    to: "/reports/profit",
+    label: "กำไร",
+    hint: "กำไรจากทุนในบิล",
+  },
+  {
     to: "/reports/commission",
     label: "ค่าแรงและค่าคอม",
     hint: "รายได้พนักงานรายเดือน",

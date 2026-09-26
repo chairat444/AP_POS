@@ -1,5 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { and, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm";
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  NotFoundException,
+  forwardRef,
+} from "@nestjs/common";
+import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { pg } from "@ap-pos/db";
 import { DatabaseService } from "../db/database.service";
@@ -38,6 +45,23 @@ function calcDailyCommission(
   }
   const steps = Math.floor((sales - startSales) / stepSales) + 1;
   return { amount: steps * amountPerStep, steps };
+}
+
+/** ค่าแรงวันอาทิตย์เมื่อมาขาย (บาท) — คอมยังคิดตามเรทของแต่ละคน */
+const SUNDAY_WAGE_BAHT = 800;
+
+function isBangkokSunday(day: string) {
+  const label = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Bangkok",
+    weekday: "short",
+  }).format(new Date(`${day}T12:00:00+07:00`));
+  return label === "Sun";
+}
+
+/** ค่าแรงเริ่มต้นของวัน: อาทิตย์ = 800 · วันอื่น = ตามที่ตั้งในพนักงาน */
+function dailyWageForDate(day: string, baseDailyWage: number) {
+  if (isBangkokSunday(day)) return SUNDAY_WAGE_BAHT;
+  return Math.round(num(baseDailyWage, 0) * 100) / 100;
 }
 
 function formatCommissionRule(config: {
@@ -89,14 +113,19 @@ export class ShiftsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly terminals: TerminalsService,
+    @Inject(forwardRef(() => ExpensesService))
     private readonly expenses: ExpensesService,
     private readonly notify: NotifyService,
   ) {}
 
   private async liveSalesByShift(shiftIds: string[]) {
-    const map = new Map<string, { billCount: number; grossTotal: number }>();
+    const map = new Map<
+      string,
+      { billCount: number; grossTotal: number; cashTotal: number }
+    >();
     if (!shiftIds.length) return map;
-    const rows = await this.database.db
+
+    const saleRows = await this.database.db
       .select({
         shiftId: pg.sales.shiftId,
         billCount: sql<number>`count(*)::int`,
@@ -110,14 +139,64 @@ export class ShiftsService {
         ),
       )
       .groupBy(pg.sales.shiftId);
-    for (const r of rows) {
+    for (const r of saleRows) {
       if (!r.shiftId) continue;
       map.set(r.shiftId, {
         billCount: Number(r.billCount ?? 0),
         grossTotal: num(r.grossTotal),
+        cashTotal: 0,
       });
     }
+
+    const cashRows = await this.database.db
+      .select({
+        shiftId: pg.sales.shiftId,
+        cashTotal: sql<string>`coalesce(sum(${pg.salePayments.amount}), 0)`,
+      })
+      .from(pg.salePayments)
+      .innerJoin(pg.sales, eq(pg.salePayments.saleId, pg.sales.id))
+      .where(
+        and(
+          inArray(pg.sales.shiftId, shiftIds),
+          eq(pg.sales.status, "completed"),
+          eq(pg.salePayments.method, "cash"),
+        ),
+      )
+      .groupBy(pg.sales.shiftId);
+    for (const r of cashRows) {
+      if (!r.shiftId) continue;
+      const cur = map.get(r.shiftId) ?? {
+        billCount: 0,
+        grossTotal: 0,
+        cashTotal: 0,
+      };
+      cur.cashTotal = num(r.cashTotal);
+      map.set(r.shiftId, cur);
+    }
     return map;
+  }
+
+  /** คาดในลิ้นชัก = เงินทอนเริ่ม + ขายเงินสด + นำเข้า − นำออก */
+  private computeExpectedCash(
+    openCash: number,
+    cashSales: number,
+    cashMoves: unknown[],
+    summary: Record<string, unknown> | null,
+  ) {
+    let cashIn = 0;
+    let cashOut = 0;
+    const moves = Array.isArray(cashMoves) ? cashMoves : [];
+    for (const raw of moves) {
+      const m = raw as Record<string, unknown>;
+      const amount = num(m.amount as string | number);
+      if (String(m.direction) === "in") cashIn += amount;
+      else cashOut += amount;
+    }
+    if (!moves.length && summary) {
+      cashIn = num(summary.cashInTotal as string | number);
+      cashOut = num(summary.cashOutTotal as string | number);
+    }
+    return Math.round((openCash + cashSales + cashIn - cashOut) * 100) / 100;
   }
 
   async list(opts: {
@@ -208,17 +287,97 @@ export class ShiftsService {
           billAmount: Number(summary.voidBillAmount ?? 0),
         };
         const live = liveSales.get(row.id);
+        const summaryObj = (rec.summary ?? {}) as Record<string, unknown>;
+        // กะเปิด: คำนวณคาดในลิ้นชักจากบิลที่ sync แล้ว (สแนปช็อตกะไม่อัปทุกบิล)
+        const expectedCash =
+          rec.status === "open"
+            ? this.computeExpectedCash(
+                rec.openCash,
+                live?.cashTotal ?? 0,
+                rec.cashMoves,
+                summaryObj,
+              )
+            : rec.expectedCash;
         return {
           ...rec,
           // ยอดจากบิลที่ sync แล้ว — ไม่พึ่งสแนปช็อตกะที่อาจค้าง
           billCount: live?.billCount ?? rec.billCount,
           grossTotal: live?.grossTotal ?? rec.grossTotal,
+          expectedCash,
           terminalCode: term?.code ?? null,
           terminalName: term?.name ?? null,
           branchName: branchMap.get(row.branchId) ?? null,
           voidStats,
         };
       }),
+    };
+  }
+
+  /**
+   * กะที่เปิดอยู่ของพนักงาน — ใช้กัน PIN/พนักงานซ้ำข้ามเครื่อง
+   * excludeTerminalId = เครื่องนี้เอง (กู้รอบ/เปิดซ้ำเครื่องเดิมได้)
+   */
+  async findOpenByStaff(opts: {
+    staffId?: string | null;
+    staffCode?: string | null;
+    excludeTerminalId?: string | null;
+  }) {
+    const staffId = String(opts.staffId ?? "").trim();
+    const staffCode = String(opts.staffCode ?? "").trim();
+    if (!staffId && !staffCode) {
+      return { open: false as const };
+    }
+
+    const conditions = [eq(pg.shifts.status, "open")];
+    if (staffId && staffCode) {
+      conditions.push(
+        or(eq(pg.shifts.staffId, staffId), eq(pg.shifts.staffCode, staffCode))!,
+      );
+    } else if (staffId) {
+      conditions.push(eq(pg.shifts.staffId, staffId));
+    } else {
+      conditions.push(eq(pg.shifts.staffCode, staffCode));
+    }
+    if (opts.excludeTerminalId?.trim()) {
+      conditions.push(ne(pg.shifts.terminalId, opts.excludeTerminalId.trim()));
+    }
+
+    const rows = await this.database.db
+      .select()
+      .from(pg.shifts)
+      .where(and(...conditions))
+      .orderBy(desc(pg.shifts.openedAt))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return { open: false as const };
+
+    let terminalName: string | null = null;
+    let terminalCode: string | null = null;
+    try {
+      const t = await this.terminals.get(row.terminalId);
+      terminalName = t.name;
+      terminalCode = t.code;
+    } catch {
+      /* ignore */
+    }
+    const branchRows = await this.database.db
+      .select({ name: pg.branches.name })
+      .from(pg.branches)
+      .where(eq(pg.branches.id, row.branchId))
+      .limit(1);
+
+    return {
+      open: true as const,
+      shiftId: row.id,
+      staffId: row.staffId,
+      staffCode: row.staffCode,
+      staffName: row.staffName,
+      branchId: row.branchId,
+      branchName: branchRows[0]?.name ?? null,
+      terminalId: row.terminalId,
+      terminalName,
+      terminalCode,
+      openedAt: row.openedAt?.toISOString?.() ?? String(row.openedAt),
     };
   }
 
@@ -243,10 +402,21 @@ export class ShiftsService {
       .where(eq(pg.branches.id, rec.branchId))
       .limit(1);
     const live = (await this.liveSalesByShift([id])).get(id);
+    const summaryObj = (rec.summary ?? {}) as Record<string, unknown>;
+    const expectedCash =
+      rec.status === "open"
+        ? this.computeExpectedCash(
+            rec.openCash,
+            live?.cashTotal ?? 0,
+            rec.cashMoves,
+            summaryObj,
+          )
+        : rec.expectedCash;
     return {
       ...rec,
       billCount: live?.billCount ?? rec.billCount,
       grossTotal: live?.grossTotal ?? rec.grossTotal,
+      expectedCash,
       terminalCode: terminal?.code ?? null,
       terminalName: terminal?.name ?? null,
       branchName: branchRows[0]?.name ?? null,
@@ -445,6 +615,27 @@ export class ShiftsService {
     if (wasClosed && payload.status !== "closed") {
       return { id: payload.id };
     }
+
+    // กันพนักงานคนเดียวกันเปิดรอบค้างบนเครื่องอื่น
+    if (
+      payload.status === "open" &&
+      (payload.staffId || payload.staffCode) &&
+      payload.terminalId
+    ) {
+      const other = await this.findOpenByStaff({
+        staffId: payload.staffId,
+        staffCode: payload.staffCode,
+        excludeTerminalId: payload.terminalId,
+      });
+      if (other.open && other.shiftId !== payload.id) {
+        const where =
+          other.terminalName || other.terminalCode || other.terminalId || "เครื่องอื่น";
+        throw new ConflictException(
+          `พนักงานคนนี้เปิดรอบอยู่ที่ ${where} แล้ว — ปิดรอบเครื่องนั้นก่อน`,
+        );
+      }
+    }
+
     const prevFloatIds = new Set(
       parseJson<Array<{ id?: string; purpose?: string }>>(
         existing[0]?.cashCountsJson,
@@ -596,11 +787,31 @@ export class ShiftsService {
 
   async acceptMany(shifts: SyncedShiftPayload[]) {
     const accepted: string[] = [];
+    const rejected: Array<{ id: string; message: string }> = [];
     for (const s of shifts) {
-      await this.upsertFromSync(s);
-      accepted.push(s.id);
+      try {
+        await this.upsertFromSync(s);
+        accepted.push(s.id);
+      } catch (e) {
+        if (e instanceof ConflictException) {
+          const res = e.getResponse();
+          const raw =
+            typeof res === "string"
+              ? res
+              : Array.isArray((res as { message?: unknown }).message)
+                ? (res as { message: string[] }).message.join(", ")
+                : String(
+                    (res as { message?: string }).message ??
+                      e.message ??
+                      "พนักงานเปิดรอบอยู่เครื่องอื่นแล้ว",
+                  );
+          rejected.push({ id: s.id, message: raw });
+          continue;
+        }
+        throw e;
+      }
     }
-    return { accepted };
+    return { accepted, rejected };
   }
 
   /**
@@ -847,7 +1058,7 @@ export class ShiftsService {
       if (!cfg) continue;
       if (opts.staffId && cfg.id !== opts.staffId) continue;
 
-      const dailyWageDefault = Math.round(cfg.dailyWage * 100) / 100;
+      const baseDailyWage = Math.round(cfg.dailyWage * 100) / 100;
       const days = [...daysMap.values()]
         .sort((a, b) => b.date.localeCompare(a.date))
         .map((d) => {
@@ -858,16 +1069,14 @@ export class ShiftsService {
             amountPerStep: cfg.amountPerStep,
           });
           const ov = wageOverride.get(`${staffId}|${d.date}`);
-          const wage =
-            ov != null
-              ? ov.wage
-              : dailyWageDefault;
+          const wageDefault = dailyWageForDate(d.date, baseDailyWage);
+          const wage = ov != null ? ov.wage : wageDefault;
           return {
             date: d.date,
             daySales: Math.round(d.daySales * 100) / 100,
             shiftCount: d.shiftCount,
             wage,
-            wageDefault: dailyWageDefault,
+            wageDefault,
             wageAdjusted: ov != null,
             wageNote: ov?.note ?? null,
             commission: calc.amount,
@@ -888,7 +1097,7 @@ export class ShiftsService {
 
       // ซ่อนคนที่ไม่มีค่าแรง ไม่เปิดคอม และไม่มียอดในเดือน
       if (
-        dailyWageDefault <= 0 &&
+        baseDailyWage <= 0 &&
         !cfg.enabled &&
         salesTotal <= 0 &&
         commissionTotal <= 0 &&
@@ -912,7 +1121,7 @@ export class ShiftsService {
         startSales: cfg.startSales,
         stepSales: cfg.stepSales,
         amountPerStep: cfg.amountPerStep,
-        dailyWage: dailyWageDefault,
+        dailyWage: baseDailyWage,
         dayCount,
         daysWithPay,
         shiftCount: days.reduce((s, d) => s + d.shiftCount, 0),
@@ -982,18 +1191,22 @@ export class ShiftsService {
       )
       .limit(1);
 
-    // wage = null → ล้างค่าปรับ กลับไปใช้อัตรามาตรฐาน
+    // wage = null → ล้างค่าปรับ กลับไปใช้อัตรามาตรฐาน (อาทิตย์ = 800)
     if (dto.wage == null || Number.isNaN(Number(dto.wage))) {
       if (existing[0]) {
         await this.database.db
           .delete(pg.staffDayWages)
           .where(eq(pg.staffDayWages.id, existing[0].id));
       }
+      const wageDefault = dailyWageForDate(
+        date!,
+        num(staffRows[0].dailyWage, 0),
+      );
       return {
         staffId,
         date,
-        wage: num(staffRows[0].dailyWage, 0),
-        wageDefault: num(staffRows[0].dailyWage, 0),
+        wage: wageDefault,
+        wageDefault,
         wageAdjusted: false,
         note: null,
       };
@@ -1026,7 +1239,7 @@ export class ShiftsService {
       staffId,
       date,
       wage,
-      wageDefault: num(staffRows[0].dailyWage, 0),
+      wageDefault: dailyWageForDate(date!, num(staffRows[0].dailyWage, 0)),
       wageAdjusted: true,
       note,
     };

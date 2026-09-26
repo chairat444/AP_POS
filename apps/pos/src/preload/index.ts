@@ -115,6 +115,7 @@ contextBridge.exposeInMainWorld("apPos", {
       silent?: boolean;
       deviceName?: string;
       openDrawer?: boolean;
+      logoDataUrl?: string;
     }) =>
       ipcRenderer.invoke("receipt:print", req) as Promise<{
         ok: boolean;
@@ -189,10 +190,14 @@ contextBridge.exposeInMainWorld("apPos", {
       >,
     ackOutbox: (ids: string[]) =>
       ipcRenderer.invoke("db:outbox:ack", ids) as Promise<boolean>,
+    markOutboxErrors: (errors: Array<{ id: string; message: string }>) =>
+      ipcRenderer.invoke("db:outbox:markErrors", errors) as Promise<boolean>,
     outboxCount: () =>
       ipcRenderer.invoke("db:outbox:count") as Promise<number>,
     purgeSyncedSales: () =>
       ipcRenderer.invoke("db:sales:purgeSynced") as Promise<number>,
+    wipeTestSales: () =>
+      ipcRenderer.invoke("db:sales:wipeTest") as Promise<{ sales: number }>,
     listLocalSales: (opts?: { limit?: number; pendingOnly?: boolean }) =>
       ipcRenderer.invoke("db:sales:listLocal", opts) as Promise<
         Array<{
@@ -209,6 +214,10 @@ contextBridge.exposeInMainWorld("apPos", {
       ipcRenderer.invoke("db:sales:countPending") as Promise<number>,
     requeueUnsyncedSales: () =>
       ipcRenderer.invoke("db:sales:requeueUnsynced") as Promise<number>,
+    listPendingSaleEnvelopes: () =>
+      ipcRenderer.invoke("db:sales:listPendingEnvelopes") as Promise<
+        Array<{ id: string; type: "sale"; payload: unknown }>
+      >,
     getMeta: (key: string) =>
       ipcRenderer.invoke("db:meta:get", key) as Promise<string | null>,
     setMeta: (key: string, value: string) =>

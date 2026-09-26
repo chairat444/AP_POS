@@ -107,6 +107,7 @@ try {
       const child = spawn(
         "powershell.exe",
         [
+          "-NoLogo",
           "-NoProfile",
           "-NonInteractive",
           "-ExecutionPolicy",

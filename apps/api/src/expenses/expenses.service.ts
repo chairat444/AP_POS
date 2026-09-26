@@ -1,13 +1,16 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   NotFoundException,
   OnModuleInit,
+  forwardRef,
 } from "@nestjs/common";
 import { and, asc, desc, eq, gte, isNull, lte, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { pg } from "@ap-pos/db";
 import { DatabaseService } from "../db/database.service";
+import { CashBookService } from "../cash-book/cash-book.service";
 import type {
   ExpenseCategoryRecord,
   ExpensePaidFrom,
@@ -76,7 +79,11 @@ function toExpense(
 
 @Injectable()
 export class ExpensesService implements OnModuleInit {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    @Inject(forwardRef(() => CashBookService))
+    private readonly cashBook: CashBookService,
+  ) {}
 
   async onModuleInit() {
     // seed อยู่ใน ensureSchema แล้ว — no-op
@@ -257,6 +264,15 @@ export class ExpensesService implements OnModuleInit {
     const { expenses } = await this.list({});
     const found = expenses.find((e) => e.id === id);
     if (!found) throw new NotFoundException("สร้างแล้วแต่โหลดไม่เจอ");
+    await this.cashBook.syncDrawerExpense({
+      id: found.id,
+      paidFrom: found.paidFrom,
+      amount: found.amount,
+      description: found.description,
+      categoryName: found.categoryName,
+      branchId: found.branchId,
+      spentAt: found.spentAt,
+    });
     return found;
   }
 
@@ -297,6 +313,15 @@ export class ExpensesService implements OnModuleInit {
     const { expenses } = await this.list({});
     const found = expenses.find((e) => e.id === id);
     if (!found) throw new NotFoundException("อัปเดตแล้วแต่โหลดไม่เจอ");
+    await this.cashBook.syncDrawerExpense({
+      id: found.id,
+      paidFrom: found.paidFrom,
+      amount: found.amount,
+      description: found.description,
+      categoryName: found.categoryName,
+      branchId: found.branchId,
+      spentAt: found.spentAt,
+    });
     return found;
   }
 
@@ -311,6 +336,15 @@ export class ExpensesService implements OnModuleInit {
       .update(pg.expenses)
       .set({ deletedAt: now(), updatedAt: now() })
       .where(eq(pg.expenses.id, id));
+    await this.cashBook.syncDrawerExpense({
+      id,
+      paidFrom: rows[0].paidFrom,
+      amount: num(rows[0].amount),
+      description: rows[0].description,
+      branchId: rows[0].branchId,
+      spentAt: rows[0].spentAt,
+      deleted: true,
+    });
     return { id };
   }
 
@@ -357,6 +391,10 @@ export class ExpensesService implements OnModuleInit {
         )
         .limit(1);
 
+      const expenseId = existing[0]?.id ?? `exp-${randomUUID().slice(0, 10)}`;
+      const staffId = move.staffId ?? opts.staffId ?? null;
+      const staffName = move.staffName ?? opts.staffName ?? null;
+
       if (existing[0]) {
         await this.database.db
           .update(pg.expenses)
@@ -369,15 +407,15 @@ export class ExpensesService implements OnModuleInit {
             spentAt,
             shiftId: opts.shiftId,
             terminalId: opts.terminalId ?? null,
-            staffId: move.staffId ?? opts.staffId ?? null,
-            staffName: move.staffName ?? opts.staffName ?? null,
+            staffId,
+            staffName,
             note,
             updatedAt: now(),
           })
-          .where(eq(pg.expenses.id, existing[0].id));
+          .where(eq(pg.expenses.id, expenseId));
       } else {
         await this.database.db.insert(pg.expenses).values({
-          id: `exp-${randomUUID().slice(0, 10)}`,
+          id: expenseId,
           branchId: opts.branchId,
           categoryId,
           amount: String(amount),
@@ -386,14 +424,22 @@ export class ExpensesService implements OnModuleInit {
           spentAt,
           shiftId: opts.shiftId,
           terminalId: opts.terminalId ?? null,
-          staffId: move.staffId ?? opts.staffId ?? null,
-          staffName: move.staffName ?? opts.staffName ?? null,
+          staffId,
+          staffName,
           cashMoveId: moveId,
           note,
           updatedAt: now(),
           deletedAt: null,
         });
       }
+      await this.cashBook.syncDrawerExpense({
+        id: expenseId,
+        paidFrom: "drawer",
+        amount,
+        description,
+        branchId: opts.branchId,
+        spentAt,
+      });
       synced += 1;
     }
     return { synced };
@@ -438,6 +484,7 @@ export class ExpensesService implements OnModuleInit {
       incomeTotal: number;
       cashIncome: number;
       transferIncome: number;
+      governmentIncome: number;
       expenseTotal: number;
       expenseDrawer: number;
       expenseExternal: number;
@@ -454,6 +501,7 @@ export class ExpensesService implements OnModuleInit {
           incomeTotal: 0,
           cashIncome: 0,
           transferIncome: 0,
+          governmentIncome: 0,
           expenseTotal: 0,
           expenseDrawer: 0,
           expenseExternal: 0,
@@ -480,7 +528,8 @@ export class ExpensesService implements OnModuleInit {
       const br = ensureBranch(r.branchId);
       br.incomeTotal += amount;
       if (r.method === "cash") br.cashIncome += amount;
-      if (r.method === "transfer") br.transferIncome += amount;
+      else if (r.method === "transfer") br.transferIncome += amount;
+      else if (r.method === "government") br.governmentIncome += amount;
     }
 
     const incomeByMethod = [...incomeByMethodMap.values()].map((r) => ({
@@ -492,6 +541,8 @@ export class ExpensesService implements OnModuleInit {
       incomeByMethod.find((r) => r.method === "cash")?.amount ?? 0;
     const transferIncome =
       incomeByMethod.find((r) => r.method === "transfer")?.amount ?? 0;
+    const governmentIncome =
+      incomeByMethod.find((r) => r.method === "government")?.amount ?? 0;
 
     const expList = await this.list({
       from,
@@ -594,6 +645,7 @@ export class ExpensesService implements OnModuleInit {
         incomeTotal: Math.round(r.incomeTotal * 100) / 100,
         cashIncome: Math.round(r.cashIncome * 100) / 100,
         transferIncome: Math.round(r.transferIncome * 100) / 100,
+        governmentIncome: Math.round(r.governmentIncome * 100) / 100,
         expenseTotal: Math.round(r.expenseTotal * 100) / 100,
         expenseDrawer: Math.round(r.expenseDrawer * 100) / 100,
         expenseExternal: Math.round(r.expenseExternal * 100) / 100,
@@ -610,6 +662,7 @@ export class ExpensesService implements OnModuleInit {
         incomeTotal: Math.round(incomeTotal * 100) / 100,
         cashIncome: Math.round(cashIncome * 100) / 100,
         transferIncome: Math.round(transferIncome * 100) / 100,
+        governmentIncome: Math.round(governmentIncome * 100) / 100,
         expenseTotal: Math.round(expenseTotal * 100) / 100,
         expenseDrawer: Math.round(expenseDrawer * 100) / 100,
         expenseExternal: Math.round(expenseExternal * 100) / 100,

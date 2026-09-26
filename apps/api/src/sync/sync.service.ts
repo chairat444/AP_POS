@@ -1,5 +1,7 @@
-import { Injectable } from "@nestjs/common";
-import { and, asc, eq, gte, inArray, lte } from "drizzle-orm";
+import { Injectable, Logger } from "@nestjs/common";
+import { and, asc, count, eq, gte, inArray, lte } from "drizzle-orm";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { pg } from "@ap-pos/db";
 import { MembersService } from "../members/members.service";
 import { ProductsService } from "../products/products.service";
@@ -13,6 +15,23 @@ import { NotifyService } from "../notify/notify.service";
 import type { RegisterTerminalDto } from "../terminals/terminal.types";
 import type { SyncedShiftPayload } from "../shifts/shift.types";
 import { DatabaseService } from "../db/database.service";
+import { SalesService } from "../sales/sales.service";
+
+/** log ถาวรแยกจาก pm2 — กัน stdout เป็น socket แล้วหาสาเหตุ sync ไม่เจอ */
+function appendSyncSalesLog(row: Record<string, unknown>) {
+  try {
+    const path =
+      process.env.SYNC_SALES_LOG?.trim() ||
+      join(process.cwd(), "logs", "sync-sales.log");
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(
+      path,
+      `${JSON.stringify({ ts: new Date().toISOString(), ...row })}\n`,
+    );
+  } catch {
+    /* ignore disk errors */
+  }
+}
 
 type SyncedSaleLine = {
   id: string;
@@ -86,6 +105,8 @@ function bangkokToday() {
 
 @Injectable()
 export class SyncService {
+  private readonly logger = new Logger(SyncService.name);
+
   constructor(
     private readonly products: ProductsService,
     private readonly members: MembersService,
@@ -97,6 +118,7 @@ export class SyncService {
     private readonly shifts: ShiftsService,
     private readonly database: DatabaseService,
     private readonly notify: NotifyService,
+    private readonly sales: SalesService,
   ) {}
 
   listProducts() {
@@ -136,6 +158,14 @@ export class SyncService {
       grossTotal: row.grossTotal,
       status: row.status,
     };
+  }
+
+  findOpenShiftByStaff(opts: {
+    staffId?: string;
+    staffCode?: string;
+    excludeTerminalId?: string;
+  }) {
+    return this.shifts.findOpenByStaff(opts);
   }
 
   acceptAudits(
@@ -318,112 +348,270 @@ export class SyncService {
     let accepted = 0;
     const acceptedIds: string[] = [];
     const newlyAccepted: SyncedSale[] = [];
+    const rejected: Array<{ id: string; message: string }> = [];
+
+    this.logger.log(
+      `acceptOutbox batch n=${entries?.length ?? 0} ids=${(entries ?? [])
+        .slice(0, 8)
+        .map((e) => e?.id)
+        .join(",")}`,
+    );
 
     for (const entry of entries) {
-      if (entry.type !== "sale") continue;
-      const sale = entry.payload as SyncedSale;
-      const existing = await this.database.db
-        .select()
-        .from(pg.sales)
-        .where(eq(pg.sales.id, sale.id))
-        .limit(1);
-      if (existing.length) {
-        acceptedIds.push(entry.id);
+      if (entry.type !== "sale") {
+        rejected.push({
+          id: entry?.id ?? "?",
+          message: `skip type=${String((entry as { type?: string })?.type)}`,
+        });
         continue;
       }
+      try {
+        const sale = entry.payload as SyncedSale;
+        if (!sale?.id) {
+          this.logger.warn(`skip sale envelope ${entry.id}: missing sale.id`);
+          rejected.push({ id: entry.id, message: "missing sale.id" });
+          continue;
+        }
+        const existing = await this.database.db
+          .select({ id: pg.sales.id })
+          .from(pg.sales)
+          .where(eq(pg.sales.id, sale.id))
+          .limit(1);
+        if (existing.length) {
+          acceptedIds.push(entry.id);
+          continue;
+        }
 
-      const syncedAt = new Date();
-      const moneyPayments = (sale.payments ?? []).filter(
-        (p) => p.method !== "points",
-      );
-      const pointsPayBaht = (sale.payments ?? [])
-        .filter((p) => p.method === "points")
-        .reduce((s, p) => s + Number(p.amount || 0), 0);
+        const syncedAt = new Date();
+        const moneyPayments = (sale.payments ?? []).filter(
+          (p) => p.method !== "points",
+        );
+        const pointsPayBaht = (sale.payments ?? [])
+          .filter((p) => p.method === "points")
+          .reduce((s, p) => s + Number(p.amount || 0), 0);
 
-      // แต้ม = ส่วนลดท้ายบิล · ถ้า POS เก่ายังส่งเป็น payment ให้พับเข้า discount
-      let finalDiscount = Number(sale.discount ?? 0);
-      let finalTotal = Number(sale.total);
-      let finalPaid = Number(sale.paid ?? 0);
-      if (pointsPayBaht > 0) {
-        finalDiscount = Math.round((finalDiscount + pointsPayBaht) * 100) / 100;
-        finalTotal = Math.round(Math.max(0, finalTotal - pointsPayBaht) * 100) / 100;
-        finalPaid = Math.round(Math.max(0, finalPaid - pointsPayBaht) * 100) / 100;
-      }
+        // แต้ม = ส่วนลดท้ายบิล · ถ้า POS เก่ายังส่งเป็น payment ให้พับเข้า discount
+        let finalDiscount = Number(sale.discount ?? 0);
+        let finalTotal = Number(sale.total);
+        let finalPaid = Number(sale.paid ?? 0);
+        if (pointsPayBaht > 0) {
+          finalDiscount =
+            Math.round((finalDiscount + pointsPayBaht) * 100) / 100;
+          finalTotal =
+            Math.round(Math.max(0, finalTotal - pointsPayBaht) * 100) / 100;
+          finalPaid =
+            Math.round(Math.max(0, finalPaid - pointsPayBaht) * 100) / 100;
+        }
 
-      await this.database.db.insert(pg.sales).values({
-        id: sale.id,
-        billNo: sale.billNo,
-        branchId: sale.branchId,
-        terminalId: sale.terminalId,
-        shiftId: sale.shiftId ?? null,
-        customerId: sale.customerId ?? null,
-        customerName: sale.customerName ?? null,
-        subtotal: String(sale.subtotal),
-        discount: String(finalDiscount),
-        pointsRedeemed: Math.floor(sale.pointsRedeemed ?? 0),
-        pointsEarned: Math.floor(sale.pointsEarned ?? 0),
-        total: String(finalTotal),
-        paid: String(finalPaid),
-        change: String(sale.change ?? 0),
-        status: "completed",
-        createdAt: new Date(sale.createdAt),
-        syncedAt,
-      });
+        if (!Number.isFinite(finalTotal) || !Number.isFinite(finalDiscount)) {
+          rejected.push({
+            id: entry.id,
+            message: `invalid totals total=${sale.total} discount=${sale.discount}`,
+          });
+          continue;
+        }
 
-      for (const line of sale.lines ?? []) {
-        await this.database.db.insert(pg.saleLines).values({
-          id: line.id,
-          saleId: sale.id,
-          barcode: line.barcode,
-          productCode: line.productCode ?? null,
-          name: line.name,
-          qty: String(line.qty),
-          unit: line.unit,
-          unitPrice: String(line.unitPrice),
-          discount: String(line.discount ?? 0),
-          lineTotal: String(line.lineTotal),
+        const createdAtRaw = sale.createdAt;
+        const createdAt = new Date(createdAtRaw);
+        if (Number.isNaN(createdAt.getTime())) {
+          rejected.push({
+            id: entry.id,
+            message: `invalid createdAt=${String(createdAtRaw)}`,
+          });
+          continue;
+        }
+
+        let profitCols: {
+          profit: string;
+          costAmount: string;
+          knownRevenue: string;
+          missingRevenue: string;
+          missingLineCount: number;
+          estimatedProfit: string;
+          estimatedRevenue: string;
+        } = {
+          profit: "0",
+          costAmount: "0",
+          knownRevenue: "0",
+          missingRevenue: "0",
+          missingLineCount: (sale.lines ?? []).length,
+          estimatedProfit: "0",
+          estimatedRevenue: "0",
+        };
+        const profitById = new Map<
+          string,
+          {
+            netRevenue: number;
+            costStatus: string;
+            unitCost: number | null;
+            lineCost: number | null;
+            lineProfit: number | null;
+            pricePerKg: number | null;
+          }
+        >();
+        try {
+          const priced = await this.sales.snapshotProfit(
+            (sale.lines ?? []).map((line) => ({
+              id: line.id,
+              barcode: line.barcode,
+              productCode: line.productCode,
+              name: line.name,
+              qty: line.qty,
+              lineTotal: line.lineTotal,
+            })),
+            finalDiscount,
+          );
+          profitCols = {
+            profit: String(priced.profit),
+            costAmount: String(priced.costAmount),
+            knownRevenue: String(priced.knownRevenue),
+            missingRevenue: String(priced.missingRevenue),
+            missingLineCount: priced.missingLineCount,
+            estimatedProfit: String(priced.estimatedProfit),
+            estimatedRevenue: String(priced.estimatedRevenue),
+          };
+          for (const line of priced.lines) profitById.set(line.id, line);
+        } catch (err) {
+          this.logger.warn(
+            `sale ${sale.id} profit snapshot skipped: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+
+        await this.database.db.insert(pg.sales).values({
+          id: sale.id,
+          billNo: sale.billNo,
+          branchId: sale.branchId,
+          terminalId: sale.terminalId,
+          shiftId: sale.shiftId ?? null,
+          customerId: sale.customerId ?? null,
+          customerName: sale.customerName ?? null,
+          subtotal: String(sale.subtotal),
+          discount: String(finalDiscount),
+          pointsRedeemed: Math.floor(sale.pointsRedeemed ?? 0),
+          pointsEarned: Math.floor(sale.pointsEarned ?? 0),
+          total: String(finalTotal),
+          paid: String(finalPaid),
+          change: String(sale.change ?? 0),
+          status: "completed",
+          ...profitCols,
+          createdAt,
+          syncedAt,
         });
-      }
 
-      for (let i = 0; i < moneyPayments.length; i++) {
-        const p = moneyPayments[i];
-        await this.database.db.insert(pg.salePayments).values({
-          id: `${sale.id}:pay:${i}`,
-          saleId: sale.id,
-          method: p.method,
-          amount: String(p.amount),
-          tendered: p.tendered == null ? null : String(p.tendered),
-        });
-      }
-
-      if (sale.customerId) {
-        if (sale.pointsRedeemed > 0) {
-          await this.applyLedger({
-            id: `${sale.id}:redeem`,
-            customerId: sale.customerId,
+        for (const line of sale.lines ?? []) {
+          const priced = profitById.get(line.id);
+          await this.database.db.insert(pg.saleLines).values({
+            id: line.id,
             saleId: sale.id,
-            branchId: sale.branchId,
-            delta: -Math.floor(sale.pointsRedeemed),
-            reason: "sale_redeem",
-            createdAt: sale.createdAt,
+            barcode: line.barcode,
+            productCode: line.productCode ?? null,
+            name: line.name,
+            qty: String(line.qty),
+            unit: line.unit,
+            unitPrice: String(line.unitPrice),
+            discount: String(line.discount ?? 0),
+            lineTotal: String(line.lineTotal),
+            netRevenue: priced ? String(priced.netRevenue) : null,
+            costStatus: priced?.costStatus ?? "missing",
+            unitCost: priced?.unitCost == null ? null : String(priced.unitCost),
+            lineCost: priced?.lineCost == null ? null : String(priced.lineCost),
+            lineProfit:
+              priced?.lineProfit == null ? null : String(priced.lineProfit),
+            pricePerKg:
+              priced?.pricePerKg == null ? null : String(priced.pricePerKg),
+            kgPriced: priced ? 1 : 0,
           });
         }
-        if (sale.pointsEarned > 0) {
-          await this.applyLedger({
-            id: `${sale.id}:earn`,
-            customerId: sale.customerId,
+
+        // snapshot PromptPay ของสาขาตอน sync — เฉพาะเงินโอน (รัฐไม่เข้าเลขนี้)
+        let snapPromptPayId: string | null = null;
+        let snapPromptPayName: string | null = null;
+        const needsPromptSnap = moneyPayments.some(
+          (p) => p.method === "transfer",
+        );
+        if (needsPromptSnap && sale.branchId) {
+          const br = await this.database.db
+            .select({
+              promptPayId: pg.branches.promptPayId,
+              promptPayName: pg.branches.promptPayName,
+            })
+            .from(pg.branches)
+            .where(eq(pg.branches.id, sale.branchId))
+            .limit(1);
+          snapPromptPayId =
+            String(br[0]?.promptPayId ?? "").replace(/\D/g, "") || null;
+          snapPromptPayName = br[0]?.promptPayName?.trim() || null;
+        }
+
+        for (let i = 0; i < moneyPayments.length; i++) {
+          const p = moneyPayments[i];
+          const isTransfer = p.method === "transfer";
+          await this.database.db.insert(pg.salePayments).values({
+            id: `${sale.id}:pay:${i}`,
             saleId: sale.id,
-            branchId: sale.branchId,
-            delta: Math.floor(sale.pointsEarned),
-            reason: "sale_earn",
-            createdAt: sale.createdAt,
+            method: p.method,
+            amount: String(p.amount),
+            tendered: p.tendered == null ? null : String(p.tendered),
+            promptPayId: isTransfer ? snapPromptPayId : null,
+            promptPayName: isTransfer ? snapPromptPayName : null,
           });
         }
-      }
 
-      accepted += 1;
-      acceptedIds.push(entry.id);
-      newlyAccepted.push({ ...sale, total: finalTotal });
+        // แต้มสมาชิกพังแล้วอย่าให้ทั้งบิล sync ไม่ผ่าน
+        if (sale.customerId) {
+          if (sale.pointsRedeemed > 0) {
+            try {
+              await this.applyLedger({
+                id: `${sale.id}:redeem`,
+                customerId: sale.customerId,
+                saleId: sale.id,
+                branchId: sale.branchId,
+                delta: -Math.floor(sale.pointsRedeemed),
+                reason: "sale_redeem",
+                createdAt: sale.createdAt,
+              });
+            } catch (err) {
+              this.logger.warn(
+                `sale ${sale.id} redeem ledger skipped: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+            }
+          }
+          if (sale.pointsEarned > 0) {
+            try {
+              await this.applyLedger({
+                id: `${sale.id}:earn`,
+                customerId: sale.customerId,
+                saleId: sale.id,
+                branchId: sale.branchId,
+                delta: Math.floor(sale.pointsEarned),
+                reason: "sale_earn",
+                createdAt: sale.createdAt,
+              });
+            } catch (err) {
+              this.logger.warn(
+                `sale ${sale.id} earn ledger skipped: ${
+                  err instanceof Error ? err.message : String(err)
+                }`,
+              );
+            }
+          }
+        }
+
+        accepted += 1;
+        acceptedIds.push(entry.id);
+        newlyAccepted.push({ ...sale, total: finalTotal });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.error(
+          `acceptOutbox sale failed envelope=${entry.id}: ${message}`,
+        );
+        rejected.push({ id: entry.id, message });
+        // บิลอื่นในชุดยังรับต่อได้
+      }
     }
 
     if (newlyAccepted.length) {
@@ -456,11 +644,27 @@ export class SyncService {
       }
     }
 
-    const totalStored = await this.database.db.select().from(pg.sales);
+    // อย่า SELECT ทั้งตาราง sales — ทำให้ POST sync ช้า/timeout แล้ว POS ไม่ ack
+    const [stored] = await this.database.db
+      .select({ n: count() })
+      .from(pg.sales);
+    const totalStored = Number(stored?.n ?? 0);
+    appendSyncSalesLog({
+      event: "acceptOutbox",
+      n: entries?.length ?? 0,
+      accepted,
+      acceptedIds: acceptedIds.slice(0, 20),
+      rejected,
+      bills: (entries ?? [])
+        .slice(0, 20)
+        .map((e) => (e as { payload?: { billNo?: string } })?.payload?.billNo),
+      totalStored,
+    });
     return {
       accepted,
       acceptedIds,
-      totalStored: totalStored.length,
+      rejected,
+      totalStored,
     };
   }
 
@@ -492,7 +696,7 @@ export class SyncService {
   }
 
   async recentSalesCount() {
-    const rows = await this.database.db.select().from(pg.sales);
-    return rows.length;
+    const [row] = await this.database.db.select({ n: count() }).from(pg.sales);
+    return Number(row?.n ?? 0);
   }
 }

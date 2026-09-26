@@ -78,7 +78,7 @@ function loadRows() {
 
 watch(open, (v) => {
   if (!v) return;
-  void kickCashDrawer();
+  kickCashDrawer();
   loadRows();
   note.value = "";
   error.value = "";

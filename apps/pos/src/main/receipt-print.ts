@@ -19,7 +19,58 @@ export type PrintReceiptRequest = {
   method?: string;
   encoding?: string;
   openDrawer?: boolean;
+  /** data URL ของโลโก้ (วาดกลางบนสลิป GDI) */
+  logoDataUrl?: string;
 };
+
+function writeTempLogoFromDataUrl(dataUrl: string): string | null {
+  const raw = String(dataUrl || "").trim();
+  const m = /^data:image\/([a-zA-Z0-9+.-]+);base64,(.+)$/i.exec(
+    raw.replace(/\s/g, ""),
+  );
+  if (!m) return null;
+  const subtype = m[1].toLowerCase();
+  const ext =
+    subtype === "jpeg" || subtype === "jpg"
+      ? "jpg"
+      : subtype.includes("png")
+        ? "png"
+        : subtype.includes("gif")
+          ? "gif"
+          : subtype.includes("webp")
+            ? "webp"
+            : "png";
+  try {
+    const buf = Buffer.from(m[2], "base64");
+    if (!buf.length) return null;
+    const dir = join(app.getPath("temp"), "ap-pos-print");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, `logo-${randomBytes(6).toString("hex")}.${ext}`);
+    writeFileSync(file, buf);
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+/** แทรกบรรทัด IMG หลัง APSLIP2 เพื่อวาดโลโก้กลางบน */
+function injectLogoIntoSlipText(
+  textBody: string,
+  logoPath: string,
+  paperWidth: "58mm" | "80mm",
+): string {
+  // หน่วย Display = 1/100 นิ้ว · 58→สูง ~11mm กว้าง ~24mm · 80→สูง ~13mm กว้าง ~30mm
+  const maxH = paperWidth === "80mm" ? 52 : 44;
+  const maxW = paperWidth === "80mm" ? 118 : 94;
+  const imgLine = `IMG\t${logoPath}\t${maxH}\t${maxW}`;
+  const body = textBody.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  if (body.startsWith("APSLIP2")) {
+    const lines = body.split("\n");
+    lines.splice(1, 0, imgLine);
+    return lines.join("\n");
+  }
+  return `${imgLine}\n${body}`;
+}
 
 let previewWin: BrowserWindow | null = null;
 
@@ -91,16 +142,13 @@ async function printGdiWithFallback(
   let lastErr = "";
   for (const name of candidates) {
     try {
-      const drawerP = wantDrawer
-        ? kickCashDrawerBestEffort([name]).then((r) => {
-            if (!r.ok) console.warn("[ap-pos] drawer kick skipped:", r.error);
-            return r;
-          })
-        : Promise.resolve({ ok: true as const });
-      await Promise.all([
-        drawerP,
-        sendTextToWindowsPrinter(name, slipText, gdiOpts),
-      ]);
+      // เตะลิ้นชักคู่ขนาน — ไม่รอให้พิมพ์เสร็จ / ไม่ให้พิมพ์มารอเตะ
+      if (wantDrawer) {
+        void kickCashDrawerBestEffort([name]).then((r) => {
+          if (!r.ok) console.warn("[ap-pos] drawer kick skipped:", r.error);
+        });
+      }
+      await sendTextToWindowsPrinter(name, slipText, gdiOpts);
       const note =
         preferred && normalizePrinterKey(name) !== normalizePrinterKey(preferred)
           ? `ใช้「${name}」แทน「${preferred}」`
@@ -610,13 +658,44 @@ export async function printReceiptHtml(
   const wantSilent = req.silent !== false;
   const preferred = String(req.deviceName || "").trim();
   const wantDrawer = isWin() && req.openDrawer !== false;
-  const slipText = textBody || "AP POS\n(ไม่มีข้อความสลิป — อัปเดตแอป)";
+  let logoTemp: string | null = null;
+  if (req.logoDataUrl) {
+    logoTemp = writeTempLogoFromDataUrl(String(req.logoDataUrl));
+  }
+  const baseText = textBody || "AP POS\n(ไม่มีข้อความสลิป — อัปเดตแอป)";
+  const slipText =
+    logoTemp && textBody
+      ? injectLogoIntoSlipText(baseText, logoTemp, paperWidth)
+      : baseText;
   const gdiOpts = {
     paperWidthMm: (paperWidth === "80mm" ? 80 : 58) as 58 | 80,
     fontSizePt: paperWidth === "80mm" ? 8 : 7,
   };
 
+  const cleanupLogo = () => {
+    if (!logoTemp) return;
+    try {
+      unlinkSync(logoTemp);
+    } catch {
+      /* ignore */
+    }
+    logoTemp = null;
+  };
+
+  // เตะลิ้นชักทันที — ไม่รอ probe รายชื่อเครื่องพิมพ์ / สร้าง BrowserWindow
+  if (wantDrawer) {
+    void kickCashDrawerBestEffort([
+      preferred,
+      "XP-58C",
+      "XP-58",
+      "POS-58",
+    ]).then((r) => {
+      if (!r.ok) console.warn("[ap-pos] early drawer kick skipped:", r.error);
+    });
+  }
+
   // Fast path: Windows + ตั้งชื่อเครื่องแล้ว — validate รายชื่อก่อนพิมพ์
+  // (ลิ้นชักเตะไปแล้วด้านบน — ตรงนี้พิมพ์อย่างเดียว กันรอซ้ำ)
   if (isWin() && preferred && textBody) {
     const t0 = Date.now();
     let probe: BrowserWindow | null = null;
@@ -639,12 +718,13 @@ export async function printReceiptHtml(
           preferred,
           slipText,
           gdiOpts,
-          wantDrawer,
+          false,
         );
         if (gdi.ok) {
           console.log(
             `[ap-pos] GDI done ${Date.now() - t0}ms → ${gdi.used}`,
           );
+          cleanupLogo();
           return {
             ok: true,
             message: gdi.note
@@ -686,16 +766,6 @@ export async function printReceiptHtml(
     );
 
     if (!deviceName) {
-      // ยังเตะลิ้นชักด้วยชื่อที่รู้ — กันลิ้นชักไม่เปิดทั้งที่พิมพ์ไม่ได้
-      if (wantDrawer) {
-        const drawer = await kickCashDrawerBestEffort([
-          preferred,
-          "XP-58C",
-        ]);
-        if (!drawer.ok) {
-          console.warn("[ap-pos] drawer kick skipped:", drawer.error);
-        }
-      }
       return {
         ok: false,
         message:
@@ -711,7 +781,7 @@ export async function printReceiptHtml(
         deviceName,
         slipText,
         gdiOpts,
-        wantDrawer,
+        false,
       );
       if (gdi.ok) {
         const notes = [resolved.warning, gdi.note].filter(Boolean);
@@ -769,6 +839,7 @@ export async function printReceiptHtml(
         /* ignore */
       }
     }
+    cleanupLogo();
   }
 }
 

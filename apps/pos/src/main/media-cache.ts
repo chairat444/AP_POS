@@ -21,8 +21,13 @@ let runtimeApiBase = (
 
 /** renderer ตั้ง URL API จริง — อย่าใช้ localhost ที่ bake ตอน build */
 export function setApiBase(url: string) {
-  const t = String(url ?? "").trim().replace(/\/$/, "");
-  if (/^https?:\/\//i.test(t)) runtimeApiBase = t;
+  const t = String(url ?? "")
+    .trim()
+    .replace(/\/$/, "");
+  if (/^https?:\/\//i.test(t)) {
+    runtimeApiBase = t;
+    if (ready) rebindIndexToApiBase();
+  }
 }
 const SCHEME = "appos-media";
 const INDEX_FILE = "index.json";
@@ -47,8 +52,17 @@ function loadIndex() {
     const raw = JSON.parse(readFileSync(path, "utf8")) as IndexMap;
     index = {};
     for (const [k, file] of Object.entries(raw)) {
-      const abs = toAbsoluteMediaUrl(k) ?? k;
-      index[abs] = file;
+      if (!file) continue;
+      if (k.startsWith("/")) {
+        index[k] = file;
+        const abs = toAbsoluteMediaUrl(k);
+        if (abs) index[abs] = file;
+      } else {
+        const abs = toAbsoluteMediaUrl(k) ?? k;
+        index[abs] = file;
+        const pk = mediaPathKey(abs) ?? mediaPathKey(k);
+        if (pk) index[pk] = file;
+      }
     }
   } catch {
     index = {};
@@ -80,6 +94,82 @@ export function toAbsoluteMediaUrl(url: string): string | null {
   } catch {
     return abs;
   }
+}
+
+/** คีย์คงที่ตาม path — ไม่ผูก host (กันออฟไลน์พลาดเพราะ API base คนละตัว) */
+export function mediaPathKey(url: string): string | null {
+  const t = url.trim();
+  if (!t) return null;
+  if (
+    t.startsWith("data:") ||
+    t.startsWith(`${SCHEME}:`) ||
+    t.startsWith("file:") ||
+    t.startsWith("blob:")
+  ) {
+    return null;
+  }
+  try {
+    if (t.startsWith("http://") || t.startsWith("https://")) {
+      const p = new URL(t).pathname;
+      return p || null;
+    }
+    return t.startsWith("/") ? t : `/${t}`;
+  } catch {
+    return t.startsWith("/") ? t : null;
+  }
+}
+
+function putIndex(absOrPath: string, fileName: string) {
+  index[absOrPath] = fileName;
+  const pk = mediaPathKey(absOrPath);
+  if (pk) index[pk] = fileName;
+}
+
+function findCachedFile(url: string): string | null {
+  if (!cacheDir) return null;
+  const abs = toAbsoluteMediaUrl(url);
+  if (abs) {
+    const f = index[abs];
+    if (f && existsSync(join(cacheDir, f))) return f;
+  }
+  const pk = mediaPathKey(url) ?? (abs ? mediaPathKey(abs) : null);
+  if (pk) {
+    const f = index[pk];
+    if (f && existsSync(join(cacheDir, f))) return f;
+    for (const [k, file] of Object.entries(index)) {
+      if (!k.startsWith("http://") && !k.startsWith("https://")) continue;
+      try {
+        if (new URL(k).pathname === pk && existsSync(join(cacheDir, file))) {
+          putIndex(pk, file);
+          if (abs) putIndex(abs, file);
+          return file;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  return null;
+}
+
+/** ผูก path keys → absolute ภายใต้ API base ปัจจุบัน */
+function rebindIndexToApiBase() {
+  let changed = false;
+  const snapshot = Object.entries(index);
+  for (const [k, file] of snapshot) {
+    const pk = k.startsWith("/") ? k : mediaPathKey(k);
+    if (!pk) continue;
+    if (!index[pk] || index[pk] !== file) {
+      index[pk] = file;
+      changed = true;
+    }
+    const abs = toAbsoluteMediaUrl(pk);
+    if (abs && index[abs] !== file) {
+      index[abs] = file;
+      changed = true;
+    }
+  }
+  if (changed) saveIndex();
 }
 
 function fileNameFor(absUrl: string): string {
@@ -115,6 +205,7 @@ export function initMediaCache() {
   ensureDir(cacheDir);
   loadIndex();
   importBundledMediaSeed();
+  rebindIndexToApiBase();
   protocol.handle(SCHEME, (request) => {
     try {
       const u = new URL(request.url);
@@ -173,9 +264,9 @@ function importBundledMediaSeed() {
         copyFileSync(src, dest);
         copied += 1;
       }
-      if (!index[abs]) {
-        index[abs] = fileName;
-      }
+      putIndex(abs, fileName);
+      const pk = mediaPathKey(rawUrl) ?? mediaPathKey(abs);
+      if (pk) putIndex(pk, fileName);
     } catch (err) {
       console.warn("[media-cache] seed copy failed", fileName, err);
     }
@@ -188,11 +279,19 @@ function importBundledMediaSeed() {
   }
 }
 
-/** map absolute remote → appos-media URL */
+/** map absolute remote / path → appos-media URL */
 export function getMediaIndex(): IndexMap {
   const out: IndexMap = {};
-  for (const [abs, file] of Object.entries(index)) {
-    if (existsSync(join(cacheDir, file))) out[abs] = localProtocolUrl(file);
+  for (const [key, file] of Object.entries(index)) {
+    if (!existsSync(join(cacheDir, file))) continue;
+    const local = localProtocolUrl(file);
+    out[key] = local;
+    const pk = mediaPathKey(key);
+    if (pk) out[pk] = local;
+    if (key.startsWith("/")) {
+      const abs = toAbsoluteMediaUrl(key);
+      if (abs) out[abs] = local;
+    }
   }
   return out;
 }
@@ -201,16 +300,12 @@ export function getMediaIndex(): IndexMap {
 export function resolveCached(url: string | null | undefined): string | null {
   if (!url || !ready) return null;
   if (url.startsWith(`${SCHEME}:`)) return url;
-  const abs = toAbsoluteMediaUrl(url);
-  if (!abs) return null;
-  const file = index[abs];
+  const file = findCachedFile(url);
   if (!file) return null;
-  const full = join(cacheDir, file);
-  if (!existsSync(full)) {
-    delete index[abs];
-    saveIndex();
-    return null;
-  }
+  const abs = toAbsoluteMediaUrl(url);
+  if (abs) putIndex(abs, file);
+  const pk = mediaPathKey(url) ?? (abs ? mediaPathKey(abs) : null);
+  if (pk) putIndex(pk, file);
   return localProtocolUrl(file);
 }
 
@@ -219,8 +314,10 @@ async function downloadOne(
   opts?: { force?: boolean },
 ): Promise<string | null> {
   const force = Boolean(opts?.force);
-  const existing = index[absUrl];
-  if (!force && existing && existsSync(join(cacheDir, existing))) {
+  const existing = findCachedFile(absUrl);
+  if (!force && existing) {
+    putIndex(absUrl, existing);
+    saveIndex();
     return localProtocolUrl(existing);
   }
 
@@ -258,7 +355,7 @@ async function downloadOne(
         /* ignore */
       }
     }
-    index[absUrl] = fileName;
+    putIndex(absUrl, fileName);
     saveIndex();
     return localProtocolUrl(fileName);
   } catch (err) {
@@ -274,7 +371,7 @@ async function downloadOne(
 
 /**
  * ดาวน์โหลดหลาย URL ลง cache (จำกัด concurrency)
- * คืน map absoluteUrl → appos-media://...
+ * คืน map absoluteUrl + path → appos-media://...
  */
 export async function cacheUrls(
   urls: string[],
@@ -297,7 +394,11 @@ export async function cacheUrls(
       const idx = i++;
       const abs = list[idx]!;
       const local = await downloadOne(abs, { force });
-      if (local) out[abs] = local;
+      if (local) {
+        out[abs] = local;
+        const pk = mediaPathKey(abs);
+        if (pk) out[pk] = local;
+      }
     }
   }
 

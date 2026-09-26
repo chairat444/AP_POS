@@ -527,15 +527,51 @@ async function openEditById(id: string) {
   }
 }
 
+async function openEditByCodeOrBarcode(opts: {
+  code?: string;
+  barcode?: string;
+}) {
+  const code = opts.code?.trim();
+  const barcode = opts.barcode?.trim();
+  const byCode = code
+    ? rows.value.find((p) => (p.productCode ?? "").trim() === code)
+    : undefined;
+  const byBarcode = barcode
+    ? rows.value.find((p) => (p.barcode ?? "").trim() === barcode) ??
+      ( /^9\d{12}$/.test(barcode)
+        ? rows.value.find((p) => (p.barcode ?? "").trim() === barcode.slice(1, 7))
+        : undefined)
+    : undefined;
+
+  // บิลบางใบ SKU กับบาร์โค้ดคนละตัว — ของสด 9xxxxx เชื่อบาร์โค้ด
+  let row = byCode ?? byBarcode;
+  if (byCode && byBarcode && byCode.id !== byBarcode.id) {
+    const b = barcode ?? "";
+    if (/^9\d{5}$/.test(b) || /^9\d{12}$/.test(b)) row = byBarcode;
+    else row = byBarcode;
+  }
+  if (row) {
+    openEdit(row);
+    return;
+  }
+  error.value = "ไม่พบสินค้าที่ต้องการแก้ไข";
+}
+
 onMounted(async () => {
   await load();
   const route = useRoute();
   const editId = String(route.query.edit ?? "").trim();
+  const code = String(route.query.code ?? "").trim();
+  const barcode = String(route.query.barcode ?? "").trim();
   const from = String(route.query.from ?? "").trim();
   if (from === "quick") {
     returnTo.value = "/products/quick";
   }
-  if (editId) {
+  // มี code/barcode ให้ resolve จากนั้นก่อน — กัน edit id จากบิลที่ SKU ผิด
+  if (code || barcode) {
+    await openEditByCodeOrBarcode({ code, barcode });
+    await navigateTo({ path: "/products", query: {} }, { replace: true });
+  } else if (editId) {
     await openEditById(editId);
     await navigateTo({ path: "/products", query: {} }, { replace: true });
   }

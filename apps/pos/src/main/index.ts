@@ -188,10 +188,18 @@ function setupIpc() {
     await localDb.ackOutbox(ids);
     return true;
   });
+  ipcMain.handle(
+    "db:outbox:markErrors",
+    async (_e, errors: Array<{ id: string; message: string }>) => {
+      await localDb.markOutboxErrors(errors ?? []);
+      return true;
+    },
+  );
   ipcMain.handle("db:outbox:count", async () => localDb.pendingOutboxCount());
   ipcMain.handle("db:sales:purgeSynced", async () =>
     localDb.purgeSyncedSales(),
   );
+  ipcMain.handle("db:sales:wipeTest", async () => localDb.wipeTestSalesData());
   ipcMain.handle("db:sales:listLocal", async (_e, opts) =>
     localDb.listLocalSales(opts),
   );
@@ -200,6 +208,9 @@ function setupIpc() {
   );
   ipcMain.handle("db:sales:requeueUnsynced", async () =>
     localDb.requeueUnsyncedSales(),
+  );
+  ipcMain.handle("db:sales:listPendingEnvelopes", async () =>
+    localDb.listPendingSaleEnvelopes(),
   );
   ipcMain.handle("db:meta:get", async (_e, key: string) => localDb.getMeta(key));
   ipcMain.handle("db:meta:set", async (_e, key: string, value: string) => {
@@ -259,6 +270,7 @@ function setupIpc() {
         silent?: boolean;
         deviceName?: string;
         openDrawer?: boolean;
+        logoDataUrl?: string;
       },
     ) => {
       return receiptPrint.printReceiptHtml({
@@ -269,6 +281,10 @@ function setupIpc() {
         deviceName:
           typeof req?.deviceName === "string" ? req.deviceName.trim() : "",
         openDrawer: req?.openDrawer !== false,
+        logoDataUrl:
+          typeof req?.logoDataUrl === "string" && req.logoDataUrl.startsWith("data:")
+            ? req.logoDataUrl
+            : undefined,
       });
     },
   );
@@ -749,6 +765,10 @@ app.whenReady().then(async () => {
   try {
     const path = await localDb.getSqlitePath();
     console.log("[ap-pos] SQLite ready:", path);
+    const apiBase = await localDb.getMeta("pos-api-base");
+    if (apiBase?.trim()) {
+      mediaCache.setApiBase(apiBase.trim());
+    }
   } catch (err) {
     console.error("[ap-pos] SQLite init failed — continuing without local DB", err);
   }

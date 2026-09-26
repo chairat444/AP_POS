@@ -18,13 +18,17 @@ import ConfirmModal from "../components/ConfirmModal.vue";
 import StaffAlert from "../components/StaffAlert.vue";
 import SaleSummaryModal from "../components/SaleSummaryModal.vue";
 import PosConfigModal from "../components/PosConfigModal.vue";
+import { normalizeScanKeyboardInput } from "../utils/scan-keyboard";
 import {
   applyPrinterConfigFromTerminal,
   cacheLocalProductImages,
   ensureProductImagesFromPull,
   ensureSettingsMediaCached,
   getDeviceConfig,
+  envMode,
   isApiOfflineKnown,
+  isEnvModeChosen,
+  isTestMode,
   loadCachedMembers,
   loadCachedProducts,
   loadCachedPromos,
@@ -37,7 +41,9 @@ import {
   resolveImage,
   syncPullMasterData,
   syncPushOutbox,
+  savePosEnvMode,
 } from "../services/sync";
+import { primeDrawerFromPrinterConfig } from "../services/drawer";
 import { formatMoney } from "../utils/format";
 import fallbackLogo from "../assets/store-logo.png";
 import { PLACEHOLDER_IMAGE } from "../data/demo-products";
@@ -319,7 +325,8 @@ async function runBackgroundSync() {
     }
   }
 
-  // push แยกจาก pull — ปิดรอบออฟไลน์ค้าง outbox ไว้ ส่งตอนเน็ตกลับ / เปิดรอบวันใหม่
+  // push แยกจาก pull — โหมดทดสอบไม่ส่งขึ้นเซิร์ฟเวอร์
+  if (isTestMode()) return;
   try {
     await syncPushOutbox({ force: !isApiOfflineKnown() });
     if (window.apPos?.db?.purgeSyncedSales) {
@@ -751,7 +758,8 @@ function onScanSubmit() {
       focusScan();
       return;
     }
-    const raw = scanBuffer.value.trim();
+    // แป้นไทย Kedmanee → US (สแกนเนอร์ไม่ต้องสลับ EN)
+    const raw = normalizeScanKeyboardInput(scanBuffer.value);
     // กด Enter → เคลียร์เลขบาร์ทันที (เช่น พิมพ์ 25 แล้ว Enter)
     clearScanBuffer();
     if (!raw) {
@@ -790,7 +798,11 @@ function onScanSubmit() {
 }
 
 function onScanInput() {
-  const raw = scanBuffer.value;
+  const raw = normalizeScanKeyboardInput(scanBuffer.value);
+  // โชว์ค่าที่แปลงแล้วในช่อง — กันค้างตัวไทยตอนสแกนต่อ
+  if (raw !== scanBuffer.value.trim()) {
+    scanBuffer.value = raw;
+  }
   // พิมพ์ 3* แล้วหยุด — ตั้งคูณทันที (ยังไม่ต้อง Enter)
   const m = raw.match(/^(\d+)\*$/);
   if (m) {
@@ -908,6 +920,24 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
+function chooseEnvMode(mode: "prod" | "test") {
+  void savePosEnvMode(mode).then(() => {
+    if (!isOpen.value && !exiting.value) openShiftOpen.value = true;
+  });
+}
+
+async function onTestDataReset() {
+  cart.clearBill({ reason: "hold" });
+  try {
+    await members.replaceAll(await loadCachedMembers());
+    await cart.loadCatalog();
+  } catch {
+    /* pull แล้วใน config */
+  }
+  statusMessage.value = "ล้างข้อมูลทดสอบแล้ว · พร้อมทดสอบใหม่";
+  focusScan();
+}
+
 onMounted(() => {
   window.addEventListener("keydown", onKeydown, true);
   void members.loadLocal();
@@ -916,6 +946,7 @@ onMounted(() => {
   });
   void (async () => {
     await loadMediaIndex();
+    void primeDrawerFromPrinterConfig();
     const [promos, cachedSettings] = await Promise.all([
       loadCachedPromos(),
       loadCachedSettings(),
@@ -955,6 +986,7 @@ onMounted(() => {
     }
   })();
   // เปิดระบบมาถ้ายังไม่เปิดรอบ → หน้า PIN (โฟกัสช่องรหัสใน OpenShiftModal)
+  if (!isEnvModeChosen()) return;
   if (!isOpen.value && !exiting.value) {
     openShiftOpen.value = true;
   } else {
@@ -998,6 +1030,33 @@ onUnmounted(() => {
       <div class="scan-toast__body">
         <strong>{{ scanToast.title }}</strong>
         <span v-if="scanToast.detail">{{ scanToast.detail }}</span>
+      </div>
+    </div>
+
+    <div
+      v-if="!envMode"
+      class="env-pick"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="env-pick-title"
+      @click.stop
+    >
+      <div class="env-pick__card">
+        <h2 id="env-pick-title">เลือกโหมดเครื่องนี้</h2>
+        <p>
+          ดึงสินค้าและแต้มจากเซิร์ฟเวอร์ได้ทั้งสองโหมด ·
+          โหมดทดสอบจะไม่ส่งบิล กะ หรือสมาชิกขึ้นเซิร์ฟเวอร์
+        </p>
+        <div class="env-pick__actions">
+          <button type="button" class="env-pick__btn env-pick__btn--prod" @click="chooseEnvMode('prod')">
+            ใช้งานจริง
+            <span>ส่งข้อมูลขึ้นเซิร์ฟเวอร์ตามปกติ</span>
+          </button>
+          <button type="button" class="env-pick__btn env-pick__btn--test" @click="chooseEnvMode('test')">
+            ทดสอบ
+            <span>ขายในเครื่องได้ · ไม่ส่งขึ้นเซิร์ฟเวอร์</span>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -1272,6 +1331,9 @@ onUnmounted(() => {
         ⚙
       </button>
       <span>AP POS — Version {{ appVersion }}</span>
+      <span v-if="envMode === 'test'" class="status-test-badge">
+        ทดสอบ · ไม่ส่งขึ้นเซิร์ฟเวอร์
+      </span>
       <span class="status-bar__device" :title="`${device.branchId} / ${device.terminalId}`">
         {{ device.branchName }} · {{ device.terminalName || "เครื่อง POS" }}
         <template v-if="!device.setupDone"> · ยังไม่ลงทะเบียน</template>
@@ -1327,6 +1389,10 @@ onUnmounted(() => {
       :hint="alertHint"
       @close="focusScan"
     />
-    <PosConfigModal v-model:open="configOpen" @saved="focusScan" />
+    <PosConfigModal
+      v-model:open="configOpen"
+      @saved="focusScan"
+      @test-reset="onTestDataReset"
+    />
   </div>
 </template>

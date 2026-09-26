@@ -35,6 +35,48 @@ export function getDefaultApiBase() {
   return DEFAULT_API_BASE;
 }
 
+export type PosEnvMode = "prod" | "test";
+
+const ENV_MODE_META = "pos-env-mode";
+
+/** null = ยังไม่เลือก (เครื่องใหม่) */
+export const envMode = ref<PosEnvMode | null>(null);
+
+export function isTestMode() {
+  return envMode.value === "test";
+}
+
+export function isEnvModeChosen() {
+  return envMode.value === "prod" || envMode.value === "test";
+}
+
+export async function loadPosEnvMode() {
+  if (!window.apPos?.db?.getMeta) return;
+  try {
+    const raw = (await window.apPos.db.getMeta(ENV_MODE_META))?.trim();
+    if (raw === "test" || raw === "prod") {
+      envMode.value = raw;
+      return;
+    }
+    const device = await getDeviceConfig();
+    if (device.setupDone) {
+      envMode.value = "prod";
+      await window.apPos.db.setMeta?.(ENV_MODE_META, "prod");
+      return;
+    }
+    envMode.value = null;
+  } catch {
+    envMode.value = null;
+  }
+}
+
+export async function savePosEnvMode(mode: PosEnvMode) {
+  envMode.value = mode;
+  if (window.apPos?.db?.setMeta) {
+    await window.apPos.db.setMeta(ENV_MODE_META, mode);
+  }
+}
+
 /** bump เมื่อ media cache พร้อม — ให้ computed ที่อ่าน epoch รีเรนเดอร์ */
 export const mediaCacheEpoch = ref(0);
 
@@ -195,7 +237,7 @@ type SyncEnvelope =
       payload: SyncedAuditPayload;
     };
 
-/** remote absolute URL → appos-media:// (โหลดจากดิสก์ตอนออฟไลน์) */
+/** remote absolute URL / path → appos-media:// (โหลดจากดิสก์ตอนออฟไลน์) */
 const mediaLocalByRemote = new Map<string, string>();
 
 const MEDIA_FP_PREFIX = "media-fp:";
@@ -225,11 +267,73 @@ function toAbsoluteMediaUrl(url: string): string | null {
   }
 }
 
+/** คีย์คงที่ตาม path — ไม่ผูก host */
+function mediaPathKey(url: string): string | null {
+  const t = url.trim();
+  if (!t) return null;
+  if (
+    t.startsWith("data:") ||
+    t.startsWith("appos-media:") ||
+    t.startsWith("blob:")
+  ) {
+    return null;
+  }
+  try {
+    if (t.startsWith("http://") || t.startsWith("https://")) {
+      return new URL(t).pathname || null;
+    }
+    return t.startsWith("/") ? t : `/${t}`;
+  } catch {
+    return t.startsWith("/") ? t : null;
+  }
+}
+
+function lookupLocalMedia(url: string): string | undefined {
+  const abs = toAbsoluteMediaUrl(url);
+  if (abs) {
+    const hit = mediaLocalByRemote.get(abs);
+    if (hit) return hit;
+  }
+  const pathKey = mediaPathKey(url) ?? (abs ? mediaPathKey(abs) : null);
+  if (!pathKey) return undefined;
+  const byPath = mediaLocalByRemote.get(pathKey);
+  if (byPath) {
+    if (abs) mediaLocalByRemote.set(abs, byPath);
+    return byPath;
+  }
+  for (const [remote, local] of mediaLocalByRemote) {
+    if (!remote.startsWith("http://") && !remote.startsWith("https://")) {
+      continue;
+    }
+    try {
+      if (new URL(remote).pathname === pathKey) {
+        mediaLocalByRemote.set(pathKey, local);
+        if (abs) mediaLocalByRemote.set(abs, local);
+        return local;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return undefined;
+}
+
 function rememberMediaMap(map: Record<string, string>) {
   let added = 0;
   for (const [remote, local] of Object.entries(map)) {
-    if (remote && local && mediaLocalByRemote.get(remote) !== local) {
+    if (!remote || !local) continue;
+    if (mediaLocalByRemote.get(remote) !== local) {
       mediaLocalByRemote.set(remote, local);
+      added++;
+    }
+    const pathKey = mediaPathKey(remote);
+    if (pathKey && mediaLocalByRemote.get(pathKey) !== local) {
+      mediaLocalByRemote.set(pathKey, local);
+      added++;
+    }
+    const abs = remote.startsWith("/") ? toAbsoluteMediaUrl(remote) : null;
+    if (abs && mediaLocalByRemote.get(abs) !== local) {
+      mediaLocalByRemote.set(abs, local);
       added++;
     }
   }
@@ -266,7 +370,8 @@ export async function ensureMediaCached(
   opts?: { fingerprint?: boolean; force?: boolean },
 ): Promise<boolean> {
   if (!window.apPos?.media?.cache) return false;
-  // ออฟไลน์ที่รู้แล้ว — อย่าพยายามดาวน์โหลด (กันค้างตอนเปิดแอป)
+  // โหลดดัชนีจากดิสก์ก่อนเสมอ — ออฟไลน์ก็ต้องเห็นรูปในเครื่อง
+  await loadMediaIndex();
   if (isApiOfflineKnown()) return false;
   const list = [
     ...new Set(
@@ -275,14 +380,12 @@ export async function ensureMediaCached(
   ];
   if (!list.length) return false;
 
-  await loadMediaIndex();
-
   const force = Boolean(opts?.force);
   const missing: string[] = [];
   for (const u of list) {
     const abs = toAbsoluteMediaUrl(u);
     if (!abs) continue;
-    if (force || !mediaLocalByRemote.has(abs)) missing.push(abs);
+    if (force || !lookupLocalMedia(u)) missing.push(abs);
   }
 
   const useFp = !force && opts?.fingerprint !== false;
@@ -417,15 +520,14 @@ export function resolveImage(url: string | null | undefined, fallback: string) {
   ) {
     return url;
   }
-  const abs = toAbsoluteMediaUrl(url);
-  if (abs) {
-    const local = mediaLocalByRemote.get(abs);
-    if (local) {
-      // epoch กัน Electron ค้างรูปเดิมเมื่อไฟล์ชื่อเดิมถูกเขียนทับ
-      const sep = local.includes("?") ? "&" : "?";
-      return `${local}${sep}e=${mediaCacheEpoch.value}`;
-    }
+  const local = lookupLocalMedia(url);
+  if (local) {
+    // epoch กัน Electron ค้างรูปเดิมเมื่อไฟล์ชื่อเดิมถูกเขียนทับ
+    const sep = local.includes("?") ? "&" : "?";
+    return `${local}${sep}e=${mediaCacheEpoch.value}`;
   }
+  // ออฟไลน์แล้วไม่มีในเครื่อง — อย่าชี้ HTTP (จะพังแล้วกลายเป็น default)
+  if (isApiOfflineKnown()) return fallback;
   if (url.startsWith("http://") || url.startsWith("https://")) {
     return url;
   }
@@ -440,11 +542,13 @@ export function resolveAdMediaUrl(
   url: string,
   type: "image" | "video",
 ): string {
-  const abs = toAbsoluteMediaUrl(url);
-  const cached = abs ? mediaLocalByRemote.get(abs) : undefined;
+  const cached = lookupLocalMedia(url);
   if (type === "video") {
-    if (abs && (abs.startsWith("http://") || abs.startsWith("https://"))) {
-      return abs;
+    if (!isApiOfflineKnown()) {
+      const abs = toAbsoluteMediaUrl(url);
+      if (abs && (abs.startsWith("http://") || abs.startsWith("https://"))) {
+        return abs;
+      }
     }
     if (cached) return cached;
     return resolveImage(url, "");
@@ -577,6 +681,9 @@ async function postJson<T>(
   body: unknown,
   timeoutMs = 4000,
 ): Promise<T> {
+  if (isTestMode()) {
+    throw new Error("โหมดทดสอบ — ไม่ส่งขึ้นเซิร์ฟเวอร์");
+  }
   const res = await fetchWithTimeout(
     url,
     {
@@ -727,6 +834,38 @@ export async function claimThisTerminal(opts: {
       ok: false,
       message: "ออฟไลน์ และไม่พบเครื่องนี้ในแคช — ต้องเชื่อมต่อ API ครั้งหนึ่งก่อน",
     };
+  }
+
+  if (isTestMode()) {
+    try {
+      const list = await loadTerminals(opts.branchId);
+      const hit = list.find((t) => t.id === opts.id && t.active !== false);
+      if (!hit) {
+        return {
+          ok: false,
+          message: "โหมดทดสอบ — ไม่พบเครื่องนี้ในระบบ (ไม่ได้ส่งขึ้นเซิร์ฟเวอร์)",
+        };
+      }
+      await applyPrinterConfigFromTerminal(hit);
+      const devicePatch = {
+        branchId: hit.branchId || opts.branchId,
+        terminalId: hit.id,
+        terminalName: hit.name,
+        setupDone: true as const,
+      };
+      const device = window.apPos?.db?.setDevice
+        ? await window.apPos.db.setDevice(devicePatch)
+        : { ...(await getDeviceConfig()), ...devicePatch };
+      return { ok: true, device };
+    } catch (e) {
+      return {
+        ok: false,
+        message:
+          e instanceof Error
+            ? e.message
+            : "โหมดทดสอบ — โหลดเครื่องไม่สำเร็จ",
+      };
+    }
   }
 
   try {
@@ -1116,6 +1255,9 @@ export async function createMember(input: {
   if (!(await isApiReachable(1200))) {
     throw new Error("ต้องเชื่อมต่อเซิร์ฟเวอร์ถึงจะเพิ่มสมาชิกได้");
   }
+  if (isTestMode()) {
+    throw new Error("โหมดทดสอบ — เพิ่มสมาชิกขึ้นเซิร์ฟเวอร์ไม่ได้");
+  }
 
   // /sync/members เป็น Public สำหรับ POS — /members ต้อง login Admin
   const created = await postJson<{
@@ -1144,6 +1286,7 @@ export async function createMember(input: {
 /** ดันสมาชิกค้างจากรุ่นเก่า (เคยสร้างออฟไลน์ได้) ขึ้นเซิร์ฟเวอร์ */
 export async function flushPendingMemberCreates(): Promise<number> {
   if (!window.apPos?.db) return 0;
+  if (isTestMode()) return 0;
   if (!(await isApiReachable(1000))) return 0;
   const pending = await loadPendingMemberCreates();
   if (!pending.length) return 0;
@@ -1188,7 +1331,7 @@ export async function flushPendingMemberCreates(): Promise<number> {
 
 export async function enqueueSale(payload: SyncedSalePayload) {
   if (!window.apPos?.db) return;
-  await window.apPos.db.saveSale(payload);
+  await window.apPos.db.saveSale(toIpcPlain(payload));
 }
 
 /** กัน Vue proxy / ค่าที่ clone ไม่ได้ ตอนส่งผ่าน Electron IPC */
@@ -1204,7 +1347,8 @@ export async function enqueueSaleAndSync(payload: SyncedSalePayload) {
       const online = await refreshApiOnline({ attempts: 1, timeoutMs: 700 });
       if (!online) return;
     }
-    await syncPushOutbox({ force: !isApiOfflineKnown() });
+    // force เสมอเมื่อถึงจุดนี้ — กันแคช offline ค้างแล้วไม่ยิง
+    await syncPushOutbox({ force: true, timeoutMs: 15_000 });
   } catch {
     // offline / API พัง — ค้างใน outbox แล้วค่อย sync รอบถัดไป
   }
@@ -1262,7 +1406,12 @@ export async function loadPosNetworkConfig() {
       import.meta.env.VITE_ADMIN_URL as string | undefined
     )?.trim();
     if (envAdmin) runtimeAdminUrl = envAdmin.replace(/\/$/, "");
-    void window.apPos?.media?.setApiBase?.(getApiBase());
+    try {
+      await window.apPos?.media?.setApiBase?.(getApiBase());
+    } catch {
+      /* ignore */
+    }
+    await loadPosEnvMode();
     return;
   }
 
@@ -1275,7 +1424,12 @@ export async function loadPosNetworkConfig() {
   } catch {
     /* ignore */
   }
-  void window.apPos?.media?.setApiBase?.(getApiBase());
+  try {
+    await window.apPos?.media?.setApiBase?.(getApiBase());
+  } catch {
+    /* ignore */
+  }
+  await loadPosEnvMode();
 }
 
 export async function savePosNetworkConfig(opts: {
@@ -1296,7 +1450,11 @@ export async function savePosNetworkConfig(opts: {
     await window.apPos.db.setMeta(API_BASE_META, api);
     await window.apPos.db.setMeta(ADMIN_URL_META, admin);
   }
-  void window.apPos?.media?.setApiBase?.(api);
+  try {
+    await window.apPos?.media?.setApiBase?.(api);
+  } catch {
+    /* ignore */
+  }
   apiOnlineCached = null;
 }
 
@@ -1375,9 +1533,18 @@ export async function enqueueShiftAndSync(
     pushTimeoutMs?: number;
     onlineDeadlineMs?: number;
   },
-): Promise<{ synced: boolean; pending: number; error?: string }> {
+): Promise<{
+  synced: boolean;
+  pending: number;
+  error?: string;
+  localOnly?: boolean;
+  conflict?: boolean;
+}> {
   const plain = toIpcPlain(payload);
   await enqueueShift(plain);
+  if (isTestMode()) {
+    return { synced: true, pending: 0, localOnly: true };
+  }
   const outboxId = `${plain.id}:shift:outbox`;
 
   if (!opts?.awaitIfOnline) {
@@ -1399,12 +1566,32 @@ export async function enqueueShiftAndSync(
         continue;
       }
       markApiOnline();
-      const data = await postJson<{ accepted?: string[] }>(
+      const data = await postJson<{
+        accepted?: string[];
+        rejected?: Array<{ id: string; message: string }>;
+      }>(
         `${getApiBase()}/sync/shifts`,
         { shifts: [plain] },
         pushTimeoutMs,
       );
       const accepted = Array.isArray(data.accepted) ? data.accepted : [];
+      const rejected = Array.isArray(data.rejected) ? data.rejected : [];
+      const rejectHit = rejected.find((r) => r.id === plain.id);
+      if (rejectHit) {
+        lastError = rejectHit.message || "พนักงานเปิดรอบอยู่เครื่องอื่นแล้ว";
+        // อย่าค้าง outbox วนซ้ำ — เซิร์ฟปฏิเสธชัดแล้ว
+        try {
+          await window.apPos?.db?.ackOutbox?.([outboxId]);
+        } catch {
+          /* ignore */
+        }
+        return {
+          synced: false,
+          pending: await pendingOutboxCount().catch(() => 0),
+          error: lastError,
+          conflict: true,
+        };
+      }
       // กัน POST สำเร็จแต่ ack ไม่ทัน แล้ว flush ส่งซ้ำทันที — รอ ack ก่อน
       if (accepted.includes(plain.id) || accepted.length > 0) {
         try {
@@ -1568,6 +1755,27 @@ export async function syncPullMasterData() {
   return data;
 }
 
+/** ล้างบิล/กะ/outbox ในเครื่อง แล้วดึงสมาชิก (แต้ม) จากเซิร์ฟเวอร์ใหม่ */
+export async function clearTestLocalData(): Promise<{
+  sales: number;
+  pulled: boolean;
+}> {
+  if (!isTestMode()) {
+    throw new Error("ล้างข้อมูลได้เฉพาะโหมดทดสอบ");
+  }
+  const wiped = (await window.apPos?.db?.wipeTestSales?.()) ?? { sales: 0 };
+  let pulled = false;
+  try {
+    await window.apPos?.db?.setMeta?.("sync-cursor", "");
+    markApiOnlineCacheCleared();
+    await syncPullMasterData();
+    pulled = true;
+  } catch {
+    pulled = false;
+  }
+  return { sales: wiped.sales, pulled };
+}
+
 export async function loadCachedPromos(): Promise<
   NonNullable<BootstrapResponse["promos"]>
 > {
@@ -1613,12 +1821,53 @@ export async function fetchSettingsFromApi(): Promise<
   }
 }
 
+/** ตัดอักขระที่ทำให้ proxy/WAF บางตัวตอบ 403 */
+function scrubText(s: unknown, hard = false): string {
+  let t = String(s ?? "");
+  t = t.replace(/\u0000/g, "").replace(/[\u200B-\u200D\uFEFF]/g, "");
+  // Edge WAF หน้า HTTPS บล็อก substring ไทยบางตัว — แทรก "-" ให้อ่านได้เหมือนเดิม
+  // known: ตะเกียบ → ตะเกีย | …เจี้ยวสูตร → วสูตร | ฉั่วฮะเส็ง → วฮะเ
+  t = t
+    .replace(/ตะเกีย/g, "ตะ-เกีย")
+    .replace(/วสูตร/g, "ว-สูตร")
+    .replace(/วฮะเ/g, "วฮะ-เ");
+  if (hard) {
+    t = t.replace(/[^\u0E00-\u0E7Fa-zA-Z0-9\s.,\-+/%()]/g, " ").replace(/\s+/g, " ").trim();
+  }
+  return t.slice(0, hard ? 80 : 200);
+}
+
+function sanitizeSaleEnvelope(env: SyncEnvelope, hard = false): SyncEnvelope {
+  if (env.type !== "sale") return env;
+  const p = env.payload;
+  return {
+    ...env,
+    payload: {
+      ...p,
+      billNo: scrubText(p.billNo, false),
+      customerName: p.customerName ? scrubText(p.customerName, hard) : p.customerName,
+      lines: (p.lines ?? []).map((l) => ({
+        ...l,
+        name: scrubText(l.name, hard) || "รายการ",
+        barcode: scrubText(l.barcode, false).slice(0, 64) || "0",
+        unit: scrubText(l.unit, hard) || "ชิ้น",
+        productCode: l.productCode
+          ? scrubText(l.productCode, false).slice(0, 64)
+          : l.productCode,
+      })),
+    },
+  };
+}
+
 export async function syncPushOutbox(opts?: {
   timeoutMs?: number;
   /** true = ส่งแม้แคชบอกว่า offline (ใช้ตอนปิดรอบหลัง probe แล้ว) */
   force?: boolean;
+  /** จำนวนบิลต่อ request — ชุดใหญ่ทำให้ timeout / proxy ตัด */
+  saleChunkSize?: number;
 }) {
   if (!window.apPos?.db) return { accepted: 0 };
+  if (isTestMode()) return { accepted: 0 };
   if (!opts?.force && isApiOfflineKnown()) return { accepted: 0 };
 
   try {
@@ -1635,28 +1884,86 @@ export async function syncPushOutbox(opts?: {
   }
 
   const outbox = (await window.apPos.db.listOutbox()) as SyncEnvelope[];
-  if (!outbox.length) return { accepted: 0 };
+  const timeoutMs = opts?.timeoutMs ?? 20_000;
+  const chunkSize = Math.max(1, opts?.saleChunkSize ?? 1);
 
-  const timeoutMs = opts?.timeoutMs ?? 8_000;
-  const sales = outbox.filter((e) => e.type === "sale");
+  // บังคับดึงจากตาราง sales — กัน payload outbox เก่าที่ type พังแล้วไม่ถูกส่ง
+  let sales = outbox.filter((e) => e.type === "sale");
+  try {
+    const pendingEnvs =
+      (await window.apPos.db.listPendingSaleEnvelopes?.()) ?? [];
+    if (pendingEnvs.length) {
+      const byId = new Map(sales.map((e) => [e.id, e]));
+      for (const env of pendingEnvs) {
+        byId.set(env.id, env as SyncEnvelope);
+      }
+      sales = [...byId.values()];
+    }
+  } catch {
+    /* keep sales from outbox */
+  }
+
+  if (!outbox.length && !sales.length) return { accepted: 0 };
+
   const shifts = outbox.filter((e) => e.type === "shift");
   const audits = outbox.filter((e) => e.type === "audit");
   const acceptedIds: string[] = [];
+  const errorMarks: Array<{ id: string; message: string }> = [];
   let anyOk = false;
   let anyFail = false;
 
   if (sales.length) {
-    try {
-      const data = await postJson<{ accepted: number; acceptedIds: string[] }>(
-        `${getApiBase()}/sync/sales`,
-        { sales },
-        timeoutMs,
-      );
-      acceptedIds.push(...(data.acceptedIds ?? []));
-      anyOk = true;
-    } catch {
-      anyFail = true;
-      // keep sales in outbox
+    for (let i = 0; i < sales.length; i += chunkSize) {
+      const chunk = sales.slice(i, i + chunkSize).map(sanitizeSaleEnvelope);
+      try {
+        const data = await postJson<{
+          accepted: number;
+          acceptedIds: string[];
+          rejected?: Array<{ id: string; message: string }>;
+        }>(`${getApiBase()}/sync/sales`, { sales: chunk }, timeoutMs);
+        acceptedIds.push(...(data.acceptedIds ?? []));
+        for (const r of data.rejected ?? []) {
+          if (r?.id)
+            errorMarks.push({
+              id: r.id,
+              message: r.message || "เซิร์ฟไม่รับบิล",
+            });
+        }
+        anyOk = true;
+      } catch (e) {
+        anyFail = true;
+        const msg = e instanceof Error ? e.message : "ส่งบิลไม่สำเร็จ";
+        // 403 จาก proxy บางตัว — ลองส่งซ้ำทีละใบแบบ sanitize หนัก
+        if (/403/.test(msg) && chunk.length === 1) {
+          try {
+            const retry = [sanitizeSaleEnvelope(chunk[0], true)];
+            const data = await postJson<{
+              accepted: number;
+              acceptedIds: string[];
+              rejected?: Array<{ id: string; message: string }>;
+            }>(`${getApiBase()}/sync/sales`, { sales: retry }, timeoutMs);
+            acceptedIds.push(...(data.acceptedIds ?? []));
+            for (const r of data.rejected ?? []) {
+              if (r?.id)
+                errorMarks.push({
+                  id: r.id,
+                  message: r.message || "เซิร์ฟไม่รับบิล",
+                });
+            }
+            anyOk = true;
+            continue;
+          } catch (e2) {
+            const msg2 = e2 instanceof Error ? e2.message : msg;
+            for (const env of chunk) {
+              errorMarks.push({ id: env.id, message: msg2 });
+            }
+            continue;
+          }
+        }
+        for (const env of chunk) {
+          errorMarks.push({ id: env.id, message: msg });
+        }
+      }
     }
   }
 
@@ -1681,7 +1988,10 @@ export async function syncPushOutbox(opts?: {
 
   if (shifts.length) {
     try {
-      const data = await postJson<{ accepted: string[] }>(
+      const data = await postJson<{
+        accepted?: string[];
+        rejected?: Array<{ id: string; message: string }>;
+      }>(
         `${getApiBase()}/sync/shifts`,
         { shifts: shifts.map((e) => e.payload) },
         timeoutMs,
@@ -1691,7 +2001,12 @@ export async function syncPushOutbox(opts?: {
         const env = shifts.find((e) => e.payload.id === shiftId);
         if (env) acceptedIds.push(env.id);
       }
-      anyOk = true;
+      // conflict (PIN/พนักงานเปิดรอบเครื่องอื่น) — เอาออกจาก outbox อย่าวนซ้ำ
+      for (const r of data.rejected ?? []) {
+        const env = shifts.find((e) => e.payload.id === r.id);
+        if (env) acceptedIds.push(env.id);
+      }
+      if (ids.length || (data.rejected?.length ?? 0) > 0) anyOk = true;
     } catch {
       anyFail = true;
       // keep shifts in outbox
@@ -1700,6 +2015,13 @@ export async function syncPushOutbox(opts?: {
 
   if (acceptedIds.length) {
     await window.apPos.db.ackOutbox(acceptedIds);
+  }
+  if (errorMarks.length && window.apPos.db.markOutboxErrors) {
+    try {
+      await window.apPos.db.markOutboxErrors(errorMarks);
+    } catch {
+      /* ignore */
+    }
   }
   if (anyOk) markApiOnline();
   else if (anyFail && opts?.force) {
@@ -1751,7 +2073,8 @@ export async function pushPendingSales(opts?: {
   }
   const result = await syncPushOutbox({
     force: true,
-    timeoutMs: opts?.timeoutMs ?? 15_000,
+    timeoutMs: opts?.timeoutMs ?? 30_000,
+    saleChunkSize: 1,
   });
   const pending = await countPendingLocalSales().catch(() => 0);
   return {
@@ -1910,6 +2233,54 @@ export type ShiftServerSnapshot = {
   grossTotal?: number;
   status?: string;
 };
+
+/** เช็คว่าพนักงานมีกะเปิดอยู่เครื่องอื่นไหม (ออนไลน์เท่านั้น) */
+export async function checkStaffOpenOnOtherTerminal(opts: {
+  staffId?: string | null;
+  staffCode?: string | null;
+  excludeTerminalId?: string | null;
+}): Promise<{
+  blocked: boolean;
+  message?: string;
+  terminalName?: string | null;
+  branchName?: string | null;
+}> {
+  if (isApiOfflineKnown()) return { blocked: false };
+  const staffId = String(opts.staffId ?? "").trim();
+  const staffCode = String(opts.staffCode ?? "").trim();
+  if (!staffId && !staffCode) return { blocked: false };
+  try {
+    const qs = new URLSearchParams();
+    if (staffId) qs.set("staffId", staffId);
+    if (staffCode) qs.set("staffCode", staffCode);
+    if (opts.excludeTerminalId?.trim()) {
+      qs.set("excludeTerminalId", opts.excludeTerminalId.trim());
+    }
+    const data = await fetchJson<{
+      open?: boolean;
+      terminalName?: string | null;
+      terminalCode?: string | null;
+      branchName?: string | null;
+      staffName?: string | null;
+    }>(`${getApiBase()}/sync/shifts/open-by-staff?${qs.toString()}`, 2500);
+    markApiOnline();
+    if (!data?.open) return { blocked: false };
+    const where =
+      data.terminalName ||
+      data.terminalCode ||
+      "เครื่องอื่น";
+    const branch = data.branchName ? ` · ${data.branchName}` : "";
+    return {
+      blocked: true,
+      terminalName: data.terminalName,
+      branchName: data.branchName,
+      message: `PIN นี้เปิดรอบอยู่ที่ ${where}${branch} แล้ว — ปิดรอบเครื่องนั้นก่อน`,
+    };
+  } catch {
+    // เน็ตมีปัญหา — อย่าบล็อกการเปิดรอบ (ออฟไลน์ยังขายได้)
+    return { blocked: false };
+  }
+}
 
 /** ดึงรอบจากเซิร์ฟ — ใช้ตรวจหลังส่งซ้ำ */
 export async function fetchShiftFromServer(

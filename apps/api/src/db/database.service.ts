@@ -129,6 +129,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         created_at TIMESTAMPTZ NOT NULL,
         synced_at TIMESTAMPTZ
       );
+      CREATE INDEX IF NOT EXISTS sales_status_created_at_idx
+        ON sales (status, created_at);
+      CREATE INDEX IF NOT EXISTS sales_created_at_idx
+        ON sales (created_at);
       CREATE TABLE IF NOT EXISTS sale_lines (
         id TEXT PRIMARY KEY,
         sale_id TEXT NOT NULL,
@@ -141,13 +145,33 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         discount NUMERIC(12,2) NOT NULL DEFAULT 0,
         line_total NUMERIC(12,2) NOT NULL
       );
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS profit NUMERIC(12,2);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS cost_amount NUMERIC(12,2);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS known_revenue NUMERIC(12,2);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS missing_revenue NUMERIC(12,2);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS missing_line_count INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS estimated_profit NUMERIC(12,2);
+      ALTER TABLE sales ADD COLUMN IF NOT EXISTS estimated_revenue NUMERIC(12,2);
+      ALTER TABLE sale_lines ADD COLUMN IF NOT EXISTS net_revenue NUMERIC(12,2);
+      ALTER TABLE sale_lines ADD COLUMN IF NOT EXISTS cost_status TEXT;
+      ALTER TABLE sale_lines ADD COLUMN IF NOT EXISTS unit_cost NUMERIC(12,2);
+      ALTER TABLE sale_lines ADD COLUMN IF NOT EXISTS line_cost NUMERIC(12,2);
+      ALTER TABLE sale_lines ADD COLUMN IF NOT EXISTS line_profit NUMERIC(12,2);
+      ALTER TABLE sale_lines ADD COLUMN IF NOT EXISTS price_per_kg NUMERIC(12,2);
+      ALTER TABLE sale_lines ADD COLUMN IF NOT EXISTS kg_priced INTEGER NOT NULL DEFAULT 0;
       CREATE TABLE IF NOT EXISTS sale_payments (
         id TEXT PRIMARY KEY,
         sale_id TEXT NOT NULL,
         method TEXT NOT NULL,
         amount NUMERIC(12,2) NOT NULL,
-        tendered NUMERIC(12,2)
+        tendered NUMERIC(12,2),
+        prompt_pay_id TEXT,
+        prompt_pay_name TEXT
       );
+      ALTER TABLE sale_payments ADD COLUMN IF NOT EXISTS prompt_pay_id TEXT;
+      ALTER TABLE sale_payments ADD COLUMN IF NOT EXISTS prompt_pay_name TEXT;
+      CREATE INDEX IF NOT EXISTS sale_payments_sale_id_idx
+        ON sale_payments (sale_id);
       CREATE TABLE IF NOT EXISTS point_ledger (
         id TEXT PRIMARY KEY,
         customer_id TEXT NOT NULL,
@@ -320,6 +344,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         deleted_at TIMESTAMPTZ
       );
+      CREATE TABLE IF NOT EXISTS cash_book_entries (
+        id TEXT PRIMARY KEY,
+        entry_date TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        branch_id TEXT,
+        category_id TEXT,
+        amount NUMERIC(12,2) NOT NULL,
+        description TEXT,
+        note TEXT,
+        source_key TEXT UNIQUE,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        deleted_at TIMESTAMPTZ
+      );
+      ALTER TABLE cash_book_entries ADD COLUMN IF NOT EXISTS source_key TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS cash_book_entries_source_key_uidx
+        ON cash_book_entries (source_key)
+        WHERE source_key IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS cash_book_entries_date_idx
+        ON cash_book_entries (entry_date)
+        WHERE deleted_at IS NULL;
       INSERT INTO app_settings (key, value)
       VALUES ('points', '{"bahtPerPoint":100,"bahtPerRedeemPoint":1}')
       ON CONFLICT (key) DO NOTHING;

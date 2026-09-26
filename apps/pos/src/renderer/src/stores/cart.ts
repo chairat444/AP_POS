@@ -23,6 +23,7 @@ import {
   printReceipt,
   type ReceiptPayload,
 } from "../services/receipt";
+import { kickCashDrawer } from "../services/drawer";
 import { useMembersStore } from "./members";
 import { useSessionStore } from "./session";
 import { useSettingsStore } from "./settings";
@@ -923,6 +924,9 @@ export const useCartStore = defineStore("cart", () => {
       ),
     );
 
+    // เตะลิ้นชักทันทีหลังตรวจชำระผ่าน — ไม่รอ config / แต้ม / สลิป / พิมพ์
+    kickCashDrawer();
+
     // ได้แต้มเฉพาะสมาชิก — ลูกค้าทั่วไปไม่สะสม / ไม่โชว์ข้อความ
     const earnBase = round2(payable + Math.max(0, pointsDiscount.value));
     const earned = memberId.value
@@ -1005,6 +1009,9 @@ export const useCartStore = defineStore("cart", () => {
         }
         const brand = useSettingsStore();
         const appVersion = await getAppVersionLabel();
+        const versionLabel = (await import("../services/sync")).isTestMode()
+          ? `${appVersion} · TEST`
+          : appVersion;
         const payload: ReceiptPayload = {
           storeName: brand.storeName || "เอพี หมูสด",
           branchName: device.branchName || "",
@@ -1061,13 +1068,15 @@ export const useCartStore = defineStore("cart", () => {
           headerText: printer.headerText,
           footerHours: printer.footerHours,
           footerPhones: printer.footerPhones,
-          appVersion,
+          appVersion: versionLabel,
+          logoUrl: brand.logoUrl,
         };
         const result = await printReceipt(payload, {
           silent: printer.silent,
           preview: false,
           deviceName: printer.printerName || undefined,
-          openDrawer: printer.openDrawer,
+          // เตะไปแล้วตอนจบบิลด้านบน — ไม่เตะซ้ำตอนพิมพ์
+          openDrawer: false,
         });
         if (!result.ok) {
           statusMessage.value = `${doneMsg} · พิมพ์ไม่สำเร็จ${

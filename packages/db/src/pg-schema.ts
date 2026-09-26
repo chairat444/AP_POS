@@ -144,6 +144,14 @@ export const sales = pgTable("sales", {
   paid: numeric("paid", { precision: 12, scale: 2 }).notNull().default("0"),
   change: numeric("change", { precision: 12, scale: 2 }).notNull().default("0"),
   status: text("status").notNull().default("completed"),
+  /** กำไรที่ snapshot ตอน sync — ทุนจริง + ประมาณการสินค้าเปิดราคา */
+  profit: numeric("profit", { precision: 12, scale: 2 }),
+  costAmount: numeric("cost_amount", { precision: 12, scale: 2 }),
+  knownRevenue: numeric("known_revenue", { precision: 12, scale: 2 }),
+  missingRevenue: numeric("missing_revenue", { precision: 12, scale: 2 }),
+  missingLineCount: integer("missing_line_count").notNull().default(0),
+  estimatedProfit: numeric("estimated_profit", { precision: 12, scale: 2 }),
+  estimatedRevenue: numeric("estimated_revenue", { precision: 12, scale: 2 }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull(),
   syncedAt: timestamp("synced_at", { withTimezone: true }),
 });
@@ -159,6 +167,17 @@ export const saleLines = pgTable("sale_lines", {
   unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).notNull(),
   discount: numeric("discount", { precision: 12, scale: 2 }).notNull().default("0"),
   lineTotal: numeric("line_total", { precision: 12, scale: 2 }).notNull(),
+  /** ยอดบรรทัดหลังแบ่งส่วนลดท้ายบิล */
+  netRevenue: numeric("net_revenue", { precision: 12, scale: 2 }),
+  /** known = มีทุน · missing = ไม่ได้ใส่ทุน · estimated = สินค้าเปิดราคา 15% */
+  costStatus: text("cost_status"),
+  unitCost: numeric("unit_cost", { precision: 12, scale: 2 }),
+  lineCost: numeric("line_cost", { precision: 12, scale: 2 }),
+  lineProfit: numeric("line_profit", { precision: 12, scale: 2 }),
+  /** ราคาขายต่อกิโลที่ snapshot จากแอดมินตอน sync */
+  pricePerKg: numeric("price_per_kg", { precision: 12, scale: 2 }),
+  /** 1 = ตัดสินใจเรื่องราคา/กก. แล้ว (มีหรือไม่มีก็ตาม) */
+  kgPriced: integer("kg_priced").notNull().default(0),
 });
 
 export const salePayments = pgTable("sale_payments", {
@@ -167,6 +186,9 @@ export const salePayments = pgTable("sale_payments", {
   method: text("method").notNull(),
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
   tendered: numeric("tendered", { precision: 12, scale: 2 }),
+  /** PromptPay ปลายทางตอน sync — เฉพาะเงินโอน (รัฐไม่เก็บ) */
+  promptPayId: text("prompt_pay_id"),
+  promptPayName: text("prompt_pay_name"),
 });
 
 export const pointLedger = pgTable("point_ledger", {
@@ -346,6 +368,31 @@ export const purchaseLines = pgTable("purchase_lines", {
   groupKey: text("group_key").notNull().default("market"),
   matched: integer("matched").notNull().default(0),
   sortOrder: integer("sort_order").notNull().default(0),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+});
+
+/**
+ * สมุดรายวัน (เงินเข้า–เงินออก)
+ * direction: in | out
+ * kind: sale | loan | expense | other
+ */
+export const cashBookEntries = pgTable("cash_book_entries", {
+  id: text("id").primaryKey(),
+  /** วันที่รายการ (Asia/Bangkok) YYYY-MM-DD */
+  entryDate: text("entry_date").notNull(),
+  direction: text("direction").notNull(),
+  kind: text("kind").notNull(),
+  branchId: text("branch_id"),
+  categoryId: text("category_id"),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  description: text("description"),
+  note: text("note"),
+  /**
+   * คีย์รายการอัตโนมัติ (เช่น auto:sale:2026-09-12:branch-001)
+   * null = บันทึกมือ
+   */
+  sourceKey: text("source_key").unique(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
 });

@@ -17,9 +17,11 @@ import { TerminalsModule } from "./terminals/terminals.module";
 import { ShiftsModule } from "./shifts/shifts.module";
 import { ExpensesModule } from "./expenses/expenses.module";
 import { PurchasesModule } from "./purchases/purchases.module";
+import { CashBookModule } from "./cash-book/cash-book.module";
 import { AuthModule } from "./auth/auth.module";
 import { AuthGuard } from "./auth/auth.guard";
 import { DatabaseModule } from "./db/database.module";
+import { BackupModule } from "./backup/backup.module";
 
 @Module({
   imports: [
@@ -38,6 +40,8 @@ import { DatabaseModule } from "./db/database.module";
     ShiftsModule,
     ExpensesModule,
     PurchasesModule,
+    CashBookModule,
+    BackupModule,
     NotifyModule,
   ],
   controllers: [HealthController, SyncController],

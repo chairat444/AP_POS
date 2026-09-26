@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from "vue";
 import CashierView from "./views/CashierView.vue";
 import CustomerView from "./views/CustomerView.vue";
-import { refreshApiOnline, loadPosNetworkConfig } from "./services/sync";
+import { refreshApiOnline, loadPosNetworkConfig, envMode } from "./services/sync";
 
 function readRoute(): "customer" | "cashier" {
   const params = new URLSearchParams(window.location.search);
@@ -38,7 +38,9 @@ onMounted(() => {
       });
       bootOnline.value = online;
       bootLabel.value = online
-        ? "เชื่อมต่อแล้ว · กำลังเปิดหน้าขาย…"
+        ? envMode.value === "test"
+          ? "โหมดทดสอบ · กำลังเปิดหน้าขาย…"
+          : "เชื่อมต่อแล้ว · กำลังเปิดหน้าขาย…"
         : "โหมดออฟไลน์ · ใช้ข้อมูลในเครื่อง…";
     } catch {
       bootOnline.value = false;
@@ -60,7 +62,11 @@ const isCustomer = computed(() => route.value === "customer");
       <div class="boot-spinner" aria-hidden="true" />
       <p class="boot-label">{{ bootLabel }}</p>
       <p v-if="bootOnline === false" class="boot-hint">
-        ขายได้ตามปกติ · จะ sync เมื่อเน็ตกลับมา
+        {{
+          envMode === "test"
+            ? "โหมดทดสอบ · ดึงข้อมูลได้ แต่ไม่ส่งขึ้นเซิร์ฟเวอร์"
+            : "ขายได้ตามปกติ · จะ sync เมื่อเน็ตกลับมา"
+        }}
       </p>
     </div>
   </div>

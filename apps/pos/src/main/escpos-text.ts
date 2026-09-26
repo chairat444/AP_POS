@@ -13,7 +13,7 @@ export type EncodeEscPosOpts = {
   cut?: boolean;
 };
 
-/** ESC p m t1 t2 — เตะลิ้นชักครั้งเดียว (pin 0 เท่านั้น) */
+/** ESC p m t1 t2 — เตะลิ้นชักครั้งเดียว (pin 0) */
 export function cashDrawerPulse(): Buffer {
   // t1≈60ms t2≈120ms — พอเปิดลิ้นชักโดยไม่กระตุกซ้ำ
   return Buffer.from([0x1b, 0x70, 0x00, 0x3c, 0x78]);

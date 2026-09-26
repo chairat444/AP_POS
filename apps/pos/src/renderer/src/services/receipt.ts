@@ -82,6 +82,10 @@ export type ReceiptPayload = {
   footerHours: string;
   footerPhones: string;
   appVersion: string;
+  /** URL โลโก้ร้าน (resolve เป็น data URL ตอนพิมพ์) */
+  logoUrl?: string | null;
+  /** data URL พร้อมใช้ใน HTML / ส่ง main */
+  logoDataUrl?: string | null;
 };
 
 const PRINTER_META = "printer-config";
@@ -602,8 +606,10 @@ export async function printReceipt(
   if (!window.apPos?.print?.receipt && !window.apPos?.print?.previewReceipt) {
     return { ok: false, message: "ระบบพิมพ์ยังไม่พร้อม" };
   }
-  const html = buildReceiptHtml(payload);
-  const text = buildReceiptPrintPayload(payload);
+  // ไม่พิมพ์โลโก้บนใบเสร็จ (ข้อความหัวบิลอย่างเดียว)
+  const printable: ReceiptPayload = { ...payload, logoDataUrl: null };
+  const html = buildReceiptHtml(printable);
+  const text = buildReceiptPrintPayload(printable);
   const paperWidth = payload.paperWidth;
   try {
     const wantPreview = opts?.preview === true;

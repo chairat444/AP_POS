@@ -227,6 +227,17 @@ try {
                 $script:ops.Enqueue(@{ k = 'l'; t = [string]$wrapped[$w] })
               }
             }
+          } elseif ($kind -eq 'IMG') {
+            $p = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+            $mh = 44.0
+            $mw = 0.0
+            if ($parts.Count -gt 2 -and $parts[2]) {
+              try { $mh = [single]$parts[2] } catch { $mh = 44.0 }
+            }
+            if ($parts.Count -gt 3 -and $parts[3]) {
+              try { $mw = [single]$parts[3] } catch { $mw = 0.0 }
+            }
+            if ($p) { $script:ops.Enqueue(@{ k = 'img'; p = [string]$p; h = $mh; w = $mw }) }
           } else {
             foreach ($p in (Wrap-Left $g $font $line $fullW)) {
               $script:ops.Enqueue(@{ k = 'l'; t = [string]$p })
@@ -240,7 +251,12 @@ try {
       }
 
       while ($script:ops.Count -gt 0) {
-        if (($y + $lh) -gt $maxY -and $script:drawn -gt 0) {
+        $peek = $script:ops.Peek()
+        $needH = $lh
+        if ([string]$peek.k -eq 'img') {
+          $needH = [Math]::Max($lh, [single]$peek.h) + 4
+        }
+        if (($y + $needH) -gt $maxY -and $script:drawn -gt 0) {
           $e.HasMorePages = $true
           return
         }
@@ -251,6 +267,35 @@ try {
           $g.DrawLine($pen, $x0, $yy, $x0 + $fullW, $yy)
           $y += $lh * 0.7
           $script:drawn++
+          continue
+        }
+        if ($k -eq 'img') {
+          $img = $null
+          try {
+            if (-not [System.IO.File]::Exists([string]$op.p)) { continue }
+            $img = [System.Drawing.Image]::FromFile([string]$op.p)
+            $maxH = [Math]::Max(20.0, [single]$op.h)
+            $maxWCap = [single]$op.w
+            if ($maxWCap -le 0) { $maxWCap = [single]($fullW * 0.48) }
+            $maxWCap = [Math]::Min($maxWCap, $fullW)
+            $scale = [Math]::Min($maxWCap / [double]$img.Width, $maxH / [double]$img.Height)
+            if ($scale -le 0) { continue }
+            # อย่าขยายเกินต้นฉบับมาก — กันเบลอบนสลิปความละเอียดต่ำ
+            if ($scale -gt 1.0) { $scale = 1.0 }
+            $dw = [single]($img.Width * $scale)
+            $dh = [single]($img.Height * $scale)
+            $ix = $x0 + (($fullW - $dw) / 2.0)
+            # NearestNeighbor คมกว่าบนหัวพิมพ์ความร้อน
+            $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+            $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+            $g.DrawImage($img, [int]$ix, [int]$y, [int][Math]::Round($dw), [int][Math]::Round($dh))
+            $y += $dh + 3
+            $script:drawn++
+          } catch {
+            Write-Warning ("logo draw fail: " + $_.Exception.Message)
+          } finally {
+            if ($img) { $img.Dispose() }
+          }
           continue
         }
         $rect = New-Object System.Drawing.RectangleF($x0, $y, $fullW, $lh)

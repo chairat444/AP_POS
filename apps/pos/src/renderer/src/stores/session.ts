@@ -9,11 +9,14 @@ import type { DenomCount } from "../data/cash-denoms";
 import { sumDenomCounts } from "../data/cash-denoms";
 import {
   claimThisTerminal,
+  checkStaffOpenOnOtherTerminal,
   enqueueAuditAndSync,
   enqueueShift,
   enqueueShiftAndSync,
   fetchStaffDayPriorSales,
   getDeviceConfig,
+  isApiOfflineKnown,
+  isTestMode,
   loadStaffDirectory,
   markDeviceSetupDone,
   pendingOutboxCount,
@@ -584,11 +587,21 @@ export const useSessionStore = defineStore("session", () => {
   async function pushShiftSnapshot(
     status: "open" | "closed",
     extra: Partial<SyncedShiftPayload> = {},
-    opts?: { urgent?: boolean },
+    opts?: { urgent?: boolean; background?: boolean },
   ) {
     const payload = buildShiftPayload(status, extra);
     if (!payload) return { synced: false, pending: 0 };
-    // เปิด/นับทอน/เงินเข้า-ออก/ปิด — ออนไลน์แล้วส่งทันที (ไม่พึ่งแคช offline เก่า)
+    // background = เข้าคิวแล้วส่งเมื่อไหร่ก็ได้ — ไม่รอ probe/API (ใช้กับเงินเข้า-ออก/นับทอน)
+    if (opts?.background) {
+      return enqueueShiftAndSync(payload, { awaitIfOnline: false }).catch(
+        (e) => ({
+          synced: false,
+          pending: -1,
+          error: e instanceof Error ? e.message : "ส่งไม่สำเร็จ",
+        }),
+      );
+    }
+    // เปิด/ปิดรอบ — ออนไลน์แล้วส่งทันที
     const urgent = Boolean(opts?.urgent) || status === "closed";
     return enqueueShiftAndSync(payload, {
       awaitIfOnline: true,
@@ -672,6 +685,20 @@ export const useSessionStore = defineStore("session", () => {
       }
     }
 
+    // ออนไลน์ — ห้ามใช้ PIN ที่เปิดรอบค้างบนเครื่องอื่น
+    if (!isApiOfflineKnown()) {
+      const conflict = await checkStaffOpenOnOtherTerminal({
+        staffId: found.id,
+        staffCode: found.code,
+        excludeTerminalId: deviceSync().terminalId,
+      });
+      if (conflict.blocked) {
+        statusMessage.value =
+          conflict.message || "PIN นี้เปิดรอบอยู่เครื่องอื่นแล้ว";
+        return false;
+      }
+    }
+
     try {
       const claimed = await claimThisTerminal({
         id: deviceSync().terminalId,
@@ -721,6 +748,26 @@ export const useSessionStore = defineStore("session", () => {
       : `เปิดรอบ: ${found.name} · ${branchLabel} · นับเงินทอนทีหลังได้`;
     statusMessage.value = `${baseMsg} · กำลังส่งเซิร์ฟ…`;
     const sync = await pushShiftSnapshot("open");
+    // เซิร์ฟปฏิเสธ (PIN/พนักงานเปิดรอบเครื่องอื่น) — ยกเลิกรอบในเครื่องนี้
+    const conflict =
+      Boolean((sync as { conflict?: boolean }).conflict) ||
+      /เปิดรอบอยู่/.test(String(sync.error || ""));
+    if (sync.synced !== true && conflict) {
+      staff.value = null;
+      shiftId.value = null;
+      openedAt.value = null;
+      openCash.value = 0;
+      floatCounted.value = false;
+      floatDenoms.value = [];
+      sales.value = [];
+      audits.value = [];
+      cashMoves.value = [];
+      cashCounts.value = [];
+      await clearActiveSession();
+      statusMessage.value =
+        sync.error || "PIN นี้เปิดรอบอยู่เครื่องอื่นแล้ว — ปิดรอบเครื่องนั้นก่อน";
+      return false;
+    }
     statusMessage.value =
       sync.synced === true
         ? `${baseMsg} · ส่งเซิร์ฟแล้ว`
@@ -927,12 +974,8 @@ export const useSessionStore = defineStore("session", () => {
       denoms: denoms.map((d) => ({ ...d })),
     };
     cashCounts.value = [...cashCounts.value, rec];
-    statusMessage.value = `บันทึกเงินทอนเริ่มรอบ ${total.toFixed(0)} บาท · กำลังส่งเซิร์ฟ…`;
-    const sync = await pushShiftSnapshot("open");
-    statusMessage.value =
-      sync.synced === true
-        ? `บันทึกเงินทอนเริ่มรอบ ${total.toFixed(0)} บาท · ส่งเซิร์ฟแล้ว`
-        : `บันทึกเงินทอนเริ่มรอบ ${total.toFixed(0)} บาท · จะซิงค์เมื่อออนไลน์`;
+    const base = `บันทึกเงินทอนเริ่มรอบ ${total.toFixed(0)} บาท`;
+    statusMessage.value = `${base} · บันทึกในเครื่องแล้ว`;
     await snapshotAndPersist(
       storeStateRefs({
         staff,
@@ -948,6 +991,13 @@ export const useSessionStore = defineStore("session", () => {
         billSeq,
       }),
     );
+    // ลิ้นชักกับ sync ไม่รอกัน — sync พื้นหลังอย่างเดียว
+    void pushShiftSnapshot("open", {}, { background: true }).then((sync) => {
+      statusMessage.value =
+        sync.synced === true
+          ? `${base} · ส่งเซิร์ฟแล้ว`
+          : `${base} · จะซิงค์เมื่อออนไลน์`;
+    });
     return rec;
   }
 
@@ -978,12 +1028,7 @@ export const useSessionStore = defineStore("session", () => {
       input.direction === "out"
         ? `นำเงินออก ${amount.toFixed(0)} (${move.reason})`
         : `นำเงินเข้า ${amount.toFixed(0)} (${move.reason})`;
-    statusMessage.value = `${base} · กำลังส่งเซิร์ฟ…`;
-    const sync = await pushShiftSnapshot("open");
-    statusMessage.value =
-      sync.synced === true
-        ? `${base} · ส่งเซิร์ฟแล้ว`
-        : `${base} · จะซิงค์เมื่อออนไลน์`;
+    statusMessage.value = `${base} · บันทึกในเครื่องแล้ว`;
     await snapshotAndPersist(
       storeStateRefs({
         staff,
@@ -999,6 +1044,13 @@ export const useSessionStore = defineStore("session", () => {
         billSeq,
       }),
     );
+    // ลิ้นชักกับ sync ไม่รอกัน — sync พื้นหลังอย่างเดียว
+    void pushShiftSnapshot("open", {}, { background: true }).then((sync) => {
+      statusMessage.value =
+        sync.synced === true
+          ? `${base} · ส่งเซิร์ฟแล้ว`
+          : `${base} · จะซิงค์เมื่อออนไลน์`;
+    });
     return move;
   }
 
@@ -1137,7 +1189,7 @@ export const useSessionStore = defineStore("session", () => {
     }
 
     // หลังปิดรอบติดเซิร์ฟแล้ว ดันบิลค้างใน outbox ให้ทันก่อนปิดเครื่อง
-    if (sync.synced) {
+    if (sync.synced && !isTestMode()) {
       await syncPushOutbox({ force: true, timeoutMs: 12_000 }).catch(
         () => undefined,
       );
@@ -1161,7 +1213,11 @@ export const useSessionStore = defineStore("session", () => {
       (variance == null
         ? "ปิดรอบเรียบร้อย"
         : `ปิดรอบแล้ว · นับได้ ${counted?.toFixed(0)} ต่าง ${variance >= 0 ? "+" : ""}${variance.toFixed(0)}${closeNote ? ` · ${closeNote}` : ""}`) +
-      (sync.synced ? " · ส่งเซิร์ฟแล้ว" : " · บันทึกในเครื่อง (ยังไม่ถึงเซิร์ฟ)");
+      (isTestMode()
+        ? " · โหมดทดสอบ ไม่ส่งขึ้นเซิร์ฟเวอร์"
+        : sync.synced
+          ? " · ส่งเซิร์ฟแล้ว"
+          : " · บันทึกในเครื่อง (ยังไม่ถึงเซิร์ฟ)");
     try {
       if (window.apPos?.db?.purgeSyncedSales) {
         await window.apPos.db.purgeSyncedSales();
@@ -1210,6 +1266,22 @@ export const useSessionStore = defineStore("session", () => {
   /** snapshot รอบเปิดอยู่ล่าสุด — สำหรับส่งซ้ำ/แสดงใน UI */
   function buildOpenShiftPayload(): SyncedShiftPayload | null {
     return buildShiftPayload("open");
+  }
+
+  async function abandonShiftForTestReset() {
+    staff.value = null;
+    shiftId.value = null;
+    openedAt.value = null;
+    openCash.value = 0;
+    floatCounted.value = false;
+    floatDenoms.value = [];
+    sales.value = [];
+    audits.value = [];
+    cashMoves.value = [];
+    cashCounts.value = [];
+    billSeq.value = 0;
+    await clearActiveSession();
+    statusMessage.value = "ล้างรอบทดสอบแล้ว";
   }
 
   function getOpenShiftSyncPreview() {
@@ -1262,6 +1334,7 @@ export const useSessionStore = defineStore("session", () => {
     nextBillNo,
     previewBillNo,
     closeShift,
+    abandonShiftForTestReset,
     rollbackCloseCashCounts,
     requeueOpenShiftToOutbox,
     resyncOpenShift,

@@ -7,6 +7,7 @@ type Cashflow = {
     incomeTotal: number;
     cashIncome: number;
     transferIncome: number;
+    governmentIncome: number;
     expenseTotal: number;
     expenseDrawer: number;
     expenseExternal: number;
@@ -20,6 +21,7 @@ type Cashflow = {
     incomeTotal: number;
     cashIncome: number;
     transferIncome: number;
+    governmentIncome: number;
     expenseTotal: number;
     expenseDrawer: number;
     expenseExternal: number;
@@ -141,7 +143,7 @@ onMounted(async () => {
       </div>
       <div class="ui-page-head__actions">
         <NuxtLink to="/expenses" class="ui-btn ui-btn--ghost">
-          จัดการค่าใช้จ่าย
+          จัดการค่าใช้จ่ายหน้าร้าน
         </NuxtLink>
         <button
           type="button"
@@ -200,7 +202,9 @@ onMounted(async () => {
               <tr>
                 <th>สาขา</th>
                 <th>รายรับ</th>
-                <th>เงินสด / โอน</th>
+                <th>เงินสด</th>
+                <th>โอน</th>
+                <th>รัฐ</th>
                 <th>ค่าใช้จ่าย</th>
                 <th>สุทธิ</th>
                 <th>ส่งสำนักงาน</th>
@@ -210,9 +214,9 @@ onMounted(async () => {
               <tr v-for="row in report.byBranch" :key="row.branchId">
                 <td>{{ row.branchName }}</td>
                 <td>{{ baht(row.incomeTotal) }}</td>
-                <td>
-                  {{ baht(row.cashIncome) }} / {{ baht(row.transferIncome) }}
-                </td>
+                <td>{{ baht(row.cashIncome) }}</td>
+                <td>{{ baht(row.transferIncome) }}</td>
+                <td>{{ baht(row.governmentIncome) }}</td>
                 <td>{{ baht(row.expenseTotal) }}</td>
                 <td>{{ baht(row.netIncomeExpense) }}</td>
                 <td>{{ baht(row.officeTransferOut) }}</td>
@@ -222,10 +226,9 @@ onMounted(async () => {
               <tr>
                 <th>รวมทุกสาขา</th>
                 <th>{{ baht(report.summary.incomeTotal) }}</th>
-                <th>
-                  {{ baht(report.summary.cashIncome) }} /
-                  {{ baht(report.summary.transferIncome) }}
-                </th>
+                <th>{{ baht(report.summary.cashIncome) }}</th>
+                <th>{{ baht(report.summary.transferIncome) }}</th>
+                <th>{{ baht(report.summary.governmentIncome) }}</th>
                 <th>{{ baht(report.summary.expenseTotal) }}</th>
                 <th>{{ baht(report.summary.netIncomeExpense) }}</th>
                 <th>{{ baht(report.summary.officeTransferOut) }}</th>
@@ -242,8 +245,9 @@ onMounted(async () => {
           </p>
           <p class="ui-dash__kpi-value">{{ baht(report.summary.incomeTotal) }}</p>
           <p class="ui-dash__kpi-hint">
-            เงินสด {{ baht(report.summary.cashIncome) }} · โอน
-            {{ baht(report.summary.transferIncome) }}
+            สด {{ baht(report.summary.cashIncome) }} · โอน
+            {{ baht(report.summary.transferIncome) }} · รัฐ
+            {{ baht(report.summary.governmentIncome) }}
           </p>
         </div>
         <div class="ui-dash__kpi">
