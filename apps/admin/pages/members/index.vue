@@ -7,7 +7,11 @@ type Member = {
   name: string;
   phone?: string;
   points: number;
+  createdAt?: string;
+  lastUsedAt?: string | null;
 };
+
+type SortKey = "points" | "name" | "code" | "phone" | "createdAt" | "lastUsedAt";
 
 type MemberForm = {
   code: string;
@@ -23,18 +27,38 @@ const emptyForm = (): MemberForm => ({
   points: "0",
 });
 
-const { get, post, patch, del } = useAdminApi();
+const { get, post } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
 const error = ref("");
 const q = ref("");
-const sortKey = ref<"points" | "name" | "code" | "phone">("points");
+/** default: สมัครล่าสุดก่อน */
+const sortKey = ref<SortKey>("createdAt");
 const sortDir = ref<"desc" | "asc">("desc");
 const rows = ref<Member[]>([]);
 const modalOpen = ref(false);
 const editingId = ref<string | null>(null);
 const form = ref<MemberForm>(emptyForm());
+
+function ts(iso?: string | null) {
+  if (!iso) return 0;
+  const n = Date.parse(iso);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function formatWhen(iso?: string | null) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("th-TH", {
+    day: "numeric",
+    month: "short",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 const filtered = computed(() => {
   const s = q.value.trim().toLowerCase();
@@ -62,6 +86,12 @@ const filtered = computed(() => {
     if (sortKey.value === "code") {
       return a.code.localeCompare(b.code, "th", { numeric: true }) * dir;
     }
+    if (sortKey.value === "createdAt") {
+      return (ts(a.createdAt) - ts(b.createdAt)) * dir;
+    }
+    if (sortKey.value === "lastUsedAt") {
+      return (ts(a.lastUsedAt) - ts(b.lastUsedAt)) * dir;
+    }
     return a.name.localeCompare(b.name, "th") * dir;
   });
   return list;
@@ -79,19 +109,34 @@ watch([q, sortKey, sortDir], () => {
   page.value = 1;
 });
 
-function toggleSort(key: typeof sortKey.value) {
+function toggleSort(key: SortKey) {
   if (sortKey.value === key) {
     sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
   } else {
     sortKey.value = key;
-    sortDir.value = key === "points" ? "desc" : "asc";
+    sortDir.value =
+      key === "points" || key === "createdAt" || key === "lastUsedAt"
+        ? "desc"
+        : "asc";
   }
 }
 
-function sortMark(key: typeof sortKey.value) {
+function sortMark(key: SortKey) {
   if (sortKey.value !== key) return "";
   return sortDir.value === "asc" ? " ↑" : " ↓";
 }
+
+const sortLabel = computed(() => {
+  const labels: Record<SortKey, string> = {
+    points: "แต้ม",
+    name: "ชื่อ",
+    code: "รหัส",
+    phone: "เบอร์",
+    createdAt: "วันที่สมัคร",
+    lastUsedAt: "ใช้งานล่าสุด",
+  };
+  return labels[sortKey.value];
+});
 
 function onPageChange(payload: { page: number; per_page: number }) {
   page.value = payload.page;
@@ -153,7 +198,8 @@ async function save() {
       points: Math.max(0, Math.floor(Number(form.value.points) || 0)),
     };
     if (editingId.value) {
-      await patch(`/members/${editingId.value}`, body);
+      // nginx บล็อก PATCH → ใช้ POST
+      await post("/members/update", { id: editingId.value, ...body });
     } else {
       await post("/members", body);
     }
@@ -177,7 +223,8 @@ async function remove(row: Member) {
   saving.value = true;
   error.value = "";
   try {
-    await del(`/members/${row.id}`);
+    // nginx บล็อก DELETE → ใช้ POST
+    await post("/members/delete", { id: row.id });
     await load();
   } catch (e) {
     error.value = e instanceof Error ? e.message : "ลบไม่สำเร็จ";
@@ -201,6 +248,14 @@ onMounted(load);
           {{ pending ? "กำลังโหลด..." : "รีเฟรช" }}
         </button>
         <NuxtLink to="/members/points" class="ui-btn ui-btn--ghost">ประวัติแต้ม</NuxtLink>
+        <NuxtLink
+          to="/member"
+          class="ui-btn ui-btn--ghost"
+          target="_blank"
+          title="ต้องเปิดด้วยลิงก์ QR (?k=…)"
+        >
+          หน้าลูกค้า
+        </NuxtLink>
         <button type="button" class="ui-btn ui-btn--primary" @click="openCreate">
           + เพิ่มสมาชิก
         </button>
@@ -214,17 +269,16 @@ onMounted(load);
         <div class="ui-toolbar-search">
           <span class="ui-toolbar-search__meta">
             สมาชิก {{ meta.total }} รายการ
-            · เรียงตาม
+            · เรียงตาม {{ sortLabel }}
             {{
-              sortKey === "points"
-                ? "แต้ม"
-                : sortKey === "name"
-                  ? "ชื่อ"
-                  : sortKey === "code"
-                    ? "รหัส"
-                    : "เบอร์"
+              sortKey === "createdAt" || sortKey === "lastUsedAt"
+                ? sortDir === "desc"
+                  ? "ใหม่→เก่า"
+                  : "เก่า→ใหม่"
+                : sortDir === "desc"
+                  ? "มาก→น้อย"
+                  : "น้อย→มาก"
             }}
-            {{ sortDir === "desc" ? "มาก→น้อย" : "น้อย→มาก" }}
           </span>
           <div class="ui-toolbar-search__controls">
             <input
@@ -263,6 +317,24 @@ onMounted(load);
                   แต้ม{{ sortMark("points") }}
                 </button>
               </th>
+              <th>
+                <button
+                  type="button"
+                  class="ui-th-sort"
+                  @click="toggleSort('createdAt')"
+                >
+                  สมัคร{{ sortMark("createdAt") }}
+                </button>
+              </th>
+              <th>
+                <button
+                  type="button"
+                  class="ui-th-sort"
+                  @click="toggleSort('lastUsedAt')"
+                >
+                  ใช้ล่าสุด{{ sortMark("lastUsedAt") }}
+                </button>
+              </th>
               <th class="ui-table__actions">จัดการ</th>
             </tr>
           </thead>
@@ -273,6 +345,10 @@ onMounted(load);
               <td>{{ row.phone || "-" }}</td>
               <td>
                 <strong>{{ row.points.toLocaleString("th-TH") }}</strong>
+              </td>
+              <td class="ui-members__when">{{ formatWhen(row.createdAt) }}</td>
+              <td class="ui-members__when">
+                {{ row.lastUsedAt ? formatWhen(row.lastUsedAt) : "ยังไม่เคยใช้" }}
               </td>
               <td class="ui-table__actions">
                 <div class="ui-members__actions">
@@ -388,5 +464,11 @@ onMounted(load);
   margin: 0.75rem 0 0;
   color: #b91c1c;
   font-size: 0.88rem;
+}
+
+.ui-members__when {
+  white-space: nowrap;
+  font-size: 0.86rem;
+  color: #475569;
 }
 </style>

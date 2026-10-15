@@ -1,11 +1,13 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { IS_PUBLIC_KEY } from "./public.decorator";
+import { ALLOW_PURCHASE_ORDER_KEY } from "./purchase-order.decorator";
 import { verifyToken, type AuthTokenPayload } from "./auth.crypto";
 
 export type AuthedRequest = {
@@ -30,6 +32,14 @@ export class AuthGuard implements CanActivate {
     const payload = token ? verifyToken(token) : null;
     if (!payload) throw new UnauthorizedException("กรุณาเข้าสู่ระบบ");
     req.user = payload;
+
+    const allowPurchaseOrder = this.reflector.getAllAndOverride<boolean>(
+      ALLOW_PURCHASE_ORDER_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    if (payload.scope === "purchase-order" && !allowPurchaseOrder) {
+      throw new ForbiddenException("ไม่มีสิทธิ์เข้าส่วนนี้");
+    }
     return true;
   }
 }

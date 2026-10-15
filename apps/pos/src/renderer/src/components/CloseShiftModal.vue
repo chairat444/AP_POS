@@ -8,6 +8,7 @@ import { useSettingsStore } from "../stores/settings";
 import CashCountModal from "./CashCountModal.vue";
 import type { DenomCount } from "../data/cash-denoms";
 import { printShiftCloseReport } from "../services/shift-close-report";
+import { kickCashDrawer } from "../services/drawer";
 
 const open = defineModel<boolean>("open", { default: false });
 const emit = defineEmits<{ closed: [] }>();
@@ -133,6 +134,8 @@ async function runClose(opts?: {
 
     session.markExiting();
     cart.clearHeldBills();
+    // เตะลิ้นชักตอนปิดรอบเสมอ — ไม่พึ่งแค่ตอนพิมพ์ (กรณีข้ามนับเงิน / พิมพ์พัง)
+    kickCashDrawer();
     await printClosedReport(closed);
     await shutdownAfterClose();
   } finally {

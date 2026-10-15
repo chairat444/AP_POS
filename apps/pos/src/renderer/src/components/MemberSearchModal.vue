@@ -27,13 +27,19 @@ const createError = ref("");
 const newName = ref("");
 const newPhone = ref("");
 const nameEl = ref<HTMLInputElement | null>(null);
+const lookingUp = ref(false);
+let lookupTimer: ReturnType<typeof setTimeout> | null = null;
+let lookupSeq = 0;
 
 const hint = computed(() => {
   if (mode.value === "create") {
     return "ชื่อและเบอร์โทรจำเป็น · ต้องออนไลน์ · บันทึกที่เซิร์ฟเวอร์แล้วลงเครื่อง";
   }
+  if (lookingUp.value) {
+    return "กำลังค้นจากเซิร์ฟเวอร์…";
+  }
   if (!query.value.trim()) {
-    return "พิมพ์เบอร์โทรหรือชื่อ · หรือกดเพิ่มสมาชิกใหม่";
+    return "พิมพ์เบอร์โทรหรือชื่อ · ออนไลน์แล้วค้นจากเซิร์ฟได้ · หรือเพิ่มสมาชิกใหม่";
   }
   if (results.value.length === 1) {
     return "พบ 1 รายการ · กด Enter เพื่อเลือก";
@@ -41,13 +47,33 @@ const hint = computed(() => {
   return `พบ ${results.value.length} รายการ · คลิกหรือ ↑↓ แล้ว Enter`;
 });
 
-function refresh() {
+function refreshLocal() {
   results.value = members.search(query.value);
   selected.value = 0;
 }
 
+async function refreshWithServer() {
+  const q = query.value;
+  const digits = q.replace(/\D/g, "");
+  if (digits.length < 9) return;
+  const seq = ++lookupSeq;
+  lookingUp.value = true;
+  try {
+    const next = await members.searchWithServer(q);
+    if (seq !== lookupSeq || query.value !== q) return;
+    results.value = next;
+    selected.value = 0;
+  } finally {
+    if (seq === lookupSeq) lookingUp.value = false;
+  }
+}
+
 function onQueryInput() {
-  refresh();
+  refreshLocal();
+  if (lookupTimer) clearTimeout(lookupTimer);
+  lookupTimer = setTimeout(() => {
+    void refreshWithServer();
+  }, 280);
 }
 
 function pick(m: Member) {
@@ -155,11 +181,14 @@ function onKey(e: KeyboardEvent) {
 }
 
 onMounted(() => {
-  refresh();
+  refreshLocal();
   window.addEventListener("keydown", onKey, true);
   void nextTick(() => queryEl.value?.focus());
 });
-onUnmounted(() => window.removeEventListener("keydown", onKey, true));
+onUnmounted(() => {
+  if (lookupTimer) clearTimeout(lookupTimer);
+  window.removeEventListener("keydown", onKey, true);
+});
 </script>
 
 <template>
@@ -232,8 +261,13 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
             </button>
           </li>
           <li v-if="!results.length" class="search-empty">
-            ไม่พบสมาชิก
-            <button type="button" class="member-empty-add" @click="openCreate">
+            {{ lookingUp ? "กำลังค้นจากเซิร์ฟเวอร์…" : "ไม่พบสมาชิก" }}
+            <button
+              v-if="!lookingUp"
+              type="button"
+              class="member-empty-add"
+              @click="openCreate"
+            >
               เพิ่มสมาชิกใหม่
             </button>
           </li>

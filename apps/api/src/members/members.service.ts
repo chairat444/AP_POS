@@ -4,7 +4,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { and, asc, eq, gt, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, max, ne, sql } from "drizzle-orm";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -30,14 +30,25 @@ function now() {
   return new Date();
 }
 
-function toRecord(row: typeof pg.customers.$inferSelect): MemberRecord {
+function toRecord(
+  row: typeof pg.customers.$inferSelect,
+  lastUsedAt?: Date | null,
+): MemberRecord {
+  const created =
+    row.createdAt instanceof Date
+      ? row.createdAt
+      : row.updatedAt instanceof Date
+        ? row.updatedAt
+        : now();
   return {
     id: row.id,
     code: row.code,
     name: row.name,
     phone: row.phone ?? "",
     points: row.points,
+    createdAt: created.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    lastUsedAt: lastUsedAt ? lastUsedAt.toISOString() : null,
   };
 }
 
@@ -63,12 +74,14 @@ export class MembersService implements OnModuleInit {
     if (!existsSync(JSON_SEED)) return;
     const rows = JSON.parse(readFileSync(JSON_SEED, "utf8")) as MemberRecord[];
     for (const m of rows) {
+      const created = m.createdAt ? new Date(m.createdAt) : new Date(m.updatedAt);
       await this.database.db.insert(pg.customers).values({
         id: m.id,
         code: m.code,
         name: m.name,
         phone: m.phone ?? null,
         points: m.points,
+        createdAt: created,
         updatedAt: new Date(m.updatedAt),
         deletedAt: null,
       });
@@ -95,14 +108,59 @@ export class MembersService implements OnModuleInit {
     return rows[0] ? toRecord(rows[0]) : null;
   }
 
+  /** หน้า kiosk ลูกค้า — ค้นด้วยเบอร์เท่านั้น · ไม่คืนรายชื่อทั้งร้าน */
+  async lookupByPhone(phoneRaw: string) {
+    const phone = normalizePhone(phoneRaw);
+    if (phone.length < 9) {
+      throw new BadRequestException("กรอกเบอร์โทรให้ครบ");
+    }
+    if (phone.length > 12) {
+      throw new BadRequestException("เบอร์โทรไม่ถูกต้อง");
+    }
+    const member = await this.findActiveByPhone(phone);
+    if (!member) {
+      return { found: false as const };
+    }
+    return {
+      found: true as const,
+      code: member.code,
+      name: member.name,
+      points: member.points,
+    };
+  }
+
+  /** POS ค้นสมาชิกด้วยเบอร์ตอนออนไลน์ — คืนข้อมูลเต็มเพื่อใส่แคชเครื่อง */
+  async getByPhoneForPos(phoneRaw: string): Promise<MemberRecord | null> {
+    const phone = normalizePhone(phoneRaw);
+    if (phone.length < 9 || phone.length > 12) return null;
+    return this.findActiveByPhone(phone);
+  }
+
+  /** สมัครจาก kiosk — บังคับแต้มเริ่ม 0 · ห้ามตั้งแต้มเอง */
+  async registerFromKiosk(dto: { name?: string; phone?: string }) {
+    return this.create({
+      name: String(dto.name ?? ""),
+      phone: String(dto.phone ?? ""),
+      points: 0,
+    });
+  }
+
   async list() {
     const rows = await this.database.db
-      .select()
+      .select({
+        customer: pg.customers,
+        lastUsedAt: max(pg.pointLedger.createdAt),
+      })
       .from(pg.customers)
+      .leftJoin(
+        pg.pointLedger,
+        eq(pg.pointLedger.customerId, pg.customers.id),
+      )
       .where(isNull(pg.customers.deletedAt))
-      .orderBy(asc(pg.customers.name));
+      .groupBy(pg.customers.id)
+      .orderBy(desc(pg.customers.createdAt));
     return {
-      members: rows.map(toRecord),
+      members: rows.map((r) => toRecord(r.customer, r.lastUsedAt)),
       syncedAt: now().toISOString(),
     };
   }
@@ -116,7 +174,7 @@ export class MembersService implements OnModuleInit {
           ? and(isNull(pg.customers.deletedAt), gt(pg.customers.updatedAt, new Date(since)))
           : isNull(pg.customers.deletedAt),
       );
-    return rows.map(toRecord);
+    return rows.map((r) => toRecord(r));
   }
 
   async listDeletedSince(since?: string | null) {
@@ -166,13 +224,15 @@ export class MembersService implements OnModuleInit {
         `เบอร์นี้มีสมาชิกแล้ว (${dup.code} ${dup.name})`,
       );
     }
+    const ts = now();
     await this.database.db.insert(pg.customers).values({
       id,
       code,
       name,
       phone,
       points,
-      updatedAt: now(),
+      createdAt: ts,
+      updatedAt: ts,
       deletedAt: null,
     });
     if (points > 0) {

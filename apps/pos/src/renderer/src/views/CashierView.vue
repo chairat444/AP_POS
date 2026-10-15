@@ -127,6 +127,8 @@ const cashMoveDir = ref<"in" | "out">("out");
 const memberOpen = ref(false);
 /** กันคลิกทะลุเปิดค้นหาสมาชิกซ้ำหลังเพิ่งปิด */
 const memberOpenBlockUntil = ref(0);
+/** กันสแกน/Enter หลุดหลังจบชำระ — ไม่งั้นทอนหายแล้วโผล่สินค้าบิลใหม่ */
+let scanLockUntil = 0;
 const productSearchOpen = ref(false);
 const holdOpen = ref(false);
 const summaryOpen = ref(false);
@@ -749,10 +751,21 @@ function openPayment() {
 
 let scanSubmitting = false;
 
+function onPaid() {
+  clearScanBuffer();
+  scanLockUntil = Date.now() + 700;
+  void nextTick(() => focusScan());
+}
+
 function onScanSubmit() {
   if (scanSubmitting) return;
   scanSubmitting = true;
   try {
+    if (Date.now() < scanLockUntil) {
+      clearScanBuffer();
+      focusScan();
+      return;
+    }
     if (!requireShift()) {
       clearScanBuffer();
       focusScan();
@@ -798,6 +811,10 @@ function onScanSubmit() {
 }
 
 function onScanInput() {
+  if (Date.now() < scanLockUntil) {
+    clearScanBuffer();
+    return;
+  }
   const raw = normalizeScanKeyboardInput(scanBuffer.value);
   // โชว์ค่าที่แปลงแล้วในช่อง — กันค้างตัวไทยตอนสแกนต่อ
   if (raw !== scanBuffer.value.trim()) {
@@ -1348,7 +1365,7 @@ onUnmounted(() => {
       <span class="status-msg">{{ statusMessage }}</span>
     </footer>
 
-    <PaymentModal v-model:open="payOpen" />
+    <PaymentModal v-model:open="payOpen" @paid="onPaid" />
     <OpenShiftModal
       v-model:open="openShiftOpen"
       :required="!isOpen && !exiting"

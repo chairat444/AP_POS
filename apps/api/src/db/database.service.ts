@@ -73,9 +73,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         name TEXT NOT NULL,
         phone TEXT,
         points INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         deleted_at TIMESTAMPTZ
       );
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+      UPDATE customers SET created_at = COALESCE(created_at, updated_at, NOW()) WHERE created_at IS NULL;
+      ALTER TABLE customers ALTER COLUMN created_at SET DEFAULT NOW();
+      ALTER TABLE customers ALTER COLUMN created_at SET NOT NULL;
       CREATE TABLE IF NOT EXISTS staff (
         id TEXT PRIMARY KEY,
         code TEXT NOT NULL UNIQUE,

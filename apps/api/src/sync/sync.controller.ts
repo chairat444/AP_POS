@@ -79,6 +79,12 @@ export class SyncController {
     return this.sync.claimTerminal(body);
   }
 
+  /** ค้นสมาชิกด้วยเบอร์จาก POS — ออนไลน์ · ไม่ต้อง login Admin */
+  @Get("members/lookup")
+  lookupMember(@Query("phone") phone = "") {
+    return this.sync.lookupMemberByPhone(phone);
+  }
+
   /** สร้างสมาชิกจาก POS — ต้องออนไลน์ · ไม่ต้อง login Admin */
   @Post("members")
   createMember(

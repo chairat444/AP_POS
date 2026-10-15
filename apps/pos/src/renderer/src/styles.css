@@ -3606,6 +3606,7 @@ input {
 }
 
 .cust {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(280px, 0.95fr) minmax(0, 1.15fr);
   height: 100%;
@@ -3746,17 +3747,22 @@ input {
   flex: 0 0 auto;
   align-self: stretch;
   width: 100%;
+  /* คงสัดส่วน 1200×200 — กันจอแนวนอนยืด/บีบจนสแกน QR ไม่ได้ */
+  aspect-ratio: 6 / 1;
+  max-height: min(28vh, 240px);
   line-height: 0;
   overflow: hidden;
   border-radius: 14px;
-  background: transparent;
+  background: #7f1d1d;
   box-shadow: 0 6px 18px rgba(15, 23, 42, 0.1);
 }
 
 .cust-mid-banner__img {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: contain;
+  object-position: center center;
 }
 
 .cust-panel {
@@ -4285,6 +4291,204 @@ input {
 .cust-change--thanks strong {
   font-size: clamp(2rem, 4.5vw, 3.2rem);
   grid-column: 1 / -1;
+}
+
+/* หลังจบบิล — การ์ดขอบคุณพอดีจอ + ดุ๊กดิ๊ก/วิ้ง */
+.cust-thanks-flash {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  padding: clamp(0.5rem, 1.5vw, 1rem);
+  background: #7f1d1d;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.cust-thanks-flash__stage {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  display: grid;
+  place-items: center;
+  animation: cust-thanks-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.cust-thanks-flash__change {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(1rem, 4vh, 2.5rem);
+  z-index: 2;
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: auto auto auto;
+  gap: 0.35rem 0.65rem;
+  align-items: baseline;
+  justify-content: center;
+  min-width: min(72vw, 28rem);
+  padding: 0.85rem 1.4rem 1rem;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #7f1d1d;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
+  animation: cust-thanks-in 0.45s cubic-bezier(0.22, 1, 0.36, 1) 0.12s both;
+}
+
+.cust-thanks-flash__change span {
+  font-size: clamp(1rem, 2.4vw, 1.35rem);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.cust-thanks-flash__change strong {
+  font-size: clamp(2.2rem, 6vw, 3.6rem);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+
+.cust-thanks-flash__change em {
+  font-style: normal;
+  font-size: clamp(1rem, 2.2vw, 1.25rem);
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+.cust-thanks-flash__pig {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  object-position: center;
+  border-radius: clamp(10px, 1.2vw, 18px);
+  background: transparent;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.28);
+  transform-origin: 50% 60%;
+  animation:
+    cust-thanks-bob 1.15s ease-in-out infinite,
+    cust-thanks-shine 1.8s ease-in-out infinite;
+}
+
+.cust-thanks-flash__spark {
+  position: absolute;
+  z-index: 2;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff9c4 0%, #fbbf24 45%, transparent 72%);
+  box-shadow:
+    0 0 10px 2px rgba(251, 191, 36, 0.85),
+    0 0 22px 4px rgba(255, 255, 255, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  animation: cust-thanks-spark 1.4s ease-in-out infinite;
+}
+
+.cust-thanks-flash__spark::before,
+.cust-thanks-flash__spark::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: #fff8e1;
+  border-radius: 1px;
+  transform: translate(-50%, -50%);
+}
+
+.cust-thanks-flash__spark::before {
+  width: 180%;
+  height: 18%;
+}
+
+.cust-thanks-flash__spark::after {
+  width: 18%;
+  height: 180%;
+}
+
+.cust-thanks-flash__spark.is-1 { left: 12%; top: 18%; animation-delay: 0s; }
+.cust-thanks-flash__spark.is-2 { left: 78%; top: 14%; animation-delay: 0.18s; width: 0.7rem; height: 0.7rem; }
+.cust-thanks-flash__spark.is-3 { left: 22%; top: 72%; animation-delay: 0.32s; }
+.cust-thanks-flash__spark.is-4 { left: 86%; top: 62%; animation-delay: 0.45s; width: 0.45rem; height: 0.45rem; }
+.cust-thanks-flash__spark.is-5 { left: 48%; top: 8%; animation-delay: 0.6s; width: 0.62rem; height: 0.62rem; }
+.cust-thanks-flash__spark.is-6 { left: 8%; top: 48%; animation-delay: 0.75s; }
+.cust-thanks-flash__spark.is-7 { left: 70%; top: 80%; animation-delay: 0.9s; width: 0.5rem; height: 0.5rem; }
+.cust-thanks-flash__spark.is-8 { left: 38%; top: 86%; animation-delay: 1.05s; width: 0.68rem; height: 0.68rem; }
+
+.cust-thanks-flash__msg {
+  display: none;
+}
+
+.cust-thanks-flash-enter-active,
+.cust-thanks-flash-leave-active {
+  transition: opacity 0.35s ease;
+}
+
+.cust-thanks-flash-enter-from,
+.cust-thanks-flash-leave-to {
+  opacity: 0;
+}
+
+@keyframes cust-thanks-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes cust-thanks-bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  25% {
+    transform: translateY(-10px) rotate(-1.4deg) scale(1.015);
+  }
+  50% {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  75% {
+    transform: translateY(-6px) rotate(1.2deg) scale(1.01);
+  }
+}
+
+@keyframes cust-thanks-shine {
+  0%,
+  100% {
+    filter: brightness(1) saturate(1);
+  }
+  50% {
+    filter: brightness(1.08) saturate(1.08);
+  }
+}
+
+@keyframes cust-thanks-spark {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.4) translateY(6px);
+  }
+  35%,
+  55% {
+    opacity: 1;
+    transform: scale(1.15) translateY(-4px);
+  }
+  70% {
+    opacity: 0.35;
+    transform: scale(0.7) translateY(0);
+  }
 }
 
 .cust-change--overlay {
@@ -4864,5 +5068,447 @@ input {
 
   .cust {
     grid-template-columns: minmax(200px, 0.82fr) minmax(0, 1.25fr);
+  }
+}
+
+/* ===== จอลูกค้าแนวตั้ง (~1080×1920 / 19" portrait) =====
+   วิดีโอเต็มความกว้างด้านบน · รายการบิลกินพื้นที่หลักด้านล่าง */
+.cust.is-portrait {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 100dvh;
+  height: 100dvh;
+}
+
+.cust.is-portrait .cust-brand {
+  border-right: none;
+  border-bottom: 1px solid var(--line);
+  padding: 0.55rem 0.7rem 0.65rem;
+  gap: 0.5rem;
+  background:
+    linear-gradient(180deg, #fffaf7 0%, #f5f5f4 100%);
+  flex: 0 0 auto;
+  max-height: none;
+  overflow: hidden;
+}
+
+.cust.is-portrait.has-banner .cust-brand {
+  padding: 0.45rem 0.55rem 0.55rem;
+  gap: 0.4rem;
+}
+
+.cust.is-portrait .cust-brand__body {
+  gap: 0.45rem;
+}
+
+.cust.is-portrait .cust-brand__top {
+  gap: 0.7rem;
+}
+
+.cust.is-portrait .cust-brand__logo {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  padding: 4px;
+}
+
+.cust.is-portrait .cust-brand__name {
+  font-size: clamp(1.35rem, 4.2vw, 1.85rem);
+}
+
+.cust.is-portrait .cust-brand__tag {
+  margin-top: 0.15rem;
+  font-size: 0.92rem;
+}
+
+/* แนวตั้งโมเสก: ซ้ายรูป 2 ชั้น · ขวาคลิปกินสูงทั้งสองชั้น
+   ขนาดกล่องผูกกับความกว้างจอ → ช่องซ้ายใกล้สัดส่วนแบนเนอร์แนวนอน
+   รูปซ้าย cover (ไม่ดำ) · คลิปขวา contain (ไม่ล้น/ไม่ซูมเกิน) */
+.cust.is-portrait .cust-media-mosaic {
+  display: grid;
+  /* ซ้ายรูป · ขวาคลิป · แถวล่าง (ถ้ามี) = แบนเนอร์สมัครยาวเต็ม */
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0.4rem;
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 100%;
+  /* ~ สองแถวแบนเนอร์ 16:9 ของคอลัมน์ซ้าย */
+  height: min(36vh, 54vw);
+  max-height: 400px;
+  min-height: 200px;
+  min-width: 0;
+}
+
+.cust.is-portrait .cust-media-mosaic.has-mid-span {
+  grid-template-rows: minmax(0, 1fr) auto;
+  height: auto;
+  max-height: none;
+  min-height: 0;
+}
+
+.cust.is-portrait .cust-media-mosaic.has-mid-span .cust-media-mosaic__stills,
+.cust.is-portrait .cust-media-mosaic.has-mid-span .cust-ads {
+  height: min(28vh, 46vw);
+  max-height: 320px;
+  min-height: 150px;
+}
+
+.cust.is-portrait.has-items .cust-media-mosaic:not(.has-mid-span),
+.cust.is-portrait.is-paying .cust-media-mosaic:not(.has-mid-span) {
+  height: min(30vh, 48vw);
+  max-height: 340px;
+  min-height: 170px;
+}
+
+.cust.is-portrait.has-items .cust-media-mosaic.has-mid-span .cust-media-mosaic__stills,
+.cust.is-portrait.has-items .cust-media-mosaic.has-mid-span .cust-ads,
+.cust.is-portrait.is-paying .cust-media-mosaic.has-mid-span .cust-media-mosaic__stills,
+.cust.is-portrait.is-paying .cust-media-mosaic.has-mid-span .cust-ads {
+  height: min(24vh, 40vw);
+  max-height: 280px;
+  min-height: 130px;
+}
+
+.cust.is-portrait .cust-mid-banner--span {
+  grid-column: 1 / -1;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #7f1d1d;
+  line-height: 0;
+  aspect-ratio: 6 / 1;
+  max-height: min(18vh, 200px);
+}
+
+.cust.is-portrait .cust-mid-banner--span .cust-mid-banner__img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  background: #7f1d1d;
+}
+
+.cust.is-portrait .cust-media-mosaic__stills {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  gap: 0.4rem;
+  min-height: 0;
+  min-width: 0;
+}
+
+.cust.is-portrait .cust-media-mosaic.is-single-still .cust-media-mosaic__stills {
+  grid-template-rows: 1fr;
+}
+
+.cust.is-portrait .cust-media-mosaic .cust-top-banner,
+.cust.is-portrait .cust-media-mosaic .cust-mid-banner,
+.cust.is-portrait .cust-media-mosaic .cust-panel {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #0b1220;
+  line-height: 0;
+}
+
+.cust.is-portrait .cust-media-mosaic .cust-top-banner__img,
+.cust.is-portrait .cust-media-mosaic .cust-mid-banner__img,
+.cust.is-portrait .cust-media-mosaic .cust-panel__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center center;
+}
+
+.cust.is-portrait .cust-media-mosaic .cust-ads {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
+  background: #0b1220;
+  display: grid;
+  place-items: center;
+}
+
+.cust.is-portrait .cust-media-mosaic .cust-ads__media {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  object-position: center center;
+  background: #0b1220;
+}
+
+/* แบนเนอร์/สื่อแนวตั้ง (สแต็กปกติ ตอนไม่มีโมเสก) */
+.cust.is-portrait:not(.has-media-mosaic) .cust-top-banner,
+.cust.is-portrait:not(.has-media-mosaic) .cust-panel {
+  width: 100%;
+  flex: 0 0 auto;
+  height: clamp(88px, 12vh, 168px);
+  max-height: none;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #111827;
+  line-height: 0;
+}
+
+/* mid แนวตั้งแบบสแต็ก — คงสัดส่วน ไม่บังคับสูงคงที่ (กันบีบ QR) */
+.cust.is-portrait:not(.has-media-mosaic) .cust-mid-banner {
+  width: 100%;
+  flex: 0 0 auto;
+  height: auto;
+  aspect-ratio: 6 / 1;
+  max-height: min(20vh, 220px);
+  border-radius: 12px;
+  overflow: hidden;
+  background: #7f1d1d;
+  line-height: 0;
+}
+
+.cust.is-portrait:not(.has-media-mosaic) .cust-panel {
+  margin-top: 0;
+}
+
+.cust.is-portrait:not(.has-media-mosaic) .cust-top-banner__img,
+.cust.is-portrait:not(.has-media-mosaic) .cust-panel__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+  object-position: center center;
+}
+
+.cust.is-portrait:not(.has-media-mosaic) .cust-mid-banner__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center center;
+}
+
+.cust.is-portrait:not(.has-media-mosaic) .cust-ads {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 100%;
+  height: clamp(160px, 28vh, 360px);
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  border-radius: 16px;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18);
+  background: #0b1220;
+}
+
+.cust.is-portrait:not(.has-media-mosaic).has-items .cust-ads,
+.cust.is-portrait:not(.has-media-mosaic).is-paying .cust-ads {
+  height: clamp(140px, 22vh, 280px);
+}
+
+.cust.is-portrait:not(.has-media-mosaic) .cust-ads__media {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  object-position: center center;
+}
+
+.cust.is-portrait .cust-welcome {
+  margin-top: 0;
+  padding: 0.85rem 1rem;
+  border-radius: 14px;
+}
+
+.cust.is-portrait .cust-welcome p {
+  font-size: clamp(1.25rem, 3.6vw, 1.7rem);
+}
+
+.cust.is-portrait .cust-change--panel {
+  min-height: clamp(120px, 16vh, 180px);
+  padding: 1.1rem 1.2rem;
+  border-radius: 16px;
+}
+
+.cust.is-portrait .cust-change strong {
+  font-size: clamp(2.6rem, 8vw, 3.8rem);
+}
+
+.cust.is-portrait .cust-thanks-flash__change {
+  min-width: min(88vw, 22rem);
+  bottom: clamp(1.2rem, 5vh, 2.8rem);
+  padding: 0.75rem 1.1rem 0.9rem;
+}
+
+.cust.is-portrait .cust-thanks-flash__change strong {
+  font-size: clamp(2rem, 8vw, 3.2rem);
+}
+
+.cust.is-portrait .cust-thanks-flash {
+  padding: clamp(0.6rem, 2vh, 1.1rem);
+}
+
+.cust.is-portrait .cust-thanks-flash__pig {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.cust.is-portrait .cust-pay {
+  margin-top: 0;
+  padding: 0.85rem 1rem;
+  border-radius: 16px;
+  gap: 0.45rem;
+}
+
+.cust.is-portrait .cust-pay__row strong {
+  font-size: clamp(1.6rem, 5vw, 2.2rem);
+}
+
+/* รายการบิล — กินพื้นที่หลักแนวตั้ง */
+.cust.is-portrait .cust-ticket {
+  min-height: 0;
+  background:
+    radial-gradient(520px 220px at 100% 0%, #ecfdf5 0%, transparent 55%),
+    linear-gradient(180deg, #fffefb 0%, #f8fafc 100%);
+}
+
+.cust.is-portrait .cust-ticket__head {
+  flex-direction: column;
+  padding: 0.7rem 0.9rem;
+  gap: 0.55rem;
+  align-items: stretch;
+}
+
+.cust.is-portrait .cust-ticket__head > div:first-child {
+  margin-right: 0;
+  flex-direction: row;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.cust.is-portrait .cust-ticket__head > div:first-child strong {
+  font-size: clamp(1.2rem, 3.8vw, 1.55rem);
+}
+
+.cust.is-portrait .cust-ticket__head > .cust-member {
+  margin-left: 0;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.cust.is-portrait .cust-member {
+  min-width: 0;
+  padding: 0.55rem 0.75rem;
+}
+
+.cust.is-portrait .cust-member__name {
+  max-width: none;
+  font-size: clamp(1.1rem, 3.4vw, 1.45rem);
+}
+
+.cust.is-portrait .cust-member__usable strong {
+  font-size: clamp(1.5rem, 4.5vw, 2.1rem);
+}
+
+.cust.is-portrait .cust-lines {
+  padding: 0.45rem 0.65rem 0.7rem;
+}
+
+.cust.is-portrait .cust-line {
+  padding: 0.75rem 0.7rem;
+  gap: 0.65rem;
+}
+
+.cust.is-portrait .cust-line__body strong {
+  font-size: clamp(1.05rem, 3.2vw, 1.25rem);
+}
+
+.cust.is-portrait .cust-line__amt {
+  font-size: clamp(1.2rem, 3.6vw, 1.45rem);
+}
+
+.cust.is-portrait .cust-foot {
+  box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.cust.is-portrait .cust-total {
+  padding: 1rem 1.1rem 1.15rem;
+}
+
+.cust.is-portrait .cust-total__label > span {
+  font-size: 1.05rem;
+}
+
+.cust.is-portrait .cust-total strong {
+  font-size: clamp(2.8rem, 10vw, 4.4rem);
+}
+
+/* PromptPay แนวตั้ง — QR เด่นด้านบน รายการด้านล่าง */
+.cust.is-portrait.has-pp-qr {
+  grid-template-rows: minmax(0, 1.2fr) minmax(0, 0.8fr);
+}
+
+.cust.is-portrait.has-pp-qr .cust-brand {
+  padding: 0.65rem 0.75rem 0.8rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.cust.is-portrait.has-pp-qr .cust-ads.cust-pay-qr {
+  height: auto;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.cust.is-portrait.has-pp-qr .cust-pay-qr__card {
+  width: min(100%, 28rem);
+  gap: 0.55rem;
+  padding: 0.85rem 1rem 0.95rem;
+}
+
+.cust.is-portrait.has-pp-qr .cust-pay-qr__img {
+  width: clamp(200px, 42vw, 320px);
+}
+
+.cust.is-portrait.has-pp-qr .cust-pay--with-qr {
+  margin-top: 0.35rem;
+}
+
+/* fallback ก่อน JS ใส่ is-portrait — สแต็กแนวตั้งทันที */
+@media (orientation: portrait), (max-aspect-ratio: 10/16) {
+  .cust:not(.is-portrait) {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100dvh;
+  }
+
+  .cust:not(.is-portrait) .cust-brand {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .cust:not(.is-portrait) .cust-ads {
+    width: 100%;
+    height: clamp(160px, 28vh, 360px);
+    min-height: 0;
+  }
+
+  .cust:not(.is-portrait) .cust-ads__media {
+    object-fit: contain;
   }
 }

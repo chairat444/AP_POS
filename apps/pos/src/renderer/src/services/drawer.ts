@@ -1,7 +1,6 @@
 import { loadPrinterConfig } from "./receipt";
 
 let cachedPrinterName: string | undefined;
-let cachedOpenDrawer = true;
 let primed = false;
 
 /** จำชื่อเครื่องพิมพ์ไว้ — เตะได้ทันทีโดยไม่รออ่าน SQLite */
@@ -9,7 +8,6 @@ export async function primeDrawerFromPrinterConfig(): Promise<void> {
   try {
     const cfg = await loadPrinterConfig();
     cachedPrinterName = cfg.printerName?.trim() || undefined;
-    cachedOpenDrawer = cfg.openDrawer !== false;
     primed = true;
   } catch {
     /* ignore */
@@ -21,7 +19,11 @@ export function setDrawerPrinterName(name: string | undefined) {
   primed = true;
 }
 
-/** เตะลิ้นชัก — ไม่ throw · ไม่บล็อกงานอื่น (sync/บันทึก) */
+/**
+ * เตะลิ้นชัก — ไม่ throw · ไม่บล็อกงานอื่น
+ * ใช้ตอนจบบิล / นำเงินเข้า-ออก / นับเงิน / ปิดรอบ
+ * (ไม่ผูกกับติ๊ก「เตะลิ้นชักก่อนพิมพ์」— ติ๊กนั้นมีผลเฉพาะตอนพิมพ์สลิป)
+ */
 export function kickCashDrawer(deviceName?: string): void {
   void (async () => {
     try {
@@ -35,7 +37,6 @@ export function kickCashDrawer(deviceName?: string): void {
       if (!primed) {
         await primeDrawerFromPrinterConfig();
       }
-      if (!cachedOpenDrawer) return;
       await window.apPos.print.kickDrawer({
         deviceName: cachedPrinterName,
       });

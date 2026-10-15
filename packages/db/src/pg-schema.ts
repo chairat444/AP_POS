@@ -61,6 +61,7 @@ export const customers = pgTable("customers", {
   name: text("name").notNull(),
   phone: text("phone"),
   points: integer("points").notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
 });

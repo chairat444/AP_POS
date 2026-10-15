@@ -14,6 +14,8 @@ import {
 } from "../services/sync";
 import { formatInt, formatMoney } from "../utils/format";
 import fallbackLogo from "../assets/store-logo.png";
+import pigBowThanks from "../assets/pig-bow-thanks.jpg";
+import thanksServiceAudioUrl from "../assets/thanks-service.mp3";
 
 const settings = useSettingsStore();
 const {
@@ -73,6 +75,13 @@ const emptyCart: CartSnapshot = {
 const cart = ref<CartSnapshot>({ ...emptyCart });
 const listEl = ref<HTMLElement | null>(null);
 const videoEl = ref<HTMLVideoElement | null>(null);
+/** จอแนวตั้ง ~1080×1920 / 19" portrait */
+const isPortrait = ref(false);
+let portraitMql: MediaQueryList | null = null;
+
+function syncPortrait() {
+  isPortrait.value = Boolean(portraitMql?.matches);
+}
 
 const hasItems = computed(() => cart.value.lines.length > 0);
 const isPaying = computed(() => Boolean(cart.value.paying));
@@ -80,9 +89,77 @@ const isPostPaid = computed(() => Boolean(cart.value.postPaid));
 const showChange = computed(
   () => !isPaying.value && cart.value.change > 0,
 );
-const showThanks = computed(
-  () => isPostPaid.value && !showChange.value && !isPaying.value,
-);
+/** หลังจบบิล — เล่นเสียงขอบคุณ + แวบน้องหมูเต็มจอ */
+const showThanks = computed(() => isPostPaid.value && !isPaying.value);
+/** โชว์ overlay เต็มจอจนกว่าเสียงจะจบ */
+const thanksFlash = ref(false);
+
+let thanksAudio: HTMLAudioElement | null = null;
+let thanksPlayed = false;
+let thanksFlashTimer: number | undefined;
+let thanksEndedHandler: (() => void) | null = null;
+
+function clearThanksFlashTimer() {
+  if (thanksFlashTimer != null) {
+    window.clearTimeout(thanksFlashTimer);
+    thanksFlashTimer = undefined;
+  }
+}
+
+function hideThanksFlash() {
+  thanksFlash.value = false;
+  clearThanksFlashTimer();
+  if (thanksAudio && thanksEndedHandler) {
+    thanksAudio.removeEventListener("ended", thanksEndedHandler);
+    thanksEndedHandler = null;
+  }
+}
+
+function playThanksAudio() {
+  try {
+    if (!thanksAudio) {
+      thanksAudio = new Audio(thanksServiceAudioUrl);
+      thanksAudio.preload = "auto";
+      thanksAudio.volume = 1;
+    }
+    if (thanksEndedHandler) {
+      thanksAudio.removeEventListener("ended", thanksEndedHandler);
+    }
+    thanksEndedHandler = () => hideThanksFlash();
+    thanksAudio.addEventListener("ended", thanksEndedHandler);
+    thanksAudio.pause();
+    thanksAudio.currentTime = 0;
+    thanksFlash.value = true;
+    clearThanksFlashTimer();
+    // สำรองถ้า ended ไม่มา (เครื่องบางตัว)
+    thanksFlashTimer = window.setTimeout(() => hideThanksFlash(), 4500);
+    void thanksAudio.play().catch(() => {
+      hideThanksFlash();
+    });
+  } catch {
+    hideThanksFlash();
+  }
+}
+
+watch(showThanks, (on) => {
+  if (!on) {
+    thanksPlayed = false;
+    hideThanksFlash();
+    if (thanksAudio) {
+      thanksAudio.pause();
+      thanksAudio.currentTime = 0;
+    }
+    return;
+  }
+  if (thanksPlayed) return;
+  thanksPlayed = true;
+  try {
+    videoEl.value?.pause();
+  } catch {
+    /* ignore */
+  }
+  playThanksAudio();
+});
 
 /** ถ้าวิดีโอพังต่อเนื่อง → ถอยไปใช้รูปด้านล่าง (แล้วลองใหม่) */
 const adsUnavailable = ref(false);
@@ -165,6 +242,44 @@ const showPanelMedia = computed(
     hasPanel.value &&
     !showChange.value &&
     !showThanks.value,
+);
+
+/** จอแนวตั้ง: ซ้ายรูป 2 ชั้น · ขวาคลิปกินสูงทั้งสองชั้น */
+type PortraitStill = {
+  kind: "top" | "mid" | "panel";
+  src: string;
+  boxClass: string;
+  imgClass: string;
+};
+const portraitStills = computed((): PortraitStill[] => {
+  if (!isPortrait.value || !showAds.value || showPromptPayQr.value) return [];
+  const slots: PortraitStill[] = [];
+  // ซ้ายบน = แบนเนอร์ร้าน · ซ้ายล่าง = รูปล่าง (panel)
+  // แบนเนอร์สมัคร (mid) ไม่อยู่ใน 2 ช่องนี้ — วางยาวเต็มใต้ mosaic แทน
+  if (hasBanner.value && bannerSrc.value) {
+    slots.push({
+      kind: "top",
+      src: bannerSrc.value,
+      boxClass: "cust-top-banner",
+      imgClass: "cust-top-banner__img",
+    });
+  }
+  if (showPanelMedia.value && panelSrc.value) {
+    slots.push({
+      kind: "panel",
+      src: panelSrc.value,
+      boxClass: "cust-panel",
+      imgClass: "cust-panel__img",
+    });
+  }
+  return slots.slice(0, 2);
+});
+const portraitMediaMosaic = computed(
+  () => isPortrait.value && showAds.value && portraitStills.value.length > 0,
+);
+/** จอแนวตั้ง+คลิป: โชว์แบนเนอร์สมัครยาวเต็มใต้รูป+วิดีโอ */
+const showPortraitMidSpan = computed(
+  () => portraitMediaMosaic.value && hasMidBanner.value && Boolean(midBannerSrc.value),
 );
 
 watch(
@@ -553,6 +668,11 @@ async function hydrateSettings() {
 
 onMounted(() => {
   stopped = false;
+  portraitMql = window.matchMedia(
+    "(orientation: portrait), (max-aspect-ratio: 10/16)",
+  );
+  syncPortrait();
+  portraitMql.addEventListener?.("change", syncPortrait);
   unsubscribe = window.apPos?.onCartUpdate((snapshot) => {
     applySnapshot(snapshot);
   });
@@ -608,9 +728,16 @@ onUnmounted(() => {
   playGen += 1;
   clearErrorTimer();
   clearRetryAdsTimer();
+  portraitMql?.removeEventListener?.("change", syncPortrait);
+  portraitMql = null;
   if (settingsPollTimer != null) {
     window.clearInterval(settingsPollTimer);
     settingsPollTimer = null;
+  }
+  hideThanksFlash();
+  if (thanksAudio) {
+    thanksAudio.pause();
+    thanksAudio = null;
   }
   unloadMedia();
   unsubscribe?.();
@@ -624,7 +751,8 @@ onUnmounted(() => {
     :class="{
       'has-items': hasItems,
       'has-change': showChange,
-      'has-thanks': showThanks,
+      'has-thanks': thanksFlash,
+      'has-thanks-flash': thanksFlash,
       'has-ads': showAds,
       'has-panel': showPanelMedia,
       'has-banner': hasBanner && !showPromptPayQr,
@@ -632,11 +760,14 @@ onUnmounted(() => {
       'is-paying': isPaying,
       'has-pp-qr': showPromptPayQr,
       'is-post-paid': isPostPaid,
+      'is-portrait': isPortrait,
+      'has-media-mosaic': portraitMediaMosaic,
     }"
   >
     <aside class="cust-brand">
       <!-- โอน PromptPay: เอาแบนเนอร์บนออก เหลือพื้นที่ให้ QR -->
-      <template v-if="!showPromptPayQr">
+      <!-- แนวตั้ง+คลิป: แบนเนอร์ย้ายไปโมเสกซ้าย — ไม่โชว์ซ้ำด้านบน -->
+      <template v-if="!showPromptPayQr && !portraitMediaMosaic">
         <div v-if="hasBanner" class="cust-top-banner">
           <img
             class="cust-top-banner__img"
@@ -737,7 +868,76 @@ onUnmounted(() => {
 
         <!-- ปกติ / ชำระเงินสดฯ — โฆษณายังเล่นได้ -->
         <template v-else>
-          <div v-if="showAds" class="cust-ads" aria-hidden="true">
+          <!-- แนวตั้ง: ซ้ายรูป 2 ชั้น · ขวาคลิป · ใต้ = แบนเนอร์สมัครยาวเต็ม -->
+          <div
+            v-if="portraitMediaMosaic"
+            class="cust-media-mosaic"
+            :class="{
+              'is-single-still': portraitStills.length < 2,
+              'has-mid-span': showPortraitMidSpan,
+            }"
+            aria-hidden="true"
+          >
+            <div class="cust-media-mosaic__stills">
+              <div
+                v-for="slot in portraitStills"
+                :key="slot.kind"
+                :class="slot.boxClass"
+              >
+                <img
+                  :class="slot.imgClass"
+                  :src="slot.src"
+                  alt=""
+                  decoding="async"
+                />
+              </div>
+            </div>
+            <div class="cust-ads" aria-hidden="true">
+              <img
+                v-show="mediaType === 'image' && mediaSrc"
+                class="cust-ads__media"
+                :src="mediaSrc || undefined"
+                alt=""
+                decoding="async"
+                @error="onImageError"
+              />
+              <video
+                v-show="mediaType === 'video' && mediaSrc"
+                ref="videoEl"
+                class="cust-ads__media"
+                :src="mediaSrc || undefined"
+                :loop="mediaLoop"
+                muted
+                playsinline
+                preload="auto"
+                @ended="onVideoEnded"
+                @error="onVideoError"
+                @loadeddata="() => playCurrentVideo()"
+              ></video>
+              <div v-if="dots > 1" class="cust-ads__dots">
+                <span
+                  v-for="(_, i) in dots"
+                  :key="i"
+                  class="cust-ads__dot"
+                  :class="{ 'is-on': i === mediaIndex }"
+                ></span>
+              </div>
+            </div>
+            <div
+              v-if="showPortraitMidSpan"
+              class="cust-mid-banner cust-mid-banner--span"
+            >
+              <img
+                class="cust-mid-banner__img"
+                :key="midBannerSrc"
+                :src="midBannerSrc"
+                alt=""
+                decoding="async"
+              />
+            </div>
+          </div>
+
+          <div v-else-if="showAds" class="cust-ads" aria-hidden="true">
             <img
               v-show="mediaType === 'image' && mediaSrc"
               class="cust-ads__media"
@@ -775,10 +975,20 @@ onUnmounted(() => {
           >
             <p v-if="hasItems">กำลังคิดเงิน</p>
             <p v-else>ยินดีต้อนรับ</p>
-            <span>{{ hasItems ? "โปรดตรวจสอบรายการด้านขวา" : "รอสแกนสินค้า" }}</span>
+            <span>{{
+              hasItems
+                ? isPortrait
+                  ? "โปรดตรวจสอบรายการด้านล่าง"
+                  : "โปรดตรวจสอบรายการด้านขวา"
+                : "รอสแกนสินค้า"
+            }}</span>
           </div>
 
-          <div v-if="hasMidBanner" class="cust-mid-banner" aria-hidden="true">
+          <div
+            v-if="hasMidBanner && !portraitMediaMosaic"
+            class="cust-mid-banner"
+            aria-hidden="true"
+          >
             <img
               class="cust-mid-banner__img"
               :key="midBannerSrc"
@@ -788,19 +998,19 @@ onUnmounted(() => {
             />
           </div>
 
-          <div v-if="showChange" class="cust-change cust-change--panel">
+          <div
+            v-if="showChange && !thanksFlash"
+            class="cust-change cust-change--panel"
+          >
             <span>เงินทอน</span>
             <strong>{{ formatMoney(cart.change) }}</strong>
             <em>บ.</em>
           </div>
           <div
-            v-else-if="showThanks"
-            class="cust-change cust-change--panel cust-change--thanks"
+            v-else-if="showPanelMedia && !portraitMediaMosaic"
+            class="cust-panel"
+            aria-hidden="true"
           >
-            <span>ชำระเรียบร้อย</span>
-            <strong>ขอบคุณครับ</strong>
-          </div>
-          <div v-else-if="showPanelMedia" class="cust-panel" aria-hidden="true">
             <img
               class="cust-panel__img"
               :key="panelSrc"
@@ -911,5 +1121,38 @@ onUnmounted(() => {
         </div>
       </footer>
     </section>
+
+    <Transition name="cust-thanks-flash">
+      <div
+        v-if="thanksFlash"
+        class="cust-thanks-flash"
+        aria-live="polite"
+      >
+        <div class="cust-thanks-flash__stage">
+          <img
+            class="cust-thanks-flash__pig"
+            :src="pigBowThanks"
+            alt="เอพีหมูสด ขอบคุณค่ะ"
+            decoding="async"
+          />
+          <span
+            v-for="n in 8"
+            :key="n"
+            class="cust-thanks-flash__spark"
+            :class="`is-${n}`"
+            aria-hidden="true"
+          />
+        </div>
+        <!-- เงินทอนต้องโชว์ตอนขอบคุณ — อย่าบังด้วยน้องหมูอย่างเดียว -->
+        <div
+          v-if="cart.change > 0"
+          class="cust-thanks-flash__change"
+        >
+          <span>เงินทอน</span>
+          <strong>{{ formatMoney(cart.change) }}</strong>
+          <em>บ.</em>
+        </div>
+      </div>
+    </Transition>
   </div>
 </template>

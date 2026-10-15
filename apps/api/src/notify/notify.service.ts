@@ -129,6 +129,7 @@ const DISCORD_COLOR = {
   shiftCloseShort: 0xdc2626, // แดง (ขาด)
   shiftCloseOver: 0xd97706, // เหลือง (เกิน)
   salesBrief: 0x0f766e, // เขียวน้ำทะเล
+  purchaseOrder: 0xca8a04, // เหลืองทอง · สั่งของ
 } as const;
 
 function embedMeta(parts: Array<string | null | undefined | false>) {
@@ -739,6 +740,107 @@ export class NotifyService {
     } catch (err) {
       this.logger.warn(
         `notifyShiftClose failed: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  /**
+   * แจ้งเมื่อน้องส่งคงเหลือจากมือถือ (/purchases/order)
+   */
+  async notifyPurchaseOrder(payload: {
+    branchId: string;
+    branchName?: string;
+    branchCode?: string;
+    staffName?: string;
+    day?: string;
+    items: Array<{
+      name: string;
+      remaining?: number | string | null;
+      spare?: boolean;
+      empty?: boolean;
+      order?: boolean;
+    }>;
+  }) {
+    try {
+      if (!payload.branchId || !payload.items.length) return;
+
+      const branch = await this.database.db
+        .select({ name: pg.branches.name, code: pg.branches.code })
+        .from(pg.branches)
+        .where(eq(pg.branches.id, payload.branchId))
+        .limit(1);
+      const branchLabel =
+        payload.branchName?.trim() ||
+        branch[0]?.name?.trim() ||
+        branch[0]?.code?.trim() ||
+        payload.branchId;
+      const branchCode = payload.branchCode?.trim() || branch[0]?.code;
+
+      const rows = payload.items.map((item) => {
+        const name = String(item.name ?? "").trim() || "-";
+        let status = "เหลือ";
+        if (item.empty) {
+          status = "หมด";
+        } else if (item.order) {
+          const n =
+            item.remaining != null
+              ? String(item.remaining).trim().replace(/[^\d.]/g, "")
+              : "";
+          status = n ? `ขอ${n}` : "ขอ";
+        } else if (
+          item.remaining != null &&
+          String(item.remaining).trim() !== ""
+        ) {
+          const n = String(item.remaining).trim().replace(/[^\d.]/g, "");
+          status = n || String(item.remaining).trim();
+        }
+        if (item.spare) {
+          status =
+            status === "เหลือ" || status === "—"
+              ? "สำรอง"
+              : `${status} สำรอง`;
+        }
+        return discordQtyNameRow(name, status, 10, 24);
+      });
+
+      const MAX_ROWS = 45;
+      const shown = rows.slice(0, MAX_ROWS);
+      const more =
+        rows.length > MAX_ROWS
+          ? `\n…และอีก ${rows.length - MAX_ROWS} รายการ`
+          : "";
+
+      const dayLabel = payload.day?.trim()
+        ? `วัน ${payload.day.trim()}`
+        : null;
+
+      let description = embedMeta([
+        payload.staffName?.trim()
+          ? `ส่งโดย: ${payload.staffName.trim()}`
+          : null,
+        dayLabel,
+        `รายการ ${payload.items.length} อย่าง`,
+        discordBlock(shown) + more,
+      ]);
+      if (description.length > 3900) {
+        description = `${description.slice(0, 3890)}\n…`;
+      }
+
+      await this.sendDiscord("", {
+        branchId: payload.branchId,
+        branchCode,
+        embeds: [
+          {
+            title: `สั่งของ · ${branchLabel}`,
+            description,
+            color: DISCORD_COLOR.purchaseOrder,
+            footer: { text: "AP POS · สั่งของ" },
+          },
+        ],
+      });
+    } catch (err) {
+      this.logger.warn(
+        `notifyPurchaseOrder failed: ${err instanceof Error ? err.message : err}`,
       );
     }
   }

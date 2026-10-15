@@ -1238,6 +1238,52 @@ async function savePendingMemberCreates(rows: PendingMemberCreate[]) {
   );
 }
 
+/** ค้นสมาชิกด้วยเบอร์จากเซิร์ฟเวอร์ · อัปเดตแคชเครื่อง · ออฟไลน์คืน null */
+export async function lookupMemberByPhone(
+  phoneRaw: string,
+): Promise<Member | null> {
+  const phone = String(phoneRaw || "").replace(/\D/g, "");
+  if (phone.length < 9) return null;
+  if (isTestMode()) return null;
+  if (isApiOfflineKnown()) return null;
+  if (!(await isApiReachable(1200))) return null;
+  try {
+    const data = await fetchJson<{
+      found: boolean;
+      member?: {
+        id: string;
+        code: string;
+        name: string;
+        phone?: string;
+        points: number;
+        updatedAt?: string;
+      };
+    }>(
+      `${getApiBase()}/sync/members/lookup?phone=${encodeURIComponent(phone)}`,
+      4000,
+    );
+    if (!data.found || !data.member) return null;
+    const member: Member = {
+      id: data.member.id,
+      code: data.member.code,
+      name: data.member.name,
+      phone: String(data.member.phone ?? "").replace(/\D/g, "") || phone,
+      points: Number(data.member.points) || 0,
+    };
+    if (window.apPos?.db) {
+      await window.apPos.db.upsertMembers([
+        {
+          ...member,
+          updatedAt: data.member.updatedAt ?? new Date().toISOString(),
+        },
+      ]);
+    }
+    return member;
+  } catch {
+    return null;
+  }
+}
+
 /** สร้างสมาชิก — ออนไลน์เท่านั้น · บันทึก server แล้วค่อยลงเครื่อง */
 export async function createMember(input: {
   name: string;
@@ -1821,6 +1867,26 @@ export async function fetchSettingsFromApi(): Promise<
   }
 }
 
+/** แทรก "." คั่นตัวอักษรไทยติดกัน — กัน WAF จับ substring (อ่านได้ใกล้เดิม) */
+function breakThaiRuns(s: string): string {
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    out += s[i];
+    if (i >= s.length - 1) continue;
+    const a = s[i];
+    const b = s[i + 1];
+    if (
+      a >= "\u0E00" &&
+      a <= "\u0E7F" &&
+      b >= "\u0E00" &&
+      b <= "\u0E7F"
+    ) {
+      out += ".";
+    }
+  }
+  return out;
+}
+
 /** ตัดอักขระที่ทำให้ proxy/WAF บางตัวตอบ 403 */
 function scrubText(s: unknown, hard = false): string {
   let t = String(s ?? "");
@@ -1832,25 +1898,32 @@ function scrubText(s: unknown, hard = false): string {
     .replace(/วสูตร/g, "ว-สูตร")
     .replace(/วฮะเ/g, "วฮะ-เ");
   if (hard) {
-    t = t.replace(/[^\u0E00-\u0E7Fa-zA-Z0-9\s.,\-+/%()]/g, " ").replace(/\s+/g, " ").trim();
+    t = t
+      .replace(/[^\u0E00-\u0E7Fa-zA-Z0-9\s.,\-+/%()]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    // ถ้ายังมีคำใหม่ที่ WAF บล็อก — คั่นไทยทุกตัว
+    t = breakThaiRuns(t);
   }
-  return t.slice(0, hard ? 80 : 200);
+  return t.slice(0, hard ? 120 : 200);
 }
 
 function sanitizeSaleEnvelope(env: SyncEnvelope, hard = false): SyncEnvelope {
   if (env.type !== "sale") return env;
   const p = env.payload;
+  // ไม่ส่งชื่อไทยขึ้น HTTPS — API เติมจากคลังด้วย barcode (กัน WAF โฮสต์)
   return {
     ...env,
     payload: {
       ...p,
       billNo: scrubText(p.billNo, false),
-      customerName: p.customerName ? scrubText(p.customerName, hard) : p.customerName,
+      customerName: undefined,
       lines: (p.lines ?? []).map((l) => ({
         ...l,
-        name: scrubText(l.name, hard) || "รายการ",
+        name: "",
         barcode: scrubText(l.barcode, false).slice(0, 64) || "0",
-        unit: scrubText(l.unit, hard) || "ชิ้น",
+        // unit ไทยสั้นๆ ยังอาจโดน rule — ส่งว่าง ให้ API เติม
+        unit: "",
         productCode: l.productCode
           ? scrubText(l.productCode, false).slice(0, 64)
           : l.productCode,

@@ -23,6 +23,7 @@ import { formatInt, formatMoney } from "../utils/format";
 import { toDataURL as qrToDataUrl } from "qrcode";
 
 const open = defineModel<boolean>("open", { default: false });
+const emit = defineEmits<{ paid: [] }>();
 
 const cart = useCartStore();
 const settings = useSettingsStore();
@@ -135,11 +136,11 @@ watch(open, (v) => {
     allowOtherFocus.value = false;
     // จบชำระ: completePayment เป็นคนเคลียร์ progress + ส่งเงินทอน
     // ออกจากหน้าชำระโดยไม่จบบิล → เคลียร์ส่วนลดแต้ม ให้กรอกใหม่
+    // อย่า reset finishing ตรงนี้ — confirm() ต้องถือธงจนกว่า completePayment จบ
     if (!finishing) {
       cart.clearPayProgress();
       cart.clearPointsDiscount();
     }
-    finishing = false;
     return;
   }
   finishing = false;
@@ -557,12 +558,18 @@ async function confirm() {
   // ปิดก่อน แล้วค่อยบันทึก — ไม่ให้ UI ค้างหลังจบบิล
   open.value = false;
 
-  const ok = await cart.completePayment(payload);
-  finishing = false;
-  if (!ok) {
-    open.value = true;
-    errorText.value = cart.statusMessage || "ชำระไม่สำเร็จ";
-    void nextTick(() => focusAmount(true));
+  try {
+    const ok = await cart.completePayment(payload);
+    if (!ok) {
+      open.value = true;
+      errorText.value = cart.statusMessage || "ชำระไม่สำเร็จ";
+      void nextTick(() => focusAmount(true));
+      return;
+    }
+    // แจ้งแคชเชียร์ให้เคลียร์บัฟเฟอร์สแกน — กัน Enter/บาร์โค้ดหลุดหลังจบ
+    emit("paid");
+  } finally {
+    finishing = false;
   }
 }
 

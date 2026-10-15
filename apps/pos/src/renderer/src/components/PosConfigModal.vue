@@ -763,7 +763,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKey, true));
             </label>
             <label class="pos-config-check">
               <input v-model="openDrawer" type="checkbox" />
-              เตะลิ้นชักก่อนพิมพ์ (ครั้งเดียว)
+              เตะลิ้นชักตอนพิมพ์สลิป (ถ้ายังไม่ได้เตะจากจบบิล)
             </label>
           </div>
 

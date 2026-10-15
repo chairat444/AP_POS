@@ -27,8 +27,8 @@ const OWNER_DAILY_BAHT_NEW = 800;
 const OWNER_RATE_FROM = "2026-08-16";
 /** ค่าเช่าต่อสาขา ต่อวัน — เฉพาะสาขาที่เปิดแล้ว */
 const RENT_PER_BRANCH_BAHT = 500;
-/** สาขาที่ยังไม่เปิด ไม่คิดค่าเช่าอัตโนมัติ */
-const RENT_EXCLUDED_BRANCH_IDS = new Set(["branch-003"]);
+/** สาขาที่ยังไม่เปิด ไม่คิดค่าเช่าอัตโนมัติ (บ้านฆ้องเปิดแล้ว — ไม่ยกเว้น) */
+const RENT_EXCLUDED_BRANCH_IDS = new Set<string>();
 
 /** ค่าแรงแอ๊ด รายวัน (แก้/ลบได้) */
 const AD_WAGE_BAHT = 300;
@@ -1264,7 +1264,7 @@ export class CashBookService {
       byDay.set(r.entryDate, cur);
     }
 
-    // เติมสาขาที่เปิดแล้ว (ยกเว้นบ้านฆ้อง) แม้วันนั้นยอด 0
+    // เติมสาขาที่เปิดแล้ว แม้วันนั้นยอด 0
     const rentBranches = await this.rentBranches();
     for (const b of rentBranches) branchMap.set(b.id, b.name);
 

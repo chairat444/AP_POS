@@ -419,12 +419,13 @@ export async function printShiftCloseReport(
       return wantPreview ? { ok: true } : { ok: false, message: "ระบบพิมพ์ยังไม่พร้อม" };
     }
     try {
+      // ลิ้นชักเตะจาก CloseShiftModal แล้ว — ไม่เตะซ้ำตอนพิมพ์
       return await window.apPos.print.receipt({
         html,
         paperWidth,
         silent: opts?.silent ?? printer.silent,
         deviceName: printer.printerName || undefined,
-        openDrawer: true,
+        openDrawer: false,
       });
     } catch (e) {
       return {

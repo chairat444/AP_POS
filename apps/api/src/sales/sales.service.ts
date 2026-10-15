@@ -520,20 +520,20 @@ export class SalesService implements OnModuleInit {
       freshLineRows,
     ] = await Promise.all([
       this.database.db
-        .select({
-          billCount: sql<number>`count(*)::int`,
-          grossTotal: sql<string>`coalesce(sum(${pg.sales.total}), 0)`,
-        })
-        .from(pg.sales)
-        .where(
-          and(eq(pg.sales.status, "completed"), gte(pg.sales.createdAt, start)),
+      .select({
+        billCount: sql<number>`count(*)::int`,
+        grossTotal: sql<string>`coalesce(sum(${pg.sales.total}), 0)`,
+      })
+      .from(pg.sales)
+      .where(
+        and(eq(pg.sales.status, "completed"), gte(pg.sales.createdAt, start)),
         ),
       this.database.db
-        .select({
-          billCount: sql<number>`count(*)::int`,
-          grossTotal: sql<string>`coalesce(sum(${pg.sales.total}), 0)`,
-        })
-        .from(pg.sales)
+      .select({
+        billCount: sql<number>`count(*)::int`,
+        grossTotal: sql<string>`coalesce(sum(${pg.sales.total}), 0)`,
+      })
+      .from(pg.sales)
         .where(
           and(
             eq(pg.sales.status, "completed"),
@@ -549,12 +549,12 @@ export class SalesService implements OnModuleInit {
         .from(pg.sales)
         .where(eq(pg.sales.status, "completed")),
       this.database.db
-        .select({ c: sql<number>`count(*)::int` })
-        .from(pg.products)
+      .select({ c: sql<number>`count(*)::int` })
+      .from(pg.products)
         .where(sql`${pg.products.deletedAt} is null`),
       this.database.db
-        .select({ c: sql<number>`count(*)::int` })
-        .from(pg.customers)
+      .select({ c: sql<number>`count(*)::int` })
+      .from(pg.customers)
         .where(sql`${pg.customers.deletedAt} is null`),
       this.database.db
         .select()
@@ -1368,10 +1368,10 @@ export class SalesService implements OnModuleInit {
       sales:
         (opts.includeSales ?? groupBy === "day")
           ? filtered.map((r) =>
-              this.mapSale(
-                r,
-                payments.filter((p) => p.saleId === r.id),
-              ),
+        this.mapSale(
+          r,
+          payments.filter((p) => p.saleId === r.id),
+        ),
             )
           : [],
     };

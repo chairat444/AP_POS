@@ -37,7 +37,7 @@ type Board = {
   lineCount: number;
 };
 
-const { get, post, patch } = useAdminApi();
+const { get, post } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 
 function todayIso() {
@@ -71,8 +71,66 @@ const addRow = ref<
   Record<string, { name: string; qtys: Record<string, string> }>
 >({});
 
+/** ชื่อมาตรฐานจากแคตตาล็อก — ใช้ autocomplete ตอนพิมพ์ */
+type CatalogSuggest = {
+  id: string;
+  name: string;
+  aliases: string;
+  groupKey: string;
+  active?: boolean;
+};
+const catalogItems = ref<CatalogSuggest[]>([]);
+/** `'add:meatball'` | item.key */
+const suggestKey = ref<string | null>(null);
+
 const COLLAPSE_KEY = "ap-pos.purchases.collapsed";
 const PASTE_COLLAPSE_KEY = "ap-pos.purchases.pasteCollapsed";
+
+const GROUP_LABEL: Record<string, string> = {
+  meatball: "ลูกชิ้น",
+  market: "ตลาด",
+  veg: "ผัก",
+  transfer: "ส่งสาขา",
+  makro: "แม็คโค",
+  pending: "ร้านในตลาด",
+};
+
+function catalogSuggest(query: string, limit = 8): CatalogSuggest[] {
+  const q = query.trim().toLowerCase();
+  const active = catalogItems.value.filter((c) => c.active !== false);
+  if (!q) return active.slice(0, limit);
+  const scored: Array<{ c: CatalogSuggest; score: number }> = [];
+  for (const c of active) {
+    const name = c.name.toLowerCase();
+    const aliases = (c.aliases || "").toLowerCase();
+    let score = 0;
+    if (name === q) score = 100;
+    else if (name.startsWith(q)) score = 80;
+    else if (name.includes(q)) score = 50;
+    else if (aliases.includes(q)) score = 40;
+    else continue;
+    scored.push({ c, score });
+  }
+  scored.sort((a, b) => b.score - a.score || a.c.name.localeCompare(b.c.name, "th"));
+  return scored.slice(0, limit).map((x) => x.c);
+}
+
+function addSuggestList(colKey: string) {
+  return catalogSuggest(addRow.value[colKey]?.name ?? "");
+}
+
+function renameSuggestList(item: BoardItem) {
+  return catalogSuggest(nameDraft.value[item.key] ?? item.name);
+}
+
+async function loadCatalogSuggest() {
+  try {
+    const data = await get<{ items: CatalogSuggest[] }>("/purchases/catalog");
+    catalogItems.value = data.items ?? [];
+  } catch {
+    catalogItems.value = [];
+  }
+}
 
 function loadCollapsedCols(): Record<string, boolean> {
   try {
@@ -143,12 +201,17 @@ const branchCountLegend = computed(() => {
     .join(" · ");
 });
 
-/** ลำดับคัดลอก: หลุมดิน แล้ว เจ็ดเสมียน แล้วสาขาอื่น */
+/** ลำดับคัดลอก: หลุมดิน → เจ็ดเสมียน → บ้านฆ้อง → อื่น */
+function branchRank(name: string) {
+  if (/หลุมดิน/.test(name)) return 0;
+  if (/เจ็ดเสมียน/.test(name)) return 1;
+  if (/บ้านฆ้อง|ฆ้อง/.test(name)) return 2;
+  return 3;
+}
+
 const copyBranchOrder = computed(() =>
   [...branches.value].sort((a, b) => {
-    const rank = (n: string) =>
-      /หลุมดิน/.test(n) ? 0 : /เจ็ดเสมียน/.test(n) ? 1 : 2;
-    const d = rank(a.name) - rank(b.name);
+    const d = branchRank(a.name) - branchRank(b.name);
     return d !== 0 ? d : a.code.localeCompare(b.code);
   }),
 );
@@ -156,7 +219,13 @@ const copyBranchOrder = computed(() =>
 const copyLegend = computed(() => {
   const names = copyBranchOrder.value.map((b) => shortBranchName(b.name));
   if (names.length < 2) return "";
-  return `คัดลอก 4+2 = รวม 6 ของ${names[0]} 4 · ${names[1]} 2 · (01) ${names[0]} · (02) ${names[1]}`;
+  if (names.length === 2) {
+    return `คัดลอก 4+2 = รวม 6 ของ${names[0]} 4 · ${names[1]} 2 · (01) ${names[0]} · (02) ${names[1]}`;
+  }
+  const marks = names
+    .map((n, i) => `(${String(i + 1).padStart(2, "0")}) ${n}`)
+    .join(" · ");
+  return `คัดลอก 1+0+0 = ${names.join(" + ")} · ${marks}`;
 });
 
 const sheetCols = computed(
@@ -233,6 +302,38 @@ function syncQtyDrafts() {
   nameDraft.value = nextName;
 }
 
+/**
+ * หลังแก้ชื่อ — คงลำดับแถวตามแผงเดิม (อย่ากระโดดตามเรียงชื่อใหม่จาก API)
+ * จับคู่ด้วย lineId
+ */
+function preserveBoardItemOrder(prev: Board | null, next: Board): Board {
+  if (!prev) return next;
+  const columns = next.columns.map((col) => {
+    const prevCol = prev.columns.find((c) => c.key === col.key);
+    if (!prevCol?.items.length || !col.items.length) return col;
+
+    const used = new Set<string>();
+    const ordered: BoardItem[] = [];
+    for (const old of prevCol.items) {
+      const oldIds = new Set(old.byBranch.map((b) => b.lineId).filter(Boolean));
+      if (!oldIds.size) continue;
+      const match = col.items.find((n) => {
+        if (used.has(n.key)) return false;
+        return n.byBranch.some((b) => oldIds.has(b.lineId));
+      });
+      if (match) {
+        ordered.push(match);
+        used.add(match.key);
+      }
+    }
+    for (const n of col.items) {
+      if (!used.has(n.key)) ordered.push(n);
+    }
+    return { ...col, items: ordered };
+  });
+  return { ...next, columns };
+}
+
 function ensureAddRow(colKey: string) {
   if (addRow.value[colKey]) return;
   const qtys: Record<string, string> = {};
@@ -260,6 +361,7 @@ function draftBuyTotal(item: BoardItem): string | null {
 function tinyBranchLabel(name: string) {
   if (/หลุมดิน/.test(name)) return "หลุม";
   if (/เจ็ดเสมียน/.test(name)) return "เจ็ด";
+  if (/บ้านฆ้อง|ฆ้อง/.test(name)) return "ฆ้อง";
   return shortBranchName(name).slice(0, 4);
 }
 
@@ -273,6 +375,24 @@ const remainingLinesByBranch = computed(() => {
   return map;
 });
 
+/** ตัดแท็กสถานะก่อนเทียบ — -หมด- / -สำรอง- / -มี1- / -ขอ2- และรูปแบบเก่า */
+function purchaseMatchKey(name: string) {
+  const core = name
+    .replace(
+      /-\s*(หมด|สำรอง|มี\s*\d+(?:\.\d+)?[^-]*?|ขอ\s*\d*(?:\.\d+)?[^-]*?|สั่ง\s*\d*(?:\.\d+)?[^-]*?)\s*-/gu,
+      " ",
+    )
+    .replace(/\s*(สำรอง|หมด)\s*$/u, "")
+    .replace(/\s+/g, " ")
+    .trim() || name;
+  return normalizePurchaseKey(core);
+}
+
+function purchaseNamesMatch(a: string, b: string) {
+  if (purchaseMatchKey(a) === purchaseMatchKey(b)) return true;
+  return purchaseKeysCompatible(a, b) !== "none";
+}
+
 /** หาจำนวนที่น้องใส่ท้ายชื่อ (รองรับชื่อที่ถูก map กับแคตตาล็อก) */
 function remainingFromPaste(
   itemName: string,
@@ -283,11 +403,10 @@ function remainingFromPaste(
   for (const line of lines) {
     const qty = (line.qtyText || line.note || "").trim();
     if (!qty) continue;
-    const how = purchaseKeysCompatible(itemName, line.name);
-    if (how === "none") continue;
-    if (how === "exact") return qty;
-    const key = normalizePurchaseKey(itemName);
-    const ck = normalizePurchaseKey(line.name);
+    if (!purchaseNamesMatch(itemName, line.name)) continue;
+    if (purchaseMatchKey(itemName) === purchaseMatchKey(line.name)) return qty;
+    const key = purchaseMatchKey(itemName);
+    const ck = purchaseMatchKey(line.name);
     const score = Math.min(key.length, ck.length);
     if (!best || score > best.score) best = { score, qty };
   }
@@ -295,7 +414,7 @@ function remainingFromPaste(
 }
 
 function pasteMentionsItem(itemName: string, lines: ParsedPurchaseLine[]) {
-  return lines.some((line) => purchaseKeysCompatible(itemName, line.name) !== "none");
+  return lines.some((line) => purchaseNamesMatch(itemName, line.name));
 }
 
 /** เช็ครายการครบไหม — เทียบข้อความน้องกับรายการบนแผงแยกต่อสาขา */
@@ -312,31 +431,29 @@ const branchChecks = computed<BranchCheck[]>(() => {
   if (!board.value) return [];
   return copyBranchOrder.value.map((br) => {
     const lines = remainingLinesByBranch.value.get(br.id) ?? [];
-    // รายการบนแผงที่สาขานี้มีจำนวน
-    const boardNames = new Set<string>();
+    // รายการบนแผงของสาขานี้ (เทียบด้วยชื่อหลัก ไม่ติด หมด/สำรอง)
+    const boardItems: Array<{ key: string; name: string }> = [];
     for (const col of board.value!.columns) {
       for (const item of col.items) {
         if (item.byBranch.some((b) => b.branchId === br.id && b.lineId)) {
-          boardNames.add(normalizePurchaseKey(item.name));
+          boardItems.push({
+            key: purchaseMatchKey(item.name),
+            name: item.name,
+          });
         }
       }
     }
+    const boardKeys = new Set(boardItems.map((b) => b.key));
     const missing: MissingItem[] = [];
     for (const line of lines) {
-      const key = normalizePurchaseKey(line.name);
-      if (boardNames.has(key)) continue;
-      // เช็คชื่อที่ถูก map กับแคตตาล็อก
-      let found = false;
-      for (const bk of boardNames) {
-        if (purchaseKeysCompatible(line.name, bk) !== "none") {
-          found = true;
-          break;
-        }
-      }
+      const key = purchaseMatchKey(line.name);
+      if (boardKeys.has(key)) continue;
+      const found = boardItems.some((b) => purchaseNamesMatch(line.name, b.name));
       if (!found) {
+        const status = (line.qtyText || line.note || "").trim();
         missing.push({
           name: line.name,
-          qty: (line.qtyText || line.note || "").trim(),
+          qty: status,
         });
       }
     }
@@ -344,7 +461,7 @@ const branchChecks = computed<BranchCheck[]>(() => {
       branchId: br.id,
       branchName: br.name,
       pasteCount: lines.length,
-      boardCount: boardNames.size,
+      boardCount: boardKeys.size,
       missing,
       ok: missing.length === 0 && lines.length > 0,
     };
@@ -383,30 +500,118 @@ function itemStockTip(item: BoardItem) {
   return parts.length ? parts.join(" ") : "—";
 }
 
-const floatTip = ref<{ text: string; left: number; top: number } | null>(
-  null,
-);
+const floatTip = ref<{
+  text: string;
+  left: number;
+  top: number;
+  itemKey: string;
+} | null>(null);
 
-function showItemTip(e: MouseEvent | FocusEvent, item: BoardItem) {
+function hideItemTip() {
+  floatTip.value = null;
+}
+
+/** เปิด/ปิดด้วยปุ่มเท่านั้น — ไม่ใช้ hover เพื่อกันปิดตอนลากเลือกข้อความ */
+function toggleItemTip(e: MouseEvent, item: BoardItem) {
+  e.stopPropagation();
+  if (floatTip.value?.itemKey === item.key) {
+    hideItemTip();
+    return;
+  }
   const el = e.currentTarget as HTMLElement;
   const r = el.getBoundingClientRect();
   floatTip.value = {
     text: itemStockTip(item),
     left: r.left + r.width / 2,
     top: r.top - 6,
+    itemKey: item.key,
   };
 }
 
-function hideItemTip() {
-  floatTip.value = null;
+function onDocPointerDownCloseTip(e: PointerEvent) {
+  if (!floatTip.value) return;
+  const t = e.target as HTMLElement | null;
+  if (t?.closest?.(".ui-purchase-item-tip")) return;
+  hideItemTip();
 }
+
+/** Clipboard API มักพังบน Windows/HTTP — มี fallback execCommand */
+async function copyTextRobust(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.style.top = "0";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+const vegPreRef = ref<HTMLElement | null>(null);
+
+function selectVegPreText() {
+  const pre = vegPreRef.value;
+  if (!pre) return;
+  const range = document.createRange();
+  range.selectNodeContents(pre);
+  const sel = window.getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+}
+
+/** หาแถวบนแผงจาก lineId (หลัง rename key เปลี่ยน) */
+function findItemByLineId(lineId: string): BoardItem | null {
+  if (!board.value || !lineId) return null;
+  for (const col of board.value.columns) {
+    for (const item of col.items) {
+      if (item.byBranch.some((b) => b.lineId === lineId)) return item;
+    }
+  }
+  return null;
+}
+
+function findItemByAnyLineId(lineIds: string[]): BoardItem | null {
+  for (const id of lineIds) {
+    const hit = findItemByLineId(id);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/** Enter ที่ชื่อ — ข้าม blur save ซ้ำ */
+let skipRenameBlur = false;
 
 async function saveQty(item: BoardItem, branchId: string) {
   if (!board.value) return;
+  // กำลัง rename / เพิ่ง Enter ที่ชื่อ — อย่าให้ blur จำนวนไปลบแถว
+  if (nameSavingKey.value || skipRenameBlur) return;
+
+  const hit = item.byBranch.find((b) => b.branchId === branchId);
+  // แถวถูก rename แล้ว key เปลี่ยน — blur จาก input เก่าเป็น stale
+  if (hit?.lineId) {
+    const live = findItemByLineId(hit.lineId);
+    if (live && live.key !== item.key) return;
+  }
+
   const key = qtyFieldKey(item.key, branchId);
   const qtyText = sanitizeQtyInput(qtyDraft.value[key] ?? "");
   qtyDraft.value[key] = qtyText;
-  const hit = item.byBranch.find((b) => b.branchId === branchId);
   const prev = sanitizeQtyInput(hit ? branchQty(hit) : "");
   if (qtyText === prev) return;
   // มีแถวชื่ออย่างเดียวอยู่แล้ว — ช่องว่างตอน blur ต้องไม่ไปลบ
@@ -448,8 +653,9 @@ async function saveName(item: BoardItem) {
 
   nameSavingKey.value = item.key;
   error.value = "";
+  const prevBoard = board.value;
   try {
-    board.value = await post<Board>("/purchases/board-rename", {
+    const nextBoard = await post<Board>("/purchases/board-rename", {
       dayId: board.value.day.id,
       day: day.value,
       name: item.name,
@@ -457,6 +663,7 @@ async function saveName(item: BoardItem) {
       groupKey: item.groupKey,
       lineIds: item.byBranch.map((b) => b.lineId),
     });
+    board.value = preserveBoardItemOrder(prevBoard, nextBoard);
     syncQtyDrafts();
   } catch (e) {
     error.value = e instanceof Error ? e.message : "บันทึกชื่อไม่สำเร็จ";
@@ -464,6 +671,51 @@ async function saveName(item: BoardItem) {
   } finally {
     nameSavingKey.value = null;
   }
+}
+
+function onRenameBlur(item: BoardItem) {
+  // รอให้ mousedown บน suggestion ทำงานก่อนปิด
+  window.setTimeout(() => {
+    if (skipRenameBlur) return;
+    if (suggestKey.value === item.key) suggestKey.value = null;
+    void saveName(item);
+  }, 120);
+}
+
+/** Enter ที่ช่องชื่อ — เซฟชื่อให้จบก่อน แล้วค่อยโฟกัสจำนวน (กันลบแถว) */
+async function onNameEnter(e: KeyboardEvent, item: BoardItem) {
+  e.preventDefault();
+  const lineIds = item.byBranch.map((b) => b.lineId).filter(Boolean);
+  skipRenameBlur = true;
+  suggestKey.value = null;
+  try {
+    await saveName(item);
+  } finally {
+    window.setTimeout(() => {
+      skipRenameBlur = false;
+    }, 250);
+  }
+  await nextTick();
+  const live = findItemByAnyLineId(lineIds) ??
+    board.value?.columns
+      .flatMap((c) => c.items)
+      .find((i) => i.name === (nameDraft.value[item.key] ?? item.name).trim()) ??
+    null;
+  const firstBr = copyBranchOrder.value[0];
+  if (!live || !firstBr) return;
+  const qtyEl = document.querySelector<HTMLInputElement>(
+    `input[data-sheet-qty="${qtyFieldKey(live.key, firstBr.id)}"]`,
+  );
+  if (qtyEl) {
+    qtyEl.focus();
+    qtyEl.select();
+  }
+}
+
+function onAddNameBlur(colKey: string) {
+  window.setTimeout(() => {
+    if (suggestKey.value === `add:${colKey}`) suggestKey.value = null;
+  }, 120);
 }
 
 function onQtyInput(itemKey: string, branchId: string, e: Event) {
@@ -536,15 +788,21 @@ function onSheetEnter(e: KeyboardEvent, colKey?: string) {
   cur.blur();
 }
 
-async function submitAddRow(colKey: string) {
+async function submitAddRow(
+  colKey: string,
+  opts?: { name?: string; groupKey?: string; catalogId?: string | null },
+) {
   if (!board.value) return;
   ensureAddRow(colKey);
   const draft = addRow.value[colKey];
-  const name = draft.name.trim();
+  const name = (opts?.name ?? draft.name).trim();
   if (!name) {
     error.value = "ใส่ชื่อสินค้าก่อน";
     return;
   }
+  // จากพักกลาง + เลือกชื่อมาตรฐาน → ใส่คอลัมน์ตามแคตตาล็อก
+  const groupKey = opts?.groupKey ?? colKey;
+  const catalogId = opts?.catalogId ?? null;
   const jobs = copyBranchOrder.value.filter((br) =>
     (draft.qtys[br.id] ?? "").trim(),
   );
@@ -557,17 +815,18 @@ async function submitAddRow(colKey: string) {
   saving.value = true;
   error.value = "";
   message.value = "";
+  suggestKey.value = null;
   try {
     let last: Board | null = null;
 
     if (!jobs.length) {
-      // ชื่ออย่างเดียว → ขึ้นแผงวันนี้ (จำนวนว่าง) + จำชื่อ→ร้าน
       last = await post<Board>("/purchases/board-qty", {
         dayId: board.value.day.id,
         day: day.value,
         branchId: anchorBranch.id,
         name,
-        groupKey: colKey,
+        groupKey,
+        catalogId,
         qtyText: null,
         forceCreate: true,
       });
@@ -578,7 +837,8 @@ async function submitAddRow(colKey: string) {
           day: day.value,
           branchId: br.id,
           name,
-          groupKey: colKey,
+          groupKey,
+          catalogId,
           qtyText: sanitizeQtyInput(draft.qtys[br.id]),
           forceCreate: true,
         });
@@ -588,6 +848,7 @@ async function submitAddRow(colKey: string) {
     if (last) board.value = last;
     syncQtyDrafts();
     ensureAddRow(colKey);
+    ensureAddRow(groupKey);
     addRow.value = {
       ...addRow.value,
       [colKey]: {
@@ -595,13 +856,84 @@ async function submitAddRow(colKey: string) {
         qtys: Object.fromEntries(copyBranchOrder.value.map((b) => [b.id, ""])),
       },
     };
+    const where =
+      groupKey !== colKey
+        ? ` → ${GROUP_LABEL[groupKey] ?? groupKey}`
+        : "";
     message.value = jobs.length
-      ? `เพิ่ม「${name}」บนแผงแล้ว`
-      : `เพิ่ม「${name}」บนแผงแล้ว · กรอกจำนวนเมื่อพร้อม`;
+      ? `เพิ่ม「${name}」บนแผงแล้ว${where}`
+      : `เพิ่ม「${name}」บนแผงแล้ว${where} · กรอกจำนวนเมื่อพร้อม`;
   } catch (e) {
     error.value = e instanceof Error ? e.message : "เพิ่มรายการไม่สำเร็จ";
   } finally {
     saving.value = false;
+  }
+}
+
+async function pickAddCatalog(colKey: string, cat: CatalogSuggest) {
+  ensureAddRow(colKey);
+  const cur = addRow.value[colKey];
+  if (cur) {
+    addRow.value = {
+      ...addRow.value,
+      [colKey]: { ...cur, name: cat.name },
+    };
+  }
+  const dest = colKey === "pending" ? cat.groupKey : colKey;
+  await submitAddRow(colKey, {
+    name: cat.name,
+    groupKey: dest,
+    catalogId: cat.id,
+  });
+}
+
+async function pickRenameCatalog(item: BoardItem, cat: CatalogSuggest) {
+  if (!board.value) return;
+  nameDraft.value[item.key] = cat.name;
+  suggestKey.value = null;
+  nameSavingKey.value = item.key;
+  error.value = "";
+  const prevBoard = board.value;
+  try {
+    if (cat.name !== item.name) {
+      const nextBoard = await post<Board>("/purchases/board-rename", {
+        dayId: board.value.day.id,
+        day: day.value,
+        name: item.name,
+        newName: cat.name,
+        groupKey: item.groupKey,
+        lineIds: item.byBranch.map((b) => b.lineId),
+      });
+      board.value = preserveBoardItemOrder(prevBoard, nextBoard);
+    }
+    if (cat.groupKey && cat.groupKey !== item.groupKey && cat.groupKey !== "pending") {
+      const moved: BoardItem = {
+        ...item,
+        name: cat.name,
+        key: normalizePurchaseKey(cat.name) || item.key,
+      };
+      // หา item ใหม่หลัง rename
+      const refreshed =
+        board.value.columns
+          .flatMap((c) => c.items)
+          .find(
+            (i) =>
+              i.name === cat.name &&
+              (i.groupKey === item.groupKey ||
+                i.byBranch.some((b) =>
+                  item.byBranch.some((x) => x.lineId === b.lineId),
+                )),
+          ) ?? moved;
+      await moveItem(refreshed, cat.groupKey);
+    } else {
+      syncQtyDrafts();
+      message.value = `ใช้ชื่อมาตรฐาน「${cat.name}」แล้ว`;
+    }
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "เลือกชื่อมาตรฐานไม่สำเร็จ";
+    nameDraft.value[item.key] = item.name;
+  } finally {
+    nameSavingKey.value = null;
   }
 }
 
@@ -633,16 +965,48 @@ async function removeItem(item: BoardItem) {
   }
 }
 
+/** ล้างแผงทั้งวันนี้ — รายการ + ข้อความวาง แล้วค่อยวางใหม่ */
+async function clearBoardDay() {
+  if (!board.value) return;
+  const n = board.value.lineCount;
+  const ok = await askConfirm({
+    title: "ล้างแผงวันนี้ทั้งหมด?",
+    message: `ลบรายการซื้อของวันที่ ${formatDayLabel(day.value)} ทั้งหมด${n ? ` (${n} รายการ)` : ""}`,
+    detail: "ลบทั้งแผงสรุปและข้อความที่วางจากสาขา · ใช้ตอนแผงมั่ว แล้ววางใหม่ได้เลย · ไม่กระทบแคตตาล็อกสินค้า",
+    confirmLabel: "ล้างแผงวันนี้",
+  });
+  if (!ok) return;
+  saving.value = true;
+  error.value = "";
+  message.value = "";
+  try {
+    board.value = await post<Board>("/purchases/board-clear", {
+      dayId: board.value.day.id,
+      day: day.value,
+    });
+    pasteByBranch.value = Object.fromEntries(
+      branches.value.map((b) => [b.id, ""]),
+    );
+    syncQtyDrafts();
+    message.value = "ล้างแผงวันนี้แล้ว · วางรายการจากสาขาใหม่ได้";
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "ล้างแผงไม่สำเร็จ";
+  } finally {
+    saving.value = false;
+  }
+}
+
 function shortBranchName(name: string) {
   if (/หลุมดิน/.test(name)) return "หลุมดิน";
   if (/เจ็ดเสมียน/.test(name)) return "เจ็ดเสมียน";
+  if (/บ้านฆ้อง|ฆ้อง/.test(name)) return "บ้านฆ้อง";
   return name.replace(/^สาขา\s*/u, "").trim() || name;
 }
 
-/** ตัด (01)/(02) ท้ายชื่อ — สรุปไลน์ไม่โชว์ */
+/** ตัด (01)/(02)/(03) ท้ายชื่อ — สรุปไลน์ไม่โชว์ */
 function stripBranchMark(name: string) {
   return name
-    .replace(/(?:\s*[\(（]\s*0?[12]\s*[\)）])+\s*$/u, "")
+    .replace(/(?:\s*[\(（]\s*0?[123]\s*[\)）])+\s*$/u, "")
     .trim();
 }
 
@@ -653,18 +1017,19 @@ function branchHasOrder(item: BoardItem, branchId: string): boolean {
   return pasteMentionsItem(item.name, lines);
 }
 
-/** หลุมดิน (01) · เจ็ดเสมียน (02) · ทั้งสองสาขา (01) (02) — ทุกรายการที่มีสาขา */
+/** หลุมดิน (01) · เจ็ดเสมียน (02) · บ้านฆ้อง (03) */
 function itemBranchMark(item: BoardItem): string {
   const parts: string[] = [];
   for (const br of copyBranchOrder.value) {
     if (!branchHasOrder(item, br.id)) continue;
     if (/หลุมดิน/.test(br.name)) parts.push("(01)");
     else if (/เจ็ดเสมียน/.test(br.name)) parts.push("(02)");
+    else if (/บ้านฆ้อง|ฆ้อง/.test(br.name)) parts.push("(03)");
   }
   return parts.join(" ");
 }
 
-/** คัดลอกจำนวน: ทั้งสองสาขา 4+2 · สาขาเดียวไม่มีบวก */
+/** คัดลอกจำนวน: เสมอครบทุกสาขา เช่น 1+0+0 / 0+0+1 */
 function formatCopyQty(item: BoardItem): string {
   const order = copyBranchOrder.value;
   if (!order.length) {
@@ -681,10 +1046,11 @@ function formatCopyQty(item: BoardItem): string {
     const hit = item.byBranch.find((b) => b.branchId === br.id);
     return hit ? branchQty(hit) : "";
   });
-  const filled = qtys.filter(Boolean);
-  if (filled.length <= 1) return filled[0] ?? "";
-  if (order.length === 2) return `${qtys[0]}+${qtys[1]}`;
-  return qtys.map((q) => q || "0").join("+");
+  if (order.length >= 2) {
+    // เสมอครบทุกสาขา — ไม่กรอก = 0 เช่น 0+0+0 / 1+0+1
+    return qtys.map((q) => q || "0").join("+");
+  }
+  return qtys[0] || "0";
 }
 
 function shiftDay(delta: number) {
@@ -763,7 +1129,7 @@ async function loadBoard() {
     syncPasteFromBoard();
     syncQtyDrafts();
     for (const col of board.value.columns) ensureAddRow(col.key);
-    await loadDays();
+    await Promise.all([loadDays(), loadCatalogSuggest()]);
   } catch (e) {
     error.value = e instanceof Error ? e.message : "โหลดไม่สำเร็จ";
     board.value = null;
@@ -817,7 +1183,8 @@ async function moveItem(item: BoardItem, groupKey: string) {
   try {
     let last: Board | null = null;
     for (const br of item.byBranch) {
-      last = await patch<Board>(`/purchases/lines/${br.lineId}`, {
+      last = await post<Board>("/purchases/lines/update", {
+        id: br.lineId,
         groupKey,
       });
     }
@@ -906,12 +1273,14 @@ function formatCopyLine(item: BoardItem) {
   return mark ? `${core} ${mark}` : core;
 }
 
-function copyColumn(col: Column) {
+async function copyColumn(col: Column) {
   const text = orderedColumnItems(col.items)
     .map((i) => formatCopyLine(i))
     .join("\n");
-  void navigator.clipboard.writeText(text);
-  message.value = `คัดลอกคอลัมน์ ${col.label} แล้ว`;
+  const ok = await copyTextRobust(text);
+  message.value = ok
+    ? `คัดลอกคอลัมน์ ${col.label} แล้ว`
+    : "คัดลอกไม่สำเร็จ — ลองเลือกข้อความแล้ว Ctrl+C";
 }
 
 const summaryOpen = ref(false);
@@ -920,9 +1289,57 @@ const SUMMARY_HEADERS: Record<string, string> = {
   meatball: "ลูกชิ้น",
   market: "ตลาด",
   veg: "ผัก",
-  transfer: "ร้าน",
+  transfer: "ส่งสาขา",
   makro: "แม็คโค",
+  pending: "ร้านในตลาด",
 };
+
+const vegColumn = computed(
+  () => board.value?.columns.find((c) => c.key === "veg") ?? null,
+);
+
+const vegOpen = ref(false);
+const vegHint = ref("");
+
+/** รายชื่อผักอย่างเดียว — ไม่มีเลขสาขา */
+const vegNameLines = computed(() => {
+  const col = vegColumn.value;
+  if (!col?.items.length) return [] as string[];
+  return orderedColumnItems(col.items)
+    .map((i) => stripBranchMark(i.name))
+    .filter(Boolean);
+});
+
+const vegShareText = computed(() => vegNameLines.value.join("\n"));
+
+function openVegShare() {
+  error.value = "";
+  vegHint.value = "";
+  if (!vegNameLines.value.length) {
+    message.value = "ยังไม่มีรายการร้านผักวันนี้";
+    error.value = "ยังไม่มีรายการในกลุ่มผัก — จัดเข้าแผงก่อน";
+    return;
+  }
+  vegOpen.value = true;
+}
+
+async function copyVegNamesOnly() {
+  const text = vegShareText.value;
+  if (!text) {
+    vegHint.value = "ยังไม่มีรายการ";
+    return;
+  }
+  const ok = await copyTextRobust(text);
+  if (ok) {
+    vegHint.value = `คัดลอกแล้ว ${vegNameLines.value.length} รายการ · วางในไลน์ได้`;
+    message.value = vegHint.value;
+    error.value = "";
+    return;
+  }
+  selectVegPreText();
+  vegHint.value = "เลือกข้อความไว้แล้ว — กด Ctrl+C (วินโดว์) หรือ Cmd+C";
+  error.value = vegHint.value;
+}
 
 function summaryHeader(col: Column) {
   return SUMMARY_HEADERS[col.key] ?? col.label;
@@ -931,7 +1348,7 @@ function summaryHeader(col: Column) {
 type ShareLine = {
   name: string;
   qty: string;
-  kind: "lumdin" | "chetsamian";
+  kind: "lumdin" | "chetsamian" | "bankhong";
 };
 type SummaryColumn = Column & { lines: ShareLine[] };
 
@@ -944,27 +1361,35 @@ function itemQtyForBranch(item: BoardItem, branchId: string): string {
   return hit ? branchQty(hit) : "";
 }
 
-/** เจ็ดเสมียนอย่างเดียว → ล่าง · มีหลุมดินหรือทั้งสองสาขา → บน */
+/** หลุมดิน/(หลายสาขา) บน · เจ็ดเสมียนอย่างเดียวกลาง · บ้านฆ้องอย่างเดียวล่าง */
 function itemShareKind(item: BoardItem): ShareLine["kind"] {
   let hasLumdin = false;
   let hasChet = false;
+  let hasBk = false;
   for (const br of copyBranchOrder.value) {
     if (!branchHasOrder(item, br.id)) continue;
     if (/หลุมดิน/.test(br.name)) hasLumdin = true;
     else if (/เจ็ดเสมียน/.test(br.name)) hasChet = true;
+    else if (/บ้านฆ้อง|ฆ้อง/.test(br.name)) hasBk = true;
   }
-  return hasChet && !hasLumdin ? "chetsamian" : "lumdin";
+  if (hasLumdin) return "lumdin";
+  if (hasChet) return "chetsamian";
+  if (hasBk) return "bankhong";
+  return "lumdin";
 }
 
-/** เรียงเหมือนสรุปส่งไลน์: หลุมดิน/ทั้งสองสาขาอยู่บน · เจ็ดเสมียนอย่างเดียวอยู่ล่าง */
+/** เรียงเหมือนสรุปส่งไลน์: หลุม → เจ็ดอย่างเดียว → บ้านฆ้องอย่างเดียว */
 function orderedColumnItems(items: BoardItem[]) {
   const top: BoardItem[] = [];
+  const mid: BoardItem[] = [];
   const bottom: BoardItem[] = [];
   for (const item of items) {
-    if (itemShareKind(item) === "chetsamian") bottom.push(item);
+    const kind = itemShareKind(item);
+    if (kind === "bankhong") bottom.push(item);
+    else if (kind === "chetsamian") mid.push(item);
     else top.push(item);
   }
-  return [...top, ...bottom];
+  return [...top, ...mid, ...bottom];
 }
 
 function formatShareLine(line: ShareLine) {
@@ -976,20 +1401,22 @@ function formatShareLine(line: ShareLine) {
 const summaryColumns = computed((): SummaryColumn[] => {
   if (!board.value) return [];
   return board.value.columns
-    .filter((col) => col.items.length > 0)
+    .filter((col) => col.key !== "pending" && col.items.length > 0)
     .map((col) => {
       const lumdin: ShareLine[] = [];
       const chet: ShareLine[] = [];
+      const bankhong: ShareLine[] = [];
       for (const item of orderedColumnItems(col.items)) {
         const line: ShareLine = {
           name: stripBranchMark(item.name),
           qty: formatCopyQty(item),
           kind: itemShareKind(item),
         };
-        if (line.kind === "chetsamian") chet.push(line);
+        if (line.kind === "bankhong") bankhong.push(line);
+        else if (line.kind === "chetsamian") chet.push(line);
         else lumdin.push(line);
       }
-      return { ...col, lines: [...lumdin, ...chet] };
+      return { ...col, lines: [...lumdin, ...chet, ...bankhong] };
     })
     .filter((col) => col.lines.length > 0);
 });
@@ -1059,7 +1486,7 @@ async function captureSummary() {
   }
 }
 
-function copySummarySheet() {
+async function copySummarySheet() {
   if (!summaryColumns.value.length) return;
   const cols = summaryColumns.value;
   const rows = summaryRowCount.value;
@@ -1074,8 +1501,10 @@ function copySummarySheet() {
         .join("\t"),
     );
   }
-  void navigator.clipboard.writeText(lines.join("\n"));
-  message.value = "คัดลอกแผ่นสรุปแล้ว";
+  const ok = await copyTextRobust(lines.join("\n"));
+  message.value = ok
+    ? "คัดลอกแผ่นสรุปแล้ว"
+    : "คัดลอกไม่สำเร็จ — ลองเลือกข้อความแล้ว Ctrl+C";
 }
 
 watch(day, () => {
@@ -1088,12 +1517,14 @@ watch(movePickKey, (key) => {
 });
 
 onMounted(async () => {
+  document.addEventListener("pointerdown", onDocPointerDownCloseTip, true);
   await loadBranches();
   await loadBoard();
 });
 
 onUnmounted(() => {
   window.removeEventListener("keydown", onMovePickKey);
+  document.removeEventListener("pointerdown", onDocPointerDownCloseTip, true);
 });
 </script>
 
@@ -1116,6 +1547,27 @@ onUnmounted(() => {
         >
           สรุปส่งไลน์
         </button>
+        <button
+          type="button"
+          class="ui-btn ui-btn--ghost"
+          :disabled="!board"
+          title="เปิดรายการกลุ่มผัก (เฉพาะชื่อ ไม่ติดเลขสาขา)"
+          @click="openVegShare"
+        >
+          ส่งร้านผัก
+        </button>
+        <button
+          type="button"
+          class="ui-btn ui-btn--ghost"
+          :disabled="!board || saving || (!board.lineCount && !pasteFilledCount)"
+          title="ลบแผงวันนี้ทั้งหมด แล้ววางใหม่"
+          @click="clearBoardDay"
+        >
+          ล้างแผงวันนี้
+        </button>
+        <NuxtLink to="/purchases/order" class="ui-btn ui-btn--ghost">
+          สั่งของมือถือ
+        </NuxtLink>
         <NuxtLink to="/purchases/catalog" class="ui-btn ui-btn--ghost">
           ตั้งค่าชื่อสินค้า→ร้าน
         </NuxtLink>
@@ -1268,7 +1720,7 @@ onUnmounted(() => {
     </div>
 
     <p v-if="board" class="ui-field-hint" style="margin: 0.85rem 0 0">
-      แผงสรุป · หลุมดินอยู่บน · เจ็ดเสมียนอยู่ล่าง
+      แผงสรุป · หลุมดินอยู่บน · เจ็ดเสมียน / บ้านฆ้องอยู่ล่าง
       <template v-if="branchCountLegend"> · {{ branchCountLegend }}</template>
       · กด ⓘ ดูคงเหลือ · <strong>Enter</strong> ที่ชื่อ = เพิ่มรายการ · ที่จำนวน = ช่องถัดไป · คลิก ⋮⋮ ย้ายคอลัมน์
       <template v-if="copyLegend"> · {{ copyLegend }}</template>
@@ -1282,6 +1734,7 @@ onUnmounted(() => {
         :class="{
           'ui-purchase-col--drop': dragOverCol === col.key,
           'ui-purchase-col--collapsed': isColCollapsed(col.key),
+          'ui-purchase-col--pending': col.key === 'pending',
         }"
         @dragover="onColDragOver(col.key, $event)"
         @dragleave="onColDragLeave(col.key, $event)"
@@ -1339,6 +1792,7 @@ onUnmounted(() => {
               'is-dragging': dragItemKey === item.key,
               'is-picked': movePickKey === item.key,
               'is-chetsamian': itemShareKind(item) === 'chetsamian',
+              'is-bankhong': itemShareKind(item) === 'bankhong',
             }"
           >
           <div
@@ -1361,31 +1815,49 @@ onUnmounted(() => {
               >
                 ⋮⋮
               </span>
-              <input
-                v-model="nameDraft[item.key]"
-                class="ui-purchase-sheet__name-input"
-                type="text"
-                data-sheet-nav
-                :disabled="nameSavingKey === item.key"
-                :title="item.matched ? '' : 'ยังไม่ map'"
-                @mousedown.stop
-                @keydown.enter.prevent="onSheetEnter($event)"
-                @blur="saveName(item)"
-              />
+              <div class="ui-purchase-suggest">
+                <input
+                  v-model="nameDraft[item.key]"
+                  class="ui-purchase-sheet__name-input"
+                  type="text"
+                  data-sheet-nav
+                  autocomplete="off"
+                  :disabled="nameSavingKey === item.key"
+                  :title="item.matched ? '' : 'ยังไม่ map · พิมพ์เลือกชื่อมาตรฐาน'"
+                  @mousedown.stop
+                  @focus="suggestKey = item.key"
+                  @input="suggestKey = item.key"
+                  @keydown.enter.prevent="onNameEnter($event, item)"
+                  @blur="onRenameBlur(item)"
+                />
+                <ul
+                  v-if="suggestKey === item.key && renameSuggestList(item).length"
+                  class="ui-purchase-suggest__list"
+                  @mousedown.prevent
+                >
+                  <li
+                    v-for="cat in renameSuggestList(item)"
+                    :key="cat.id"
+                    class="ui-purchase-suggest__item"
+                    @mousedown.prevent="pickRenameCatalog(item, cat)"
+                  >
+                    <span>{{ cat.name }}</span>
+                    <small>{{ GROUP_LABEL[cat.groupKey] ?? cat.groupKey }}</small>
+                  </li>
+                </ul>
+              </div>
               <span
                 v-if="itemBranchMark(item)"
                 class="ui-purchase-sheet__mark"
                 :title="itemBranchMark(item)"
               >{{ itemBranchMark(item) }}</span>
-              <span
+              <button
+                type="button"
                 class="ui-purchase-item-tip"
-                tabindex="0"
-                @mousedown.stop
-                @mouseenter="showItemTip($event, item)"
-                @mouseleave="hideItemTip"
-                @focus="showItemTip($event, item)"
-                @blur="hideItemTip"
-              >ⓘ</span>
+                :aria-expanded="floatTip?.itemKey === item.key"
+                title="ดูสต็อก"
+                @click="toggleItemTip($event, item)"
+              >ⓘ</button>
             </div>
             <label
               v-for="br in copyBranchOrder"
@@ -1399,6 +1871,7 @@ onUnmounted(() => {
                 type="text"
                 inputmode="decimal"
                 data-sheet-nav
+                :data-sheet-qty="qtyFieldKey(item.key, br.id)"
                 :disabled="qtySavingKey === qtyFieldKey(item.key, br.id)"
                 :aria-label="`จำนวนคงเหลือ ${shortBranchName(br.name)}`"
                 @input="onQtyInput(item.key, br.id, $event)"
@@ -1454,15 +1927,36 @@ onUnmounted(() => {
             class="ui-purchase-sheet__row ui-purchase-sheet__row--add"
             :style="{ gridTemplateColumns: addSheetCols }"
           >
-            <input
-              v-model="addRow[col.key].name"
-              class="ui-input ui-purchase-sheet__add-name"
-              type="text"
-              data-sheet-nav
-              placeholder="+ ชื่อสินค้า"
-              @mousedown.stop
-              @keydown.enter.prevent="onSheetEnter($event, col.key)"
-            />
+            <div class="ui-purchase-suggest ui-purchase-suggest--add">
+              <input
+                v-model="addRow[col.key].name"
+                class="ui-input ui-purchase-sheet__add-name"
+                type="text"
+                data-sheet-nav
+                autocomplete="off"
+                :placeholder="col.key === 'pending' ? '+ พิมพ์เลือกชื่อมาตรฐาน' : '+ ชื่อสินค้า'"
+                @mousedown.stop
+                @focus="suggestKey = `add:${col.key}`"
+                @input="suggestKey = `add:${col.key}`"
+                @blur="onAddNameBlur(col.key)"
+                @keydown.enter.prevent="onSheetEnter($event, col.key)"
+              />
+              <ul
+                v-if="suggestKey === `add:${col.key}` && addSuggestList(col.key).length"
+                class="ui-purchase-suggest__list"
+                @mousedown.prevent
+              >
+                <li
+                  v-for="cat in addSuggestList(col.key)"
+                  :key="cat.id"
+                  class="ui-purchase-suggest__item"
+                  @mousedown.prevent="pickAddCatalog(col.key, cat)"
+                >
+                  <span>{{ cat.name }}</span>
+                  <small>{{ GROUP_LABEL[cat.groupKey] ?? cat.groupKey }}</small>
+                </li>
+              </ul>
+            </div>
             <label
               v-for="br in copyBranchOrder"
               :key="br.id"
@@ -1506,7 +2000,6 @@ onUnmounted(() => {
   <div
     v-if="summaryOpen && board"
     class="ui-modal ui-purchase-summary-modal"
-    @click.self="summaryOpen = false"
   >
     <div
       class="ui-modal__panel ui-purchase-summary-panel"
@@ -1553,6 +2046,7 @@ onUnmounted(() => {
                   :key="`${col.key}-${r}`"
                   :class="{
                     'is-chetsamian': col.lines[r - 1]?.kind === 'chetsamian',
+                    'is-bankhong': col.lines[r - 1]?.kind === 'bankhong',
                   }"
                 >
                   <template v-if="col.lines[r - 1]">
@@ -1566,9 +2060,73 @@ onUnmounted(() => {
       </div>
     </div>
   </div>
+
+  <div
+    v-if="vegOpen"
+    class="ui-modal ui-purchase-summary-modal"
+  >
+    <div
+      class="ui-modal__panel ui-purchase-summary-panel ui-purchase-veg-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="purchase-veg-title"
+    >
+      <div class="ui-purchase-summary-bar">
+        <div>
+          <strong id="purchase-veg-title">ร้านผัก · {{ formatDayLabel(day) }}</strong>
+          <p class="ui-purchase-summary-hint">
+            เฉพาะชื่อรายการ · ไม่มีเลขสาขา
+          </p>
+          <p v-if="vegHint" class="ui-purchase-summary-hint" style="color: #166534">
+            {{ vegHint }}
+          </p>
+        </div>
+        <div class="ui-purchase-summary-bar__actions">
+          <button
+            type="button"
+            class="ui-btn ui-btn--primary"
+            :disabled="!vegNameLines.length"
+            @click="copyVegNamesOnly"
+          >
+            คัดลอกข้อความ
+          </button>
+          <button type="button" class="ui-btn ui-btn--ghost" @click="vegOpen = false">
+            ปิด
+          </button>
+        </div>
+      </div>
+      <div class="ui-purchase-summary-body">
+        <pre
+          v-if="vegNameLines.length"
+          ref="vegPreRef"
+          class="ui-purchase-veg-pre"
+          tabindex="0"
+        >{{ vegShareText }}</pre>
+        <p v-else class="ui-field-hint">ยังไม่มีรายการในกลุ่มผัก</p>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped>
+.ui-purchase-veg-panel {
+  max-width: min(28rem, 94vw);
+}
+.ui-purchase-veg-pre {
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border-radius: 0.55rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  font-size: 1.05rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  color: #0f172a;
+  max-height: min(60vh, 28rem);
+  overflow: auto;
+}
 :global(.ui-content:has(.ui-purchase-page)) {
   padding: 0.9rem clamp(0.85rem, 1.6vw, 1.5rem) 1.35rem;
 }
@@ -1639,21 +2197,32 @@ onUnmounted(() => {
 .ui-purchase-col--collapsed .ui-purchase-col__head {
   border-bottom: 0;
 }
+.ui-purchase-col--pending {
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+.ui-purchase-col--pending .ui-purchase-col__head {
+  background: #fef3c7;
+}
 .ui-purchase-item-tip {
   flex: 0 0 auto;
   width: 1rem;
   height: 1rem;
+  padding: 0;
   display: inline-grid;
   place-items: center;
+  border: 0;
   border-radius: 999px;
+  background: transparent;
   color: #64748b;
   font-size: 0.72rem;
   line-height: 1;
-  cursor: help;
+  cursor: pointer;
   user-select: none;
 }
 .ui-purchase-item-tip:hover,
-.ui-purchase-item-tip:focus {
+.ui-purchase-item-tip:focus-visible,
+.ui-purchase-item-tip[aria-expanded="true"] {
   color: #0f172a;
   background: #e2e8f0;
   outline: none;
@@ -1795,6 +2364,14 @@ onUnmounted(() => {
   background: #fffbeb;
   box-shadow: inset 3px 0 0 #ca8a04;
 }
+.ui-purchase-sheet__block.is-bankhong {
+  background: #fffaf5;
+  box-shadow: inset 3px 0 0 #fdba74;
+}
+.ui-purchase-sheet__block.is-bankhong.is-picked {
+  background: #fff7ed;
+  box-shadow: inset 3px 0 0 #ea580c;
+}
 .ui-purchase-sheet__row {
   min-height: 2rem;
 }
@@ -1810,9 +2387,52 @@ onUnmounted(() => {
   gap: 0.15rem;
   min-width: 0;
 }
+.ui-purchase-suggest {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 0;
+}
+.ui-purchase-suggest--add {
+  width: auto;
+}
+.ui-purchase-suggest__list {
+  position: absolute;
+  z-index: 40;
+  left: 0;
+  right: 0;
+  top: calc(100% + 2px);
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  max-height: 12rem;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.45rem;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+.ui-purchase-suggest__item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: #0f172a;
+}
+.ui-purchase-suggest__item:hover {
+  background: #fef9c3;
+}
+.ui-purchase-suggest__item small {
+  color: #78716c;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
 .ui-purchase-sheet__name-input {
   flex: 1 1 auto;
-  width: 0;
+  width: 100%;
   min-width: 0;
   border: 1px solid transparent;
   border-radius: 0.35rem;
@@ -1922,6 +2542,9 @@ onUnmounted(() => {
 }
 .ui-purchase-sheet__qty[data-branch="เจ็ดเสมียน"] input {
   background: #eff6ff;
+}
+.ui-purchase-sheet__qty[data-branch="บ้านฆ้อง"] input {
+  background: #fff7ed;
 }
 .ui-purchase-sheet__tot {
   text-align: center;
@@ -2075,6 +2698,10 @@ onUnmounted(() => {
 }
 .ui-purchase-share__table td.is-chetsamian {
   background: #fff59d;
+  font-weight: 600;
+}
+.ui-purchase-share__table td.is-bankhong {
+  background: #ffedd5;
   font-weight: 600;
 }
 /* เช็ครายการครบไหม */

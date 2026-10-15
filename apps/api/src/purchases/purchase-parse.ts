@@ -3,10 +3,12 @@
  */
 export {
   PURCHASE_GROUPS,
+  PURCHASE_DEFAULT_GROUP,
   PURCHASE_DAY_STATUSES,
   purchaseDayStatusLabel,
   isPurchaseDayStatus,
   parsePurchaseText,
+  formatPurchaseLine,
   normalizePurchaseKey,
   purchaseKeysCompatible,
   type PurchaseGroupKey,

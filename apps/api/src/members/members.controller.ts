@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -44,6 +45,25 @@ export class MembersController {
   @Post()
   create(@Body() body: UpsertMemberDto) {
     return this.members.create(body);
+  }
+
+  /**
+   * nginx บน prod มักบล็อก PATCH/DELETE → ใช้ POST แทน
+   * ต้องอยู่ก่อน :id
+   */
+  @Post("update")
+  updatePost(@Body() body: Partial<UpsertMemberDto> & { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสสมาชิก");
+    const { id: _id, ...rest } = body;
+    return this.members.update(id, rest);
+  }
+
+  @Post("delete")
+  removePost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสสมาชิก");
+    return this.members.remove(id);
   }
 
   @Patch(":id")

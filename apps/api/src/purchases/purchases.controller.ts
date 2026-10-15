@@ -53,6 +53,41 @@ export class PurchasesController {
       active?: boolean;
     },
   ) {
+    return this.updateCatalogById(id, body);
+  }
+
+  /**
+   * POST สำรอง — nginx หน้า HTTPS บางชุดบล็อก PATCH/DELETE (ได้ 403)
+   */
+  @Post("catalog/update")
+  async updateCatalogPost(
+    @Body()
+    body: {
+      id: string;
+      name?: string;
+      aliases?: string;
+      groupKey?: string;
+      unit?: string | null;
+      sortOrder?: number;
+      active?: boolean;
+    },
+  ) {
+    const id = String(body.id ?? "").trim();
+    if (!id) throw new BadRequestException("ระบุ id");
+    return this.updateCatalogById(id, body);
+  }
+
+  private async updateCatalogById(
+    id: string,
+    body: {
+      name?: string;
+      aliases?: string;
+      groupKey?: string;
+      unit?: string | null;
+      sortOrder?: number;
+      active?: boolean;
+    },
+  ) {
     const { items } = await this.purchases.listCatalog();
     const cur = items.find((x) => x.id === id);
     if (!cur) throw new NotFoundException("ไม่พบรายการ");
@@ -65,6 +100,16 @@ export class PurchasesController {
       sortOrder: body.sortOrder ?? cur.sortOrder,
       active: body.active ?? cur.active,
     });
+  }
+
+  @Post("catalog/bulk-delete")
+  bulkDeleteCatalog(@Body() body: { ids?: string[] }) {
+    return this.purchases.deleteCatalogMany(body.ids ?? []);
+  }
+
+  @Delete("catalog/:id")
+  deleteCatalog(@Param("id") id: string) {
+    return this.purchases.deleteCatalog(id);
   }
 
   @Get("days")
@@ -116,6 +161,26 @@ export class PurchasesController {
     return this.purchases.updateLine(id, body);
   }
 
+  /**
+   * POST สำรอง — nginx หน้า HTTPS บล็อก PATCH (ได้ 403)
+   */
+  @Post("lines/update")
+  updateLinePost(
+    @Body()
+    body: {
+      id: string;
+      name?: string;
+      qtyText?: string | null;
+      note?: string | null;
+      groupKey?: string;
+      catalogId?: string | null;
+    },
+  ) {
+    const id = String(body.id ?? "").trim();
+    if (!id) throw new BadRequestException("ระบุ id");
+    return this.purchases.updateLine(id, body);
+  }
+
   /** กรอก/แก้จำนวนบนแผงสรุป — สร้างบรรทัดสาขาใหม่ได้ ถ้าว่างจะลบ */
   @Post("board-qty")
   setBoardQty(
@@ -136,6 +201,21 @@ export class PurchasesController {
       throw new BadRequestException("ข้อมูลไม่ครบ");
     }
     return this.purchases.setBoardQty(body);
+  }
+
+  /** ล้างแผงทั้งวัน (รายการ + ข้อความวาง) */
+  @Post("board-clear")
+  clearBoardDay(
+    @Body()
+    body: {
+      dayId?: string;
+      day?: string;
+    },
+  ) {
+    if (!body.dayId && !body.day) {
+      throw new BadRequestException("ระบุวัน");
+    }
+    return this.purchases.clearBoardDay(body);
   }
 
   /** ลบสินค้าทั้งแถวออกจากแผง (ทุกสาขา) — ไม่ซื้อ */

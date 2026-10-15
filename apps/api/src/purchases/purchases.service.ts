@@ -4,15 +4,18 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { pg } from "@ap-pos/db";
 import { DatabaseService } from "../db/database.service";
+import { NotifyService } from "../notify/notify.service";
 import {
+  formatPurchaseLine,
   normalizePurchaseKey,
   parsePurchaseText,
   purchaseKeysCompatible,
   PURCHASE_DAY_STATUSES,
+  PURCHASE_DEFAULT_GROUP,
   PURCHASE_GROUPS,
   isPurchaseDayStatus,
   type PurchaseDayStatus,
@@ -70,7 +73,7 @@ const SEED: SeedItem[] = [
   { name: "เห็ดเข็มทอง", group: "veg", aliases: "เห็ดเข็ม|เข็มทอง" },
   { name: "ผักชุด", group: "veg" },
   { name: "ผักโอ๊ค", group: "veg", aliases: "โอ๊ค|ผักโฮ" },
-  // ร้าน = ส่งหลุมดิน
+  // ส่งสาขา (เดิมส่งหลุมดิน)
   { name: "ชีสยืด", group: "transfer", aliases: "มอสซาเรลล่า|ชีสยืด" },
   { name: "ปลาดอลลี่", group: "transfer", aliases: "ดอลลี่" },
   { name: "หมึกวง", group: "transfer" },
@@ -100,9 +103,19 @@ function todayBangkok() {
   }).format(new Date());
 }
 
+/** พักกลางเลิกใช้แล้ว — ของเก่า/ไม่รู้จัก → ร้านในตลาด */
+function resolvePurchaseGroup(groupKey?: string | null): string {
+  if (!groupKey || groupKey === "pending") return PURCHASE_DEFAULT_GROUP;
+  if (PURCHASE_GROUPS.some((g) => g.key === groupKey)) return groupKey;
+  return PURCHASE_DEFAULT_GROUP;
+}
+
 @Injectable()
 export class PurchasesService implements OnModuleInit {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly notify: NotifyService,
+  ) {}
 
   async onModuleInit() {
     await this.ensureSeed();
@@ -205,14 +218,11 @@ export class PurchasesService implements OnModuleInit {
       const hit = await this.database.db
         .select()
         .from(pg.purchaseCatalog)
-        .where(
-          and(
-            eq(pg.purchaseCatalog.name, item.name),
-            isNull(pg.purchaseCatalog.deletedAt),
-          ),
-        )
+        .where(eq(pg.purchaseCatalog.name, item.name))
         .limit(1);
       if (hit[0]) {
+        // ถูกลบเองแล้ว — ไม่สร้างใหม่ / ไม่คืนชีพ
+        if (hit[0].deletedAt) continue;
         await this.database.db
           .update(pg.purchaseCatalog)
           .set({
@@ -317,6 +327,39 @@ export class PurchasesService implements OnModuleInit {
     return this.board(rows[0].id);
   }
 
+  async deleteCatalog(id: string) {
+    const rows = await this.database.db
+      .select()
+      .from(pg.purchaseCatalog)
+      .where(
+        and(eq(pg.purchaseCatalog.id, id), isNull(pg.purchaseCatalog.deletedAt)),
+      )
+      .limit(1);
+    if (!rows[0]) throw new NotFoundException("ไม่พบรายการ");
+    await this.database.db
+      .update(pg.purchaseCatalog)
+      .set({ deletedAt: now(), active: 0, updatedAt: now() })
+      .where(eq(pg.purchaseCatalog.id, id));
+    return { ok: true, id };
+  }
+
+  async deleteCatalogMany(ids: string[]) {
+    const unique = [
+      ...new Set(ids.map((id) => String(id ?? "").trim()).filter(Boolean)),
+    ];
+    if (!unique.length) throw new BadRequestException("เลือกรายการก่อน");
+    await this.database.db
+      .update(pg.purchaseCatalog)
+      .set({ deletedAt: now(), active: 0, updatedAt: now() })
+      .where(
+        and(
+          inArray(pg.purchaseCatalog.id, unique),
+          isNull(pg.purchaseCatalog.deletedAt),
+        ),
+      );
+    return { ok: true, deleted: unique.length };
+  }
+
   async listCatalog() {
     const rows = await this.database.db
       .select()
@@ -328,7 +371,7 @@ export class PurchasesService implements OnModuleInit {
         id: r.id,
         name: r.name,
         aliases: r.aliases,
-        groupKey: r.groupKey,
+        groupKey: resolvePurchaseGroup(r.groupKey),
         unit: r.unit,
         sortOrder: r.sortOrder,
         active: Boolean(r.active),
@@ -352,7 +395,7 @@ export class PurchasesService implements OnModuleInit {
         .set({
           name: trimmed,
           aliases: dto.aliases ?? "",
-          groupKey: dto.groupKey,
+          groupKey: resolvePurchaseGroup(dto.groupKey),
           unit: dto.unit ?? null,
           sortOrder: dto.sortOrder ?? 0,
           active: dto.active === false ? 0 : 1,
@@ -363,10 +406,28 @@ export class PurchasesService implements OnModuleInit {
       return items.find((x) => x.id === dto.id)!;
     }
 
-    // ไม่ส่ง id → รวมกับชื่อเดิมในแคตตาล็อก (ไม่สร้างซ้ำ)
-    const id = await this.pinCatalogGroup(trimmed, dto.groupKey, null);
-    if (!id) throw new BadRequestException("ใส่ชื่อสินค้า");
-    if (dto.aliases != null || dto.unit !== undefined || dto.sortOrder != null) {
+    // ไม่ส่ง id → รวมกับชื่อเดิม หรือสร้างใหม่ (เฉพาะจากหน้าตั้งค่าแคตตาล็อก)
+    if (!trimmed) throw new BadRequestException("ใส่ชื่อสินค้า");
+    const groupKey = resolvePurchaseGroup(dto.groupKey);
+    let id = await this.pinCatalogGroup(trimmed, groupKey, null);
+    if (!id) {
+      id = `pcat-${randomUUID().slice(0, 8)}`;
+      await this.database.db.insert(pg.purchaseCatalog).values({
+        id,
+        name: trimmed,
+        aliases: dto.aliases ?? trimmed,
+        groupKey,
+        unit: dto.unit ?? null,
+        sortOrder: dto.sortOrder ?? 900,
+        active: dto.active === false ? 0 : 1,
+        updatedAt: now(),
+        deletedAt: null,
+      });
+    } else if (
+      dto.aliases != null ||
+      dto.unit !== undefined ||
+      dto.sortOrder != null
+    ) {
       await this.database.db
         .update(pg.purchaseCatalog)
         .set({
@@ -381,41 +442,56 @@ export class PurchasesService implements OnModuleInit {
     return items.find((x) => x.id === id)!;
   }
 
-  private async matchCatalog(name: string) {
-    const { items } = await this.listCatalog();
+  private async matchCatalog(
+    name: string,
+    catalogItems?: Array<{
+      id: string;
+      name: string;
+      aliases: string;
+      groupKey: string;
+      active: boolean;
+    }>,
+  ) {
+    const items = catalogItems ?? (await this.listCatalog()).items;
     const tryNames = [name];
-    // สะโพกหมู สำรอง → ลอง match ชื่อหลักด้วย
+    // สะโพกหมู สำรอง / คอมโบ หมด → ลอง match ชื่อหลักด้วย
     const spare = name.match(/^(.*?)\s*สำรอง\s*$/u);
     if (spare?.[1]?.trim() && spare[1].trim().length >= 2) {
       tryNames.push(spare[1].trim());
     }
+    const empty = name.match(/^(.*?)\s*หมด\s*$/u);
+    if (empty?.[1]?.trim() && empty[1].trim().length >= 2) {
+      tryNames.push(empty[1].trim());
+    }
 
-    let best: (typeof items)[0] | null = null;
-    let bestScore = 0;
+    const activeItems = items.filter((item) => {
+      if (!item.active) return false;
+      // ไม่ match กับแคตตาล็อกที่ชื่อเป็น「xxx สำรอง/หมด」เอง — ให้ไปรายการหลัก
+      if (/\s*(สำรอง|หมด)\s*$/u.test(item.name.trim())) return false;
+      return true;
+    });
+
+    // รอบ 1: ชื่อหลักตรงก่อน — กัน「น่องไก่」โดน alias ของ「นสไก่」(สะโพกไก่→น่องไก่)
     for (const tryName of tryNames) {
       const key = normalizePurchaseKey(tryName);
-      for (const item of items) {
-        if (!item.active) continue;
-        const candidates = [item.name, ...item.aliases.split("|").filter(Boolean)];
-        for (const c of candidates) {
-          // ไม่ match กับแคตตาล็อกที่ชื่อเป็น「xxx สำรอง」เอง — ให้ไปรายการหลัก
-          if (/\s*สำรอง\s*$/u.test(c.trim())) continue;
-          const ck = normalizePurchaseKey(c);
-          if (!ck) continue;
-          if (key === ck) return item;
-          const shorter = key.length <= ck.length ? key : ck;
-          const longer = key.length <= ck.length ? ck : key;
-          if (!longer.includes(shorter)) continue;
-          if (shorter.length / longer.length < 0.72) continue;
-          const score = shorter.length;
-          if (score > bestScore) {
-            bestScore = score;
-            best = item;
-          }
+      if (!key) continue;
+      for (const item of activeItems) {
+        if (normalizePurchaseKey(item.name) === key) return item;
+      }
+    }
+
+    // รอบ 2: aliases
+    for (const tryName of tryNames) {
+      const key = normalizePurchaseKey(tryName);
+      if (!key) continue;
+      for (const item of activeItems) {
+        for (const alias of item.aliases.split("|").filter(Boolean)) {
+          if (/\s*(สำรอง|หมด)\s*$/u.test(alias.trim())) continue;
+          if (normalizePurchaseKey(alias) === key) return item;
         }
       }
     }
-    return best;
+    return null;
   }
 
   async getOrCreateDay(day?: string) {
@@ -467,9 +543,12 @@ export class PurchasesService implements OnModuleInit {
     branchId: string;
     branchLabel?: string;
     rawText: string;
+    /** มือถือส่งรายการยาว — ไม่ต้องประกอบ board ทั้งก้อน */
+    skipBoard?: boolean;
   }) {
     const day = await this.getOrCreateDay(opts.day);
     const parsed = parsePurchaseText(opts.rawText);
+    const stamp = now();
 
     const rawRows = await this.database.db
       .select()
@@ -498,7 +577,7 @@ export class PurchasesService implements OnModuleInit {
         .set({
           rawText: opts.rawText,
           branchLabel: opts.branchLabel ?? rawRows[0].branchLabel,
-          updatedAt: now(),
+          updatedAt: stamp,
         })
         .where(eq(pg.purchaseRaw.id, rawRows[0].id));
     } else {
@@ -508,7 +587,7 @@ export class PurchasesService implements OnModuleInit {
         branchId: opts.branchId,
         branchLabel: opts.branchLabel ?? null,
         rawText: opts.rawText,
-        updatedAt: now(),
+        updatedAt: stamp,
       });
     }
 
@@ -555,35 +634,44 @@ export class PurchasesService implements OnModuleInit {
     };
 
     // รายการที่เพิ่มเองบนแผง (ไม่อยู่ในข้อความ paste เก่า) — คงไว้ถ้า paste ใหม่ก็ไม่มี
-    const manualsToKeep = old.filter(
-      (row) =>
-        !lineMatchesPasteKey(row.name, oldPasteKeys) &&
-        !lineMatchesPasteKey(row.name, newPasteKeys),
+    const manualsToKeep = new Set(
+      old
+        .filter(
+          (row) =>
+            !lineMatchesPasteKey(row.name, oldPasteKeys) &&
+            !lineMatchesPasteKey(row.name, newPasteKeys),
+        )
+        .map((row) => row.id),
     );
 
-    for (const row of old) {
-      // ลบเฉพาะของจาก paste เดิม / ที่ถูกแทนด้วย paste ใหม่
-      if (manualsToKeep.some((m) => m.id === row.id)) continue;
+    const toDelete = old
+      .filter((row) => !manualsToKeep.has(row.id))
+      .map((row) => row.id);
+    if (toDelete.length) {
       await this.database.db
         .update(pg.purchaseLines)
-        .set({ deletedAt: now(), updatedAt: now() })
-        .where(eq(pg.purchaseLines.id, row.id));
+        .set({ deletedAt: stamp, updatedAt: stamp })
+        .where(inArray(pg.purchaseLines.id, toDelete));
     }
 
+    // โหลดแคตตาล็อกครั้งเดียว — รายการยาว (50+) เคยช้าเพราะ query ทุกรายการ
+    const { items: catalogItems } = await this.listCatalog();
+    const insertRows = [];
     let i = 0;
     for (const line of parsed) {
       i += 1;
-      const cat = await this.matchCatalog(line.name);
+      const cat = await this.matchCatalog(line.name, catalogItems);
       const storedName = cat?.name ?? line.name;
       const nameKey = normalizePurchaseKey(storedName);
       const pasteKey = normalizePurchaseKey(line.name);
-      // ลำดับ: คอลัมน์ที่เคยย้ายวันนี้ → แคตตาล็อก → ตลาด
-      const groupKey =
+      // ลำดับ: คอลัมน์ที่เคยย้ายวันนี้ → แคตตาล็อก → ร้านในตลาด
+      const groupKey = resolvePurchaseGroup(
         (nameKey && prevGroupByKey.get(nameKey)) ||
-        (pasteKey && prevGroupByKey.get(pasteKey)) ||
-        (cat?.groupKey as string) ||
-        "market";
-      await this.database.db.insert(pg.purchaseLines).values({
+          (pasteKey && prevGroupByKey.get(pasteKey)) ||
+          (cat?.groupKey as string) ||
+          PURCHASE_DEFAULT_GROUP,
+      );
+      insertRows.push({
         id: `pline-${randomUUID().slice(0, 10)}`,
         dayId: day.id,
         branchId: opts.branchId,
@@ -594,11 +682,17 @@ export class PurchasesService implements OnModuleInit {
         groupKey,
         matched: cat ? 1 : 0,
         sortOrder: i,
-        updatedAt: now(),
+        updatedAt: stamp,
         deletedAt: null,
       });
     }
+    if (insertRows.length) {
+      await this.database.db.insert(pg.purchaseLines).values(insertRows);
+    }
 
+    if (opts.skipBoard) {
+      return { day: { id: day.id, day: day.day } };
+    }
     // คืนรายการที่เพิ่มเอง — ไม่ soft-delete ไว้แล้วด้านบน
     return this.board(day.id);
   }
@@ -623,11 +717,12 @@ export class PurchasesService implements OnModuleInit {
     let nextCatalogId =
       dto.catalogId === undefined ? cur.catalogId : dto.catalogId;
 
-    // ย้ายคอลัมน์ → จำในแคตตาล็อกด้วย (สร้างใหม่ถ้ายังไม่ map)
-    if (dto.groupKey && dto.groupKey !== cur.groupKey) {
+    // ย้ายคอลัมน์ → จำกลุ่มลงแคตตาล็อก (ไม่มีชื่อนี้จะสร้างใหม่)
+    const nextGroup = resolvePurchaseGroup(dto.groupKey ?? cur.groupKey);
+    if (dto.groupKey && nextGroup !== resolvePurchaseGroup(cur.groupKey)) {
       nextCatalogId = await this.pinCatalogGroup(
         dto.name?.trim() || cur.name,
-        dto.groupKey,
+        nextGroup,
         nextCatalogId,
       );
     }
@@ -638,9 +733,9 @@ export class PurchasesService implements OnModuleInit {
         name: dto.name?.trim() ?? cur.name,
         qtyText: dto.qtyText === undefined ? cur.qtyText : dto.qtyText,
         note: dto.note === undefined ? cur.note : dto.note,
-        groupKey: dto.groupKey ?? cur.groupKey,
+        groupKey: nextGroup,
         catalogId: nextCatalogId,
-        matched: nextCatalogId || dto.groupKey ? 1 : cur.matched,
+        matched: nextCatalogId ? 1 : cur.matched,
         updatedAt: now(),
       })
       .where(eq(pg.purchaseLines.id, id));
@@ -648,7 +743,10 @@ export class PurchasesService implements OnModuleInit {
     return this.board(cur.dayId);
   }
 
-  /** จำกลุ่มร้านของชื่อสินค้า — ใช้ตอนจัดเข้าแผงรอบถัดไป */
+  /**
+   * จำกลุ่มร้านลงแคตตาล็อก — มีอยู่แล้วอัปเดตกลุ่ม
+   * ยังไม่มี → สร้างใหม่ (เช่น ย้ายจากพักกลางไปแผงร้าน)
+   */
   private async pinCatalogGroup(
     name: string,
     groupKey: string,
@@ -656,34 +754,51 @@ export class PurchasesService implements OnModuleInit {
   ) {
     const trimmed = name.trim();
     if (!trimmed) return catalogId ?? null;
+    const pinnedGroup = resolvePurchaseGroup(groupKey);
 
     if (catalogId) {
       await this.database.db
         .update(pg.purchaseCatalog)
-        .set({ groupKey, updatedAt: now(), active: 1 })
+        .set({
+          groupKey: pinnedGroup,
+          updatedAt: now(),
+          active: 1,
+          deletedAt: null,
+        })
         .where(eq(pg.purchaseCatalog.id, catalogId));
       return catalogId;
     }
 
     const key = normalizePurchaseKey(trimmed);
-    const rows = await this.database.db
-      .select()
-      .from(pg.purchaseCatalog)
-      .where(isNull(pg.purchaseCatalog.deletedAt));
-    const hit =
-      rows.find((r) => normalizePurchaseKey(r.name) === key) ??
-      rows.find((r) =>
-        r.aliases
-          .split("|")
-          .some((a) => a.trim() && normalizePurchaseKey(a) === key),
-      );
+    const rows = await this.database.db.select().from(pg.purchaseCatalog);
+    const byKey = (r: (typeof rows)[number]) =>
+      normalizePurchaseKey(r.name) === key ||
+      r.aliases
+        .split("|")
+        .some((a) => a.trim() && normalizePurchaseKey(a) === key);
 
-    if (hit) {
+    const activeHit = rows.find((r) => !r.deletedAt && byKey(r));
+    if (activeHit) {
       await this.database.db
         .update(pg.purchaseCatalog)
-        .set({ groupKey, updatedAt: now(), active: 1 })
-        .where(eq(pg.purchaseCatalog.id, hit.id));
-      return hit.id;
+        .set({ groupKey: pinnedGroup, updatedAt: now(), active: 1 })
+        .where(eq(pg.purchaseCatalog.id, activeHit.id));
+      return activeHit.id;
+    }
+
+    const deletedHit = rows.find((r) => r.deletedAt && byKey(r));
+    if (deletedHit) {
+      await this.database.db
+        .update(pg.purchaseCatalog)
+        .set({
+          groupKey: pinnedGroup,
+          name: trimmed,
+          active: 1,
+          deletedAt: null,
+          updatedAt: now(),
+        })
+        .where(eq(pg.purchaseCatalog.id, deletedHit.id));
+      return deletedHit.id;
     }
 
     const id = `pcat-${randomUUID().slice(0, 8)}`;
@@ -691,7 +806,7 @@ export class PurchasesService implements OnModuleInit {
       id,
       name: trimmed,
       aliases: trimmed,
-      groupKey,
+      groupKey: pinnedGroup,
       unit: null,
       sortOrder: 900,
       active: 1,
@@ -763,13 +878,14 @@ export class PurchasesService implements OnModuleInit {
         ),
       );
 
+    const wantGroup = resolvePurchaseGroup(dto.groupKey);
     let existing =
       (dto.lineId
         ? lines.find((l) => l.id === dto.lineId)
         : undefined) ??
       lines.find(
         (l) =>
-          l.groupKey === dto.groupKey &&
+          resolvePurchaseGroup(l.groupKey) === wantGroup &&
           normalizePurchaseKey(l.name) === nameKey,
       );
 
@@ -777,6 +893,14 @@ export class PurchasesService implements OnModuleInit {
       if (existing) {
         if (dto.forceCreate) {
           // มีแถวแล้ว + ไม่ใส่จำนวน = คงไว้บนแผง
+          return this.board(dayId);
+        }
+        // กัน race: rename แล้ว blur จำนวนด้วยชื่อเก่า + draft ว่าง → อย่าลบ
+        if (
+          dto.lineId &&
+          name &&
+          normalizePurchaseKey(existing.name) !== nameKey
+        ) {
           return this.board(dayId);
         }
         const hadQty = Boolean(
@@ -796,22 +920,24 @@ export class PurchasesService implements OnModuleInit {
         return this.board(dayId);
       }
       // สร้างแถวว่างบนแผงวันนี้
+      if (!name) throw new BadRequestException("ใส่ชื่อสินค้า");
+      const emptyGroup = wantGroup;
       const pinnedCatalogId = await this.pinCatalogGroup(
         name,
-        dto.groupKey,
+        emptyGroup,
         dto.catalogId ?? null,
       );
-      if (!pinnedCatalogId) throw new BadRequestException("ใส่ชื่อสินค้า");
+      const catalogId = pinnedCatalogId ?? dto.catalogId ?? null;
       await this.database.db.insert(pg.purchaseLines).values({
         id: `pline-${randomUUID().slice(0, 10)}`,
         dayId,
         branchId: dto.branchId,
-        catalogId: pinnedCatalogId,
+        catalogId,
         name,
         qtyText: null,
         note: null,
-        groupKey: dto.groupKey,
-        matched: 1,
+        groupKey: emptyGroup,
+        matched: catalogId ? 1 : 0,
         sortOrder: 900 + lines.length,
         updatedAt: now(),
         deletedAt: null,
@@ -819,12 +945,16 @@ export class PurchasesService implements OnModuleInit {
       return this.board(dayId);
     }
 
-    // เพิ่ม/แก้บนแผง → จำชื่อ→ร้านในแคตตาล็อกเดียวกับหน้าตั้งค่า
+    // เพิ่ม/แก้บนแผง → จำกลุ่มลงแคตตาล็อก
+    if (!name) throw new BadRequestException("ใส่ชื่อสินค้า");
+    const lineGroup = resolvePurchaseGroup(dto.groupKey);
     const pinnedCatalogId = await this.pinCatalogGroup(
       name,
-      dto.groupKey,
+      lineGroup,
       dto.catalogId ?? existing?.catalogId ?? null,
     );
+    const catalogId =
+      pinnedCatalogId ?? dto.catalogId ?? existing?.catalogId ?? null;
 
     if (existing) {
       await this.database.db
@@ -833,9 +963,9 @@ export class PurchasesService implements OnModuleInit {
           qtyText: qty,
           note: null,
           name,
-          groupKey: dto.groupKey,
-          catalogId: pinnedCatalogId,
-          matched: 1,
+          groupKey: lineGroup,
+          catalogId,
+          matched: catalogId ? 1 : 0,
           updatedAt: now(),
         })
         .where(eq(pg.purchaseLines.id, existing.id));
@@ -846,16 +976,45 @@ export class PurchasesService implements OnModuleInit {
       id: `pline-${randomUUID().slice(0, 10)}`,
       dayId,
       branchId: dto.branchId,
-      catalogId: pinnedCatalogId,
+      catalogId,
       name,
       qtyText: qty,
       note: null,
-      groupKey: dto.groupKey,
-      matched: 1,
+      groupKey: lineGroup,
+      matched: catalogId ? 1 : 0,
       sortOrder: 900 + lines.length,
       updatedAt: now(),
       deletedAt: null,
     });
+    return this.board(dayId);
+  }
+
+  /** ล้างแผงทั้งวัน — รายการ + ข้อความที่วาง (เตรียมวางใหม่) */
+  async clearBoardDay(dto: { dayId?: string; day?: string }) {
+    const day = dto.dayId
+      ? (
+          await this.database.db
+            .select()
+            .from(pg.purchaseDays)
+            .where(eq(pg.purchaseDays.id, dto.dayId))
+            .limit(1)
+        )[0]
+      : await this.getOrCreateDay(dto.day);
+    if (!day) throw new NotFoundException("ไม่พบวัน");
+
+    const dayId = day.id;
+    const stamp = now();
+    await this.database.db
+      .update(pg.purchaseLines)
+      .set({ deletedAt: stamp, updatedAt: stamp })
+      .where(
+        and(eq(pg.purchaseLines.dayId, dayId), isNull(pg.purchaseLines.deletedAt)),
+      );
+    await this.database.db
+      .update(pg.purchaseRaw)
+      .set({ rawText: "", updatedAt: stamp })
+      .where(eq(pg.purchaseRaw.dayId, dayId));
+
     return this.board(dayId);
   }
 
@@ -1010,13 +1169,14 @@ export class PurchasesService implements OnModuleInit {
 
     const map = new Map<string, BoardItem>();
     for (const line of lines) {
-      const key = `${line.groupKey}::${normalizePurchaseKey(line.name)}`;
+      const groupKey = resolvePurchaseGroup(line.groupKey);
+      const key = `${groupKey}::${normalizePurchaseKey(line.name)}`;
       let item = map.get(key);
       if (!item) {
         item = {
           key,
           name: line.name,
-          groupKey: line.groupKey,
+          groupKey,
           catalogId: line.catalogId,
           matched: Boolean(line.matched),
           byBranch: [],
@@ -1034,10 +1194,16 @@ export class PurchasesService implements OnModuleInit {
     }
 
     for (const item of map.values()) {
-      // เรียงสาขา: หลุมดิน → เจ็ดเสมียน → อื่นๆ
+      // เรียงสาขา: หลุมดิน → เจ็ดเสมียน → บ้านฆ้อง → อื่นๆ
       item.byBranch.sort((a, b) => {
         const rank = (n: string) =>
-          /หลุมดิน/.test(n) ? 0 : /เจ็ดเสมียน/.test(n) ? 1 : 2;
+          /หลุมดิน/.test(n)
+            ? 0
+            : /เจ็ดเสมียน/.test(n)
+              ? 1
+              : /บ้านฆ้อง|ฆ้อง/.test(n)
+                ? 2
+                : 3;
         const d = rank(a.branchName) - rank(b.branchName);
         return d !== 0 ? d : a.branchName.localeCompare(b.branchName, "th");
       });
@@ -1045,6 +1211,7 @@ export class PurchasesService implements OnModuleInit {
       const short = (n: string) => {
         if (/หลุมดิน/.test(n)) return "หลุมดิน";
         if (/เจ็ดเสมียน/.test(n)) return "เจ็ดเสมียน";
+        if (/บ้านฆ้อง|ฆ้อง/.test(n)) return "บ้านฆ้อง";
         return n.replace(/^สาขา\s*/u, "").trim() || n;
       };
       const qtyOf = (b: (typeof item.byBranch)[0]) => {
@@ -1111,5 +1278,275 @@ export class PurchasesService implements OnModuleInit {
   async boardByDay(day?: string) {
     const d = await this.getOrCreateDay(day);
     return this.board(d.id);
+  }
+
+  /** สาขาที่ใช้งาน — สำหรับหน้าสั่งของมือถือ */
+  async orderBranches() {
+    const rows = await this.database.db
+      .select({
+        id: pg.branches.id,
+        code: pg.branches.code,
+        name: pg.branches.name,
+      })
+      .from(pg.branches)
+      .where(and(eq(pg.branches.active, 1), isNull(pg.branches.deletedAt)))
+      .orderBy(asc(pg.branches.code));
+    return { day: todayBangkok(), branches: rows };
+  }
+
+  /**
+   * รายการแนะนำให้กรอกคงเหลือ
+   * = ของที่สาขานี้เคยส่ง 7 วัน + แคตตาล็อกที่ active
+   */
+  async orderItemSuggestions(branchId: string) {
+    if (!branchId) throw new BadRequestException("ระบุสาขา");
+    const since = new Date();
+    since.setDate(since.getDate() - 7);
+    const sinceDay = since.toLocaleDateString("en-CA", {
+      timeZone: "Asia/Bangkok",
+    });
+
+    const recent = await this.database.db
+      .select({
+        name: pg.purchaseLines.name,
+        catalogId: pg.purchaseLines.catalogId,
+        groupKey: pg.purchaseLines.groupKey,
+        qtyText: pg.purchaseLines.qtyText,
+        note: pg.purchaseLines.note,
+        day: pg.purchaseDays.day,
+      })
+      .from(pg.purchaseLines)
+      .innerJoin(
+        pg.purchaseDays,
+        eq(pg.purchaseLines.dayId, pg.purchaseDays.id),
+      )
+      .where(
+        and(
+          eq(pg.purchaseLines.branchId, branchId),
+          isNull(pg.purchaseLines.deletedAt),
+          gte(pg.purchaseDays.day, sinceDay),
+        ),
+      )
+      .orderBy(desc(pg.purchaseDays.day));
+
+    const { items: catalog } = await this.listCatalog();
+    const catById = new Map(catalog.map((c) => [c.id, c]));
+    const catByKey = new Map(
+      catalog.map((c) => [normalizePurchaseKey(c.name), c]),
+    );
+
+    type Suggest = {
+      key: string;
+      name: string;
+      catalogId: string | null;
+      groupKey: string;
+      aliases: string;
+      recent: boolean;
+      lastRemaining: string | null;
+    };
+    const map = new Map<string, Suggest>();
+
+    for (const row of recent) {
+      const cat =
+        (row.catalogId && catById.get(row.catalogId)) ||
+        catByKey.get(normalizePurchaseKey(row.name));
+      const name = cat?.name ?? row.name;
+      const key = normalizePurchaseKey(name);
+      if (!key || map.has(key)) continue;
+      const remaining =
+        (row.qtyText || row.note || "").trim().replace(/^มี\s*/u, "") || null;
+      map.set(key, {
+        key,
+        name,
+        catalogId: cat?.id ?? row.catalogId ?? null,
+        groupKey: resolvePurchaseGroup(
+          cat?.groupKey ?? row.groupKey ?? PURCHASE_DEFAULT_GROUP,
+        ),
+        aliases: cat?.aliases ?? "",
+        recent: true,
+        lastRemaining: remaining,
+      });
+    }
+
+    for (const cat of catalog) {
+      if (!cat.active) continue;
+      const key = normalizePurchaseKey(cat.name);
+      if (!key || map.has(key)) continue;
+      map.set(key, {
+        key,
+        name: cat.name,
+        catalogId: cat.id,
+        groupKey: resolvePurchaseGroup(cat.groupKey),
+        aliases: cat.aliases,
+        recent: false,
+        lastRemaining: null,
+      });
+    }
+
+    const groupOrder = new Map<string, number>(
+      PURCHASE_GROUPS.map((g, i) => [g.key, i]),
+    );
+    const items = [...map.values()].sort((a, b) => {
+      if (a.recent !== b.recent) return a.recent ? -1 : 1;
+      const ga = groupOrder.get(a.groupKey) ?? 99;
+      const gb = groupOrder.get(b.groupKey) ?? 99;
+      if (ga !== gb) return ga - gb;
+      return a.name.localeCompare(b.name, "th");
+    });
+
+    return {
+      day: todayBangkok(),
+      branchId,
+      groups: PURCHASE_GROUPS,
+      items,
+    };
+  }
+
+  /** สถานะที่สาขาส่งวันนี้แล้วหรือยัง */
+  async orderDraft(branchId: string, day?: string) {
+    if (!branchId) throw new BadRequestException("ระบุสาขา");
+    const d = await this.getOrCreateDay(day);
+    const raw = (
+      await this.database.db
+        .select()
+        .from(pg.purchaseRaw)
+        .where(
+          and(
+            eq(pg.purchaseRaw.dayId, d.id),
+            eq(pg.purchaseRaw.branchId, branchId),
+          ),
+        )
+        .limit(1)
+    )[0];
+    const lines = await this.database.db
+      .select()
+      .from(pg.purchaseLines)
+      .where(
+        and(
+          eq(pg.purchaseLines.dayId, d.id),
+          eq(pg.purchaseLines.branchId, branchId),
+          isNull(pg.purchaseLines.deletedAt),
+        ),
+      )
+      .orderBy(asc(pg.purchaseLines.sortOrder));
+    return {
+      day: d.day,
+      dayId: d.id,
+      status: d.status,
+      submitted: Boolean(raw?.rawText?.trim()),
+      rawText: raw?.rawText ?? "",
+      items: lines.map((l) => ({
+        name: l.name,
+        catalogId: l.catalogId,
+        groupKey: l.groupKey,
+        qtyText: l.qtyText,
+        note: l.note,
+      })),
+    };
+  }
+
+  /**
+   * น้องส่งคงเหลือจากมือถือ → แปลงเป็นข้อความแบบเดิม แล้ว ingest
+   */
+  async submitBranchOrder(opts: {
+    branchId: string;
+    day?: string;
+    staffName?: string;
+    items: Array<{
+      name: string;
+      catalogId?: string | null;
+      remaining?: number | string | null;
+      spare?: boolean;
+      empty?: boolean;
+      order?: boolean;
+      touched?: boolean;
+    }>;
+  }) {
+    if (!opts.branchId) throw new BadRequestException("ระบุสาขา");
+    const branch = (
+      await this.database.db
+        .select()
+        .from(pg.branches)
+        .where(
+          and(
+            eq(pg.branches.id, opts.branchId),
+            isNull(pg.branches.deletedAt),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!branch) throw new NotFoundException("ไม่พบสาขา");
+
+    const lines: string[] = [];
+    for (const item of opts.items) {
+      const name = String(item.name ?? "").trim();
+      if (!name) continue;
+      if (
+        !item.touched &&
+        item.remaining == null &&
+        !item.spare &&
+        !item.empty &&
+        !item.order
+      ) {
+        continue;
+      }
+      const line = formatPurchaseLine({
+        name,
+        remaining: item.remaining,
+        spare: item.spare,
+        empty: item.empty,
+        order: item.order,
+      });
+      if (line) lines.push(line);
+    }
+    if (!lines.length) {
+      throw new BadRequestException("ยังไม่ได้กรอกรายการ");
+    }
+    if (opts.staffName?.trim()) {
+      lines.push(`# ส่งโดย ${opts.staffName.trim()}`);
+    }
+
+    // ingest เขียนแผงแล้ว — ข้าม board ทั้งก้อน (รายการยาวเคยช้าจนมือถือคิดว่าส่งไม่ติด)
+    const board = await this.ingest({
+      day: opts.day,
+      branchId: opts.branchId,
+      branchLabel: branch.name,
+      rawText: lines.join("\n"),
+      skipBoard: true,
+    });
+    const dayLabel = opts.day ?? board?.day?.day ?? null;
+    const itemCount = lines.filter((l) => !l.startsWith("#")).length;
+
+    const notifyItems = opts.items.filter((item) => {
+      const name = String(item.name ?? "").trim();
+      if (!name) return false;
+      return Boolean(
+        item.touched ||
+          item.remaining != null ||
+          item.spare ||
+          item.empty ||
+          item.order,
+      );
+    });
+    void this.notify.notifyPurchaseOrder({
+      branchId: opts.branchId,
+      branchName: branch.name,
+      branchCode: branch.code,
+      staffName: opts.staffName,
+      day: dayLabel ?? undefined,
+      items: notifyItems.map((item) => ({
+        name: String(item.name).trim(),
+        remaining: item.remaining,
+        spare: item.spare,
+        empty: item.empty,
+        order: item.order,
+      })),
+    });
+
+    return {
+      ok: true,
+      itemCount,
+      day: dayLabel,
+    };
   }
 }

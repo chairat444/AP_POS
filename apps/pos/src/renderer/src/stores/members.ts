@@ -4,6 +4,7 @@ import { searchMembers, type Member } from "../data/demo-members";
 import {
   createMember as createMemberRemote,
   loadCachedMembers,
+  lookupMemberByPhone,
   saveCachedMembers,
 } from "../services/sync";
 
@@ -20,6 +21,22 @@ export const useMembersStore = defineStore("members", () => {
   }
 
   function search(query: string) {
+    return searchMembers(query, members.value);
+  }
+
+  /** ค้นในเครื่องก่อน · ถ้าพิมพ์เบอร์ครบและออนไลน์ ให้ถามเซิร์ฟด้วย */
+  async function searchWithServer(query: string): Promise<Member[]> {
+    const local = searchMembers(query, members.value);
+    const digits = query.replace(/\D/g, "");
+    if (digits.length < 9) return local;
+
+    const remote = await lookupMemberByPhone(digits);
+    if (!remote) return local;
+
+    const without = members.value.filter((m) => m.id !== remote.id);
+    members.value = [...without, remote].sort((a, b) =>
+      a.name.localeCompare(b.name, "th"),
+    );
     return searchMembers(query, members.value);
   }
 
@@ -63,6 +80,7 @@ export const useMembersStore = defineStore("members", () => {
     loadLocal,
     replaceAll,
     search,
+    searchWithServer,
     findById,
     adjustPoints,
     setPoints,

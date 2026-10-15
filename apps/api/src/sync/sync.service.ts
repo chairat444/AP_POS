@@ -1,5 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { and, asc, count, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, asc, count, eq, gte, inArray, isNull, lte } from "drizzle-orm";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { pg } from "@ap-pos/db";
@@ -16,6 +16,7 @@ import type { RegisterTerminalDto } from "../terminals/terminal.types";
 import type { SyncedShiftPayload } from "../shifts/shift.types";
 import { DatabaseService } from "../db/database.service";
 import { SalesService } from "../sales/sales.service";
+import { freshProductCode } from "../sales/sale-profit";
 
 /** log ถาวรแยกจาก pm2 — กัน stdout เป็น socket แล้วหาสาเหตุ sync ไม่เจอ */
 function appendSyncSalesLog(row: Record<string, unknown>) {
@@ -37,9 +38,10 @@ type SyncedSaleLine = {
   id: string;
   barcode: string;
   productCode?: string;
-  name: string;
+  /** POS ใหม่อาจไม่ส่ง — API เติมจากคลังด้วย barcode */
+  name?: string;
   qty: number;
-  unit: string;
+  unit?: string;
   unitPrice: number;
   discount: number;
   lineTotal: number;
@@ -103,6 +105,13 @@ function bangkokToday() {
   }).format(new Date());
 }
 
+type CatalogHit = {
+  barcode: string;
+  productCode: string | null;
+  name: string;
+  unit: string;
+};
+
 @Injectable()
 export class SyncService {
   private readonly logger = new Logger(SyncService.name);
@@ -120,6 +129,116 @@ export class SyncService {
     private readonly notify: NotifyService,
     private readonly sales: SalesService,
   ) {}
+
+  /**
+   * POS ใหม่ไม่ส่งชื่อสินค้า (กัน WAF) — เติมจากคลังด้วย barcode / บาร์ของสด 6 หลัก
+   * ถ้าหาไม่เจอและ POS เก่ายังส่งชื่อมา ใช้ชื่อจาก payload
+   */
+  private async enrichSaleLinesFromCatalog(
+    lines: SyncedSaleLine[],
+  ): Promise<SyncedSaleLine[]> {
+    if (!lines?.length) return lines ?? [];
+
+    const keys = new Set<string>();
+    for (const line of lines) {
+      const barcode = String(line.barcode ?? "").trim();
+      if (barcode) keys.add(barcode);
+      const fresh = freshProductCode(line);
+      if (fresh) keys.add(fresh);
+      const code = String(line.productCode ?? "").trim();
+      if (code) keys.add(code);
+    }
+    const keyList = [...keys];
+    const byBarcode = new Map<string, CatalogHit>();
+    const byCode = new Map<string, CatalogHit>();
+    if (keyList.length) {
+      const rows = await this.database.db
+        .select({
+          barcode: pg.products.barcode,
+          productCode: pg.products.productCode,
+          name: pg.products.name,
+          unit: pg.products.unit,
+        })
+        .from(pg.products)
+        .where(
+          and(
+            isNull(pg.products.deletedAt),
+            inArray(pg.products.barcode, keyList),
+          ),
+        );
+      for (const r of rows) {
+        const hit: CatalogHit = {
+          barcode: r.barcode,
+          productCode: r.productCode ?? null,
+          name: r.name,
+          unit: r.unit || "ชิ้น",
+        };
+        byBarcode.set(r.barcode, hit);
+      }
+      // product_code อาจไม่เท่า barcode — ดึงเพิ่มตาม code
+      const codeKeys = keyList.filter((k) => !byBarcode.has(k));
+      if (codeKeys.length) {
+        const byCodeRows = await this.database.db
+          .select({
+            barcode: pg.products.barcode,
+            productCode: pg.products.productCode,
+            name: pg.products.name,
+            unit: pg.products.unit,
+          })
+          .from(pg.products)
+          .where(
+            and(
+              isNull(pg.products.deletedAt),
+              inArray(pg.products.productCode, codeKeys),
+            ),
+          );
+        for (const r of byCodeRows) {
+          const hit: CatalogHit = {
+            barcode: r.barcode,
+            productCode: r.productCode ?? null,
+            name: r.name,
+            unit: r.unit || "ชิ้น",
+          };
+          byBarcode.set(r.barcode, hit);
+          if (r.productCode) byCode.set(r.productCode, hit);
+        }
+      }
+    }
+
+    return lines.map((line) => {
+      const barcode = String(line.barcode ?? "").trim();
+      const fresh = freshProductCode(line);
+      const code = String(line.productCode ?? "").trim();
+      const hit =
+        (barcode ? byBarcode.get(barcode) : undefined) ??
+        (fresh ? byBarcode.get(fresh) : undefined) ??
+        (code ? byCode.get(code) ?? byBarcode.get(code) : undefined);
+      const fallbackName = String(line.name ?? "").trim();
+      const fallbackUnit = String(line.unit ?? "").trim();
+      return {
+        ...line,
+        barcode: barcode || line.barcode,
+        productCode: line.productCode ?? hit?.productCode ?? undefined,
+        name: hit?.name || fallbackName || barcode || "รายการ",
+        unit: hit?.unit || fallbackUnit || "ชิ้น",
+      };
+    });
+  }
+
+  private async enrichCustomerName(
+    customerId: string | null | undefined,
+    customerName: string | null | undefined,
+  ): Promise<string | null> {
+    const id = String(customerId ?? "").trim();
+    if (!id) return customerName?.trim() || null;
+    try {
+      const row = await this.members.get(id);
+      if (row?.name?.trim()) return row.name.trim();
+    } catch {
+      /* keep payload name */
+    }
+    return customerName?.trim() || null;
+  }
 
   listProducts() {
     return this.products.listActive();
@@ -143,6 +262,13 @@ export class SyncService {
   /** POS สร้างสมาชิกตอนออนไลน์ (ไม่ต้อง login Admin) */
   createMember(dto: { name: string; phone?: string; points?: number }) {
     return this.members.create(dto);
+  }
+
+  /** POS ค้นสมาชิกด้วยเบอร์ตอนออนไลน์ (หลังสมัครจากมือถือ) */
+  async lookupMemberByPhone(phone: string) {
+    const member = await this.members.getByPhoneForPos(phone);
+    if (!member) return { found: false as const };
+    return { found: true as const, member };
   }
 
   acceptShifts(shifts: SyncedShiftPayload[]) {
@@ -421,6 +547,16 @@ export class SyncService {
           continue;
         }
 
+        const resolvedLines = await this.enrichSaleLinesFromCatalog(
+          sale.lines ?? [],
+        );
+        const resolvedCustomerName = await this.enrichCustomerName(
+          sale.customerId,
+          sale.customerName,
+        );
+        sale.lines = resolvedLines;
+        sale.customerName = resolvedCustomerName ?? undefined;
+
         let profitCols: {
           profit: string;
           costAmount: string;
@@ -507,9 +643,9 @@ export class SyncService {
             saleId: sale.id,
             barcode: line.barcode,
             productCode: line.productCode ?? null,
-            name: line.name,
+            name: line.name || "รายการ",
             qty: String(line.qty),
-            unit: line.unit,
+            unit: line.unit || "ชิ้น",
             unitPrice: String(line.unitPrice),
             discount: String(line.discount ?? 0),
             lineTotal: String(line.lineTotal),

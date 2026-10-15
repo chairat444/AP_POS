@@ -3,11 +3,15 @@ import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 const AUTH_SECRET =
   process.env.AUTH_SECRET ?? "ap-pos-dev-secret-change-me";
 
+export type AuthTokenScope = "admin" | "purchase-order";
+
 export type AuthTokenPayload = {
   sub: string;
   code: string;
   name: string;
   role: string;
+  /** ไม่มีค่า = โทเคน admin เก่า (ถือเป็น admin) */
+  scope?: AuthTokenScope;
   exp: number;
 };
 
