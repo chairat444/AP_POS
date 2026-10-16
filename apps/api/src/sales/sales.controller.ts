@@ -1,10 +1,12 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
   NotFoundException,
   Param,
   Patch,
+  Post,
   Query,
 } from "@nestjs/common";
 import { SalesService } from "./sales.service";
@@ -89,6 +91,27 @@ export class SalesController {
       paymentMethod: paymentMethod || undefined,
       limit: limit ? Number(limit) : undefined,
     });
+  }
+
+  /** nginx HTTPS มักบล็อก PATCH → ใช้ POST แทน (ต้องอยู่ก่อน :id) */
+  @Post("lines/update")
+  async patchLinePost(
+    @Body()
+    body: {
+      saleId?: string;
+      lineId?: string;
+      unitCost?: number | null;
+      pricePerKg?: number | null;
+      clearCost?: boolean;
+    },
+  ) {
+    const id = String(body?.saleId ?? "").trim();
+    const lineId = String(body?.lineId ?? "").trim();
+    if (!id || !lineId) throw new BadRequestException("ไม่พบบิลหรือรายการ");
+    const { saleId: _s, lineId: _l, ...rest } = body;
+    const sale = await this.sales.updateLineCost(id, lineId, rest ?? {});
+    if (!sale) throw new NotFoundException("Sale or line not found");
+    return sale;
   }
 
   @Get(":id")

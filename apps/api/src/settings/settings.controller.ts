@@ -75,6 +75,12 @@ export class SettingsController {
   }
 
   @Patch("points")
+  updatePointsPatch(@Body() body: UpdatePointsDto) {
+    return this.settings.updatePoints(body);
+  }
+
+  /** nginx HTTPS มักบล็อก PATCH → ใช้ POST แทน */
+  @Post("points")
   updatePoints(@Body() body: UpdatePointsDto) {
     return this.settings.updatePoints(body);
   }
@@ -85,6 +91,11 @@ export class SettingsController {
   }
 
   @Patch("display")
+  updateDisplayPatch(@Body() body: UpdateDisplayDto) {
+    return this.settings.updateDisplay(body);
+  }
+
+  @Post("display")
   updateDisplay(@Body() body: UpdateDisplayDto) {
     return this.settings.updateDisplay(body);
   }
@@ -105,6 +116,11 @@ export class SettingsController {
   }
 
   @Delete("display/banner")
+  clearBannerDelete() {
+    return this.settings.clearDisplayMedia("banner");
+  }
+
+  @Post("display/clear-banner")
   clearBanner() {
     return this.settings.clearDisplayMedia("banner");
   }
@@ -125,6 +141,11 @@ export class SettingsController {
   }
 
   @Delete("display/mid-banner")
+  clearMidBannerDelete() {
+    return this.settings.clearDisplayMedia("midBanner");
+  }
+
+  @Post("display/clear-mid-banner")
   clearMidBanner() {
     return this.settings.clearDisplayMedia("midBanner");
   }
@@ -145,6 +166,11 @@ export class SettingsController {
   }
 
   @Delete("display/panel")
+  clearPanelDelete() {
+    return this.settings.clearDisplayMedia("panel");
+  }
+
+  @Post("display/clear-panel")
   clearPanel() {
     return this.settings.clearDisplayMedia("panel");
   }
@@ -155,6 +181,11 @@ export class SettingsController {
   }
 
   @Patch("pricing")
+  updatePricingPatch(@Body() body: UpdatePricingDto) {
+    return this.settings.updatePricing(body);
+  }
+
+  @Post("pricing")
   updatePricing(@Body() body: UpdatePricingDto) {
     return this.settings.updatePricing(body);
   }
@@ -167,6 +198,11 @@ export class SettingsController {
   }
 
   @Patch("branding")
+  updateBrandingPatch(@Body() body: UpdateBrandingDto) {
+    return this.settings.updateBranding(body);
+  }
+
+  @Post("branding")
   updateBranding(@Body() body: UpdateBrandingDto) {
     return this.settings.updateBranding(body);
   }
@@ -203,6 +239,11 @@ export class SettingsController {
   }
 
   @Delete("logo")
+  clearLogoDelete() {
+    return this.settings.clearLogo();
+  }
+
+  @Post("logo/clear")
   clearLogo() {
     return this.settings.clearLogo();
   }
@@ -213,6 +254,12 @@ export class SettingsController {
   }
 
   @Patch("customer-ads")
+  updateCustomerAdsPatch(@Body() body: UpdateCustomerAdsDto) {
+    return this.settings.updateCustomerAds(body);
+  }
+
+  /** Post("customer-ads") = อัปโหลดไฟล์ — อัปเดต config ใช้ path นี้ */
+  @Post("customer-ads/update")
   updateCustomerAds(@Body() body: UpdateCustomerAdsDto) {
     return this.settings.updateCustomerAds(body);
   }
@@ -223,11 +270,21 @@ export class SettingsController {
   }
 
   @Patch("keybindings")
+  updateKeybindingsPatch(@Body() body: UpdateKeybindingsDto) {
+    return this.settings.updateKeybindings(body);
+  }
+
+  @Post("keybindings")
   updateKeybindings(@Body() body: UpdateKeybindingsDto) {
     return this.settings.updateKeybindings(body);
   }
 
   @Delete("keybindings")
+  resetKeybindingsDelete() {
+    return this.settings.resetKeybindings();
+  }
+
+  @Post("keybindings/reset")
   resetKeybindings() {
     return this.settings.resetKeybindings();
   }
@@ -279,6 +336,30 @@ export class SettingsController {
       );
     }
     return this.settings.addCustomerAd(file);
+  }
+
+  @Post("customer-ads/item/update")
+  patchCustomerAdPost(
+    @Body()
+    body: Partial<{
+      id: string;
+      active: boolean;
+      durationSec: number;
+      name: string;
+      sort: number;
+    }>,
+  ) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสสื่อ");
+    const { id: _id, ...rest } = body;
+    return this.settings.patchCustomerAd(id, rest);
+  }
+
+  @Post("customer-ads/item/delete")
+  removeCustomerAdPost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสสื่อ");
+    return this.settings.removeCustomerAd(id);
   }
 
   @Patch("customer-ads/:id")

@@ -4,7 +4,7 @@ type PointsConfig = {
   bahtPerRedeemPoint: number;
 };
 
-const { get, patch } = useAdminApi();
+const { get, post } = useAdminApi();
 const pending = ref(false);
 const saving = ref(false);
 const error = ref("");
@@ -49,7 +49,7 @@ async function save() {
   error.value = "";
   ok.value = "";
   try {
-    await patch("/settings/points", {
+    await post("/settings/points", {
       bahtPerPoint: Number(form.bahtPerPoint),
       bahtPerRedeemPoint: Number(form.bahtPerRedeemPoint),
     });

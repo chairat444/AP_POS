@@ -7,7 +7,7 @@ type Unit = {
   updatedAt?: string;
 };
 
-const { get, post, patch, del } = useAdminApi();
+const { get, post } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
@@ -91,7 +91,7 @@ async function save() {
   error.value = "";
   try {
     const body = { name: name.value.trim() };
-    if (editingId.value) await patch(`/units/${editingId.value}`, body);
+    if (editingId.value) await post(`/units/update`, { id: editingId.value, ...body });
     else await post("/units", body);
     closeModal();
     await load();
@@ -117,7 +117,7 @@ async function remove(row: Unit) {
   saving.value = true;
   error.value = "";
   try {
-    await del(`/units/${row.id}`);
+    await post(`/units/delete`, { id: row.id });
     await load();
   } catch (e: unknown) {
     const msg =

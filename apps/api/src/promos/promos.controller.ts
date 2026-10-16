@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+} from "@nestjs/common";
 import type { UpsertPromoDto } from "./promo.types";
 import { PromosService } from "./promos.service";
 
@@ -9,6 +18,22 @@ export class PromosController {
   @Get()
   list() {
     return this.promos.list();
+  }
+
+  /** nginx HTTPS มักบล็อก PATCH/DELETE → ใช้ POST แทน */
+  @Post("update")
+  updatePost(@Body() body: Partial<UpsertPromoDto> & { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสโปรโมชัน");
+    const { id: _id, ...rest } = body;
+    return this.promos.update(id, rest);
+  }
+
+  @Post("delete")
+  removePost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสโปรโมชัน");
+    return this.promos.remove(id);
   }
 
   @Get(":id")

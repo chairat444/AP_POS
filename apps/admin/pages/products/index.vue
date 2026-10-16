@@ -52,7 +52,7 @@ const emptyForm = (): ProductForm => ({
   active: true,
 });
 
-const { get, post, patch, upload, assetUrl } = useAdminApi();
+const { get, post, upload, assetUrl } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
@@ -344,7 +344,7 @@ async function saveMarginPct() {
   error.value = "";
   marginMsg.value = "";
   try {
-    const data = await patch<{ freshSuggestedMarginPct: number }>(
+    const data = await post<{ freshSuggestedMarginPct: number }>(
       "/settings/pricing",
       { freshSuggestedMarginPct: m },
     );

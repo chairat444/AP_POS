@@ -54,7 +54,7 @@ type Report = {
   people: PersonRow[];
 };
 
-const { get, put } = useAdminApi();
+const { get, post } = useAdminApi();
 const pending = ref(false);
 const error = ref("");
 const branches = ref<Branch[]>([]);
@@ -179,7 +179,7 @@ async function saveWageEdit() {
       wageError.value = "จำนวนเงินไม่ถูกต้อง";
       return;
     }
-    await put("/shifts/day-wage", {
+    await post("/shifts/day-wage", {
       staffId: selected.value.staffId,
       date: wageEditDate.value,
       wage,
@@ -200,7 +200,7 @@ async function resetWageEdit(d: DayRow) {
   wageSaving.value = true;
   wageError.value = "";
   try {
-    await put("/shifts/day-wage", {
+    await post("/shifts/day-wage", {
       staffId: selected.value.staffId,
       date: d.date,
       wage: null,

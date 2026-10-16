@@ -58,7 +58,7 @@ const ROLE_LABEL: Record<string, string> = {
   cashier: "แคชเชียร์",
 };
 
-const { get, post, patch, del } = useAdminApi();
+const { get, post } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
@@ -206,7 +206,7 @@ async function save() {
     };
     if (form.value.password.trim()) body.password = form.value.password.trim();
     if (editingId.value) {
-      await patch(`/staff/${editingId.value}`, body);
+      await post(`/staff/update`, { id: editingId.value, ...body });
     } else {
       await post("/staff", body);
     }
@@ -234,7 +234,7 @@ async function remove(row: Staff) {
   saving.value = true;
   error.value = "";
   try {
-    await del(`/staff/${row.id}`);
+    await post(`/staff/delete`, { id: row.id });
     await load();
   } catch (e: unknown) {
     const msg =

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -34,6 +35,22 @@ export class CashBookController {
   @Post()
   create(@Body() body: UpsertCashBookEntryDto) {
     return this.cashBook.create(body);
+  }
+
+  /** nginx HTTPS มักบล็อก PATCH/DELETE → ใช้ POST แทน */
+  @Post("update")
+  updatePost(@Body() body: Partial<UpsertCashBookEntryDto> & { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรายการ");
+    const { id: _id, ...rest } = body;
+    return this.cashBook.update(id, rest);
+  }
+
+  @Post("delete")
+  removePost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรายการ");
+    return this.cashBook.remove(id);
   }
 
   @Get(":id")

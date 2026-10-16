@@ -10,7 +10,7 @@ import {
   type SaleScreenActionId,
 } from "@ap-pos/shared";
 
-const { get, patch, del } = useAdminApi();
+const { get, post } = useAdminApi();
 const pending = ref(false);
 const saving = ref(false);
 const error = ref("");
@@ -71,7 +71,7 @@ async function save() {
       if (!c?.key) continue;
       keybindings[id] = [{ ...c }];
     }
-    await patch("/settings/keybindings", { keybindings });
+    await post("/settings/keybindings", { keybindings });
     ok.value = "บันทึกแล้ว — POS จะได้รับตอน sync / เปิดรอบใหม่";
     await load();
   } catch (e: unknown) {
@@ -91,7 +91,7 @@ async function resetDefaults() {
   ok.value = "";
   capturing.value = null;
   try {
-    await del("/settings/keybindings");
+    await post("/settings/keybindings/reset");
     ok.value = "รีเซ็ตเป็นค่าเริ่มต้นแล้ว";
     await load();
   } catch (e: unknown) {

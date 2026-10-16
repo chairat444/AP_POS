@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+} from "@nestjs/common";
 import type { UpsertProductUnitDto } from "./unit.types";
 import { UnitsService } from "./units.service";
 
@@ -9,6 +18,22 @@ export class UnitsController {
   @Get()
   list() {
     return this.units.list();
+  }
+
+  /** nginx HTTPS มักบล็อก PATCH/DELETE → ใช้ POST แทน */
+  @Post("update")
+  updatePost(@Body() body: Partial<UpsertProductUnitDto> & { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสหน่วย");
+    const { id: _id, ...rest } = body;
+    return this.units.update(id, rest);
+  }
+
+  @Post("delete")
+  removePost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสหน่วย");
+    return this.units.remove(id);
   }
 
   @Get(":id")

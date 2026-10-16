@@ -8,7 +8,7 @@ type Category = {
   updatedAt: string;
 };
 
-const { get, post, patch, del } = useAdminApi();
+const { get, post } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 
 const pending = ref(false);
@@ -128,7 +128,7 @@ async function save() {
       active: form.active,
       posReason: form.posReason.trim() || null,
     };
-    if (editingId.value) await patch(`/expense-categories/${editingId.value}`, body);
+    if (editingId.value) await post(`/expense-categories/update`, { id: editingId.value, ...body });
     else await post("/expense-categories", body);
     modalOpen.value = false;
     await load();
@@ -142,7 +142,7 @@ async function save() {
 async function toggleActive(row: Category) {
   saving.value = true;
   try {
-    await patch(`/expense-categories/${row.id}`, { active: !row.active });
+    await post(`/expense-categories/update`, { id: row.id, active: !row.active });
     await load();
   } catch (e) {
     error.value = e instanceof Error ? e.message : "อัปเดตไม่สำเร็จ";
@@ -162,7 +162,7 @@ async function remove(row: Category) {
   saving.value = true;
   error.value = "";
   try {
-    await del(`/expense-categories/${row.id}`);
+    await post(`/expense-categories/delete`, { id: row.id });
     await load();
   } catch (e) {
     error.value = e instanceof Error ? e.message : "ลบไม่สำเร็จ";

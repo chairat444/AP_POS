@@ -255,6 +255,13 @@ export class PurchasesController {
     return this.purchases.renameBoardItem(body);
   }
 
+  @Post("lines/delete")
+  removeLinePost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรายการ");
+    return this.purchases.removeLine(id);
+  }
+
   @Delete("lines/:id")
   removeLine(@Param("id") id: string) {
     return this.purchases.removeLine(id);

@@ -27,7 +27,7 @@ type SettingsRecord = {
   customerAds?: CustomerAdsConfig;
 };
 
-const { get, patch, upload, del, assetUrl } = useAdminApi();
+const { get, post, upload, assetUrl } = useAdminApi();
 const pending = ref(false);
 const saving = ref(false);
 const uploading = ref(false);
@@ -97,10 +97,10 @@ async function save() {
   error.value = "";
   ok.value = "";
   try {
-    await patch("/settings/display", {
+    await post("/settings/display", {
       customerScreenEnabled: form.customerScreenEnabled,
     });
-    await patch("/settings/customer-ads", {
+    await post("/settings/customer-ads/update", {
       enabled: ads.enabled,
       imageDurationSec: ads.imageDurationSec,
       items: ads.items,
@@ -172,11 +172,11 @@ async function clearDisplayMedia(slot: "banner" | "midBanner" | "panel") {
   try {
     const path =
       slot === "banner"
-        ? "/settings/display/banner"
+        ? "/settings/display/clear-banner"
         : slot === "midBanner"
-          ? "/settings/display/mid-banner"
-          : "/settings/display/panel";
-    const data = await del<SettingsRecord>(path);
+          ? "/settings/display/clear-mid-banner"
+          : "/settings/display/clear-panel";
+    const data = await post<SettingsRecord>(path);
     form.bannerUrl = data.display?.bannerUrl || "";
     form.midBannerUrl = data.display?.midBannerUrl || "";
     form.panelUrl = data.display?.panelUrl || "";
@@ -230,8 +230,9 @@ async function removeAd(id: string) {
   if (!confirm("ลบสื่อนี้?")) return;
   error.value = "";
   try {
-    const data = await del<{ customerAds?: CustomerAdsConfig }>(
-      `/settings/customer-ads/${id}`,
+    const data = await post<{ customerAds?: CustomerAdsConfig }>(
+      `/settings/customer-ads/item/delete`,
+      { id },
     );
     if (data.customerAds) {
       ads.items = data.customerAds.items.map((it) => ({ ...it }));

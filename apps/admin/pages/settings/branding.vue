@@ -9,7 +9,7 @@ type SettingsRecord = {
   branding?: BrandingConfig;
 };
 
-const { get, patch, upload, del, assetUrl } = useAdminApi();
+const { get, post, upload, assetUrl } = useAdminApi();
 const pending = ref(false);
 const saving = ref(false);
 const error = ref("");
@@ -74,7 +74,7 @@ async function save() {
   error.value = "";
   ok.value = "";
   try {
-    await patch("/settings/branding", {
+    await post("/settings/branding", {
       storeName: form.storeName.trim(),
       storeTagline: form.storeTagline.trim(),
     });
@@ -83,7 +83,7 @@ async function save() {
       fd.append("file", imageFile.value);
       await upload("/settings/logo", fd);
     } else if (removeLogo.value && form.logoUrl) {
-      await del("/settings/logo");
+      await post("/settings/logo/clear");
     }
     ok.value = "บันทึกแล้ว — Admin/POS จะใช้โลโก้ใหม่ (POS ตอน sync)";
     await load();

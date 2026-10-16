@@ -29,7 +29,7 @@ const emptyForm = (): BranchForm => ({
   discordWebhookUrl: "",
 });
 
-const { get, post, patch, del } = useAdminApi();
+const { get, post } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
@@ -127,7 +127,7 @@ async function save() {
       discordWebhookUrl: form.value.discordWebhookUrl.trim() || null,
     };
     if (editingId.value) {
-      await patch(`/branches/${editingId.value}`, body);
+      await post(`/branches/update`, { id: editingId.value, ...body });
     } else {
       await post("/branches", body);
     }
@@ -156,7 +156,7 @@ async function remove(row: Branch) {
   error.value = "";
   notice.value = "";
   try {
-    await del(`/branches/${row.id}`);
+    await post(`/branches/delete`, { id: row.id });
     await load();
   } catch (e: unknown) {
     const msg =

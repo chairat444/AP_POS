@@ -1,4 +1,14 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from "@nestjs/common";
 import type { UpsertTerminalDto } from "./terminal.types";
 import { TerminalsService } from "./terminals.service";
 
@@ -14,6 +24,22 @@ export class TerminalsController {
   @Get("next-code")
   nextCode() {
     return this.terminals.nextCode();
+  }
+
+  /** nginx HTTPS มักบล็อก PATCH/DELETE → ใช้ POST แทน */
+  @Post("update")
+  updatePost(@Body() body: Partial<UpsertTerminalDto> & { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสเครื่อง");
+    const { id: _id, ...rest } = body;
+    return this.terminals.update(id, rest);
+  }
+
+  @Post("delete")
+  removePost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสเครื่อง");
+    return this.terminals.remove(id);
   }
 
   @Get(":id")

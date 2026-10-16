@@ -45,7 +45,7 @@ const emptyForm = (): TerminalForm => ({
   receiptFooterPhones: "ติดต่อ 084 912 3509, 092 494 5442",
 });
 
-const { get, post, patch, del } = useAdminApi();
+const { get, post } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
@@ -177,7 +177,7 @@ async function save() {
       receiptFooterPhones: form.value.receiptFooterPhones.trim(),
     };
     if (editingId.value) {
-      await patch(`/terminals/${editingId.value}`, body);
+      await post(`/terminals/update`, { id: editingId.value, ...body });
     } else {
       await post("/terminals", body);
     }
@@ -205,7 +205,7 @@ async function remove(row: Terminal) {
   saving.value = true;
   error.value = "";
   try {
-    await del(`/terminals/${row.id}`);
+    await post(`/terminals/delete`, { id: row.id });
     await load();
   } catch (e: unknown) {
     const msg =

@@ -16,7 +16,7 @@ type Product = {
 const PAGE_SIZE = 16;
 const MIN_TABS = 2;
 
-const { get, put, assetUrl } = useAdminApi();
+const { get, post, assetUrl } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
@@ -296,7 +296,7 @@ async function persistBoard() {
   saving.value = true;
   error.value = "";
   try {
-    await put("/products/quick-board", {
+    await post("/products/quick-board", {
       productIds: tabs.value.flat().map((p) => p.id),
     });
     if (seq !== saveSeq) return;

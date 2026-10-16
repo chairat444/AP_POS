@@ -14,7 +14,7 @@ type Expense = {
   note: string | null;
 };
 
-const { get, post, patch, del } = useAdminApi();
+const { get, post } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 
 const {
@@ -165,7 +165,7 @@ async function save() {
       note: form.note.trim() || null,
     };
     if (editingId.value) {
-      await patch(`/expenses/${editingId.value}`, body);
+      await post(`/expenses/update`, { id: editingId.value, ...body });
     } else {
       await post("/expenses", body);
     }
@@ -191,7 +191,7 @@ async function remove(row: Expense) {
   if (!ok) return;
   saving.value = true;
   try {
-    await del(`/expenses/${row.id}`);
+    await post(`/expenses/delete`, { id: row.id });
     await load();
   } catch (e) {
     error.value = e instanceof Error ? e.message : "ลบไม่สำเร็จ";

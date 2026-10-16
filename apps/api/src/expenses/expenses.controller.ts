@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -33,6 +34,24 @@ export class ExpensesController {
     return this.expenses.reorderCategories(body.ids ?? []);
   }
 
+  /** nginx HTTPS มักบล็อก PATCH/DELETE → ใช้ POST แทน */
+  @Post("expense-categories/update")
+  updateCategoryPost(
+    @Body() body: Partial<UpsertExpenseCategoryDto> & { id?: string },
+  ) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบหมวดค่าใช้จ่าย");
+    const { id: _id, ...rest } = body;
+    return this.expenses.updateCategory(id, rest);
+  }
+
+  @Post("expense-categories/delete")
+  removeCategoryPost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบหมวดค่าใช้จ่าย");
+    return this.expenses.removeCategory(id);
+  }
+
   @Patch("expense-categories/:id")
   updateCategory(
     @Param("id") id: string,
@@ -60,6 +79,21 @@ export class ExpensesController {
   @Post("expenses")
   create(@Body() body: UpsertExpenseDto) {
     return this.expenses.create(body);
+  }
+
+  @Post("expenses/update")
+  updatePost(@Body() body: Partial<UpsertExpenseDto> & { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรายการค่าใช้จ่าย");
+    const { id: _id, ...rest } = body;
+    return this.expenses.update(id, rest);
+  }
+
+  @Post("expenses/delete")
+  removePost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรายการค่าใช้จ่าย");
+    return this.expenses.remove(id);
   }
 
   @Patch("expenses/:id")

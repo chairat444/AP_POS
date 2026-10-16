@@ -78,7 +78,7 @@ const PAY_LABELS: Record<string, string> = {
 /** ลำดับแสดงช่องทางชำระหลัก — ประเภทอื่นต่อท้าย */
 const PAY_ORDER = ["cash", "transfer", "government"] as const;
 
-const { get, patch } = useAdminApi();
+const { get, post } = useAdminApi();
 const lineSaving = ref<string | null>(null);
 const lineEditError = ref("");
 
@@ -176,10 +176,11 @@ async function saveLineCost(line: SaleLine) {
   lineSaving.value = line.id;
   lineEditError.value = "";
   try {
-    const updated = await patch<SaleDetail>(
-      `/sales/${detail.value.id}/lines/${line.id}`,
-      body,
-    );
+    const updated = await post<SaleDetail>(`/sales/lines/update`, {
+      saleId: detail.value.id,
+      lineId: line.id,
+      ...body,
+    });
     detail.value = updated;
     syncLineDrafts(updated);
   } catch (e) {

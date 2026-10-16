@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Post,
   Put,
   Query,
 } from "@nestjs/common";
@@ -60,6 +61,20 @@ export class ShiftsController {
 
   /** ปรับค่าแรงวันนั้น (เช่น ครึ่งวัน) — wage=null ล้างกลับค่าเริ่มต้น */
   @Put("day-wage")
+  upsertDayWagePut(
+    @Body()
+    body: {
+      staffId?: string;
+      date?: string;
+      wage?: number | null;
+      note?: string | null;
+    },
+  ) {
+    return this.upsertDayWage(body);
+  }
+
+  /** nginx HTTPS บางชุดบล็อก PUT → ใช้ POST แทน */
+  @Post("day-wage")
   upsertDayWage(
     @Body()
     body: {

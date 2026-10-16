@@ -35,7 +35,7 @@ const emptyForm = (): PromoForm => ({
   active: true,
 });
 
-const { get, post, patch, del } = useAdminApi();
+const { get, post } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
@@ -192,7 +192,7 @@ async function save() {
       label: form.value.label.trim(),
       active: form.value.active,
     };
-    if (editingId.value) await patch(`/promos/${editingId.value}`, body);
+    if (editingId.value) await post(`/promos/update`, { id: editingId.value, ...body });
     else await post("/promos", body);
     closeModal();
     await load();
@@ -218,7 +218,7 @@ async function remove(row: Promo) {
   saving.value = true;
   error.value = "";
   try {
-    await del(`/promos/${row.id}`);
+    await post(`/promos/delete`, { id: row.id });
     await load();
   } catch (e: unknown) {
     const msg =

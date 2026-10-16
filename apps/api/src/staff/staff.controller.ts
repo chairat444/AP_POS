@@ -1,4 +1,13 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from "@nestjs/common";
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+} from "@nestjs/common";
 import type { UpsertStaffDto } from "./staff.types";
 import { StaffService } from "./staff.service";
 
@@ -14,6 +23,22 @@ export class StaffController {
   @Get("next-code")
   nextCode() {
     return this.staff.nextCode();
+  }
+
+  /** nginx HTTPS มักบล็อก PATCH/DELETE → ใช้ POST แทน */
+  @Post("update")
+  updatePost(@Body() body: Partial<UpsertStaffDto> & { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสพนักงาน");
+    const { id: _id, ...rest } = body;
+    return this.staff.update(id, rest);
+  }
+
+  @Post("delete")
+  removePost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสพนักงาน");
+    return this.staff.remove(id);
   }
 
   @Get(":id")

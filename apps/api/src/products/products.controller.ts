@@ -42,6 +42,12 @@ export class ProductsController {
   }
 
   @Put("quick-board")
+  setQuickBoardPut(@Body() body: SetQuickBoardDto) {
+    return this.products.setQuickBoard(body.productIds ?? []);
+  }
+
+  /** nginx HTTPS บางชุดบล็อก PUT → ใช้ POST แทน */
+  @Post("quick-board")
   setQuickBoard(@Body() body: SetQuickBoardDto) {
     return this.products.setQuickBoard(body.productIds ?? []);
   }

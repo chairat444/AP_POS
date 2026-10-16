@@ -72,7 +72,7 @@ type DayDetail = {
   summary: { income: number; expense: number; net: number; count: number };
 };
 
-const { get, post, patch, del } = useAdminApi();
+const { get, post } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 
 function bangkokToday() {
@@ -736,7 +736,8 @@ async function saveEdit(day: string) {
   saving.value = true;
   error.value = "";
   try {
-    await patch(`/cash-book/${editId.value}`, {
+    await post(`/cash-book/update`, {
+      id: editId.value,
       entryDate: day,
       direction: edit.direction,
       kind: edit.kind,
@@ -776,7 +777,7 @@ async function removeRow(row: Entry) {
   });
   if (!ok) return;
   try {
-    await del(`/cash-book/${row.id}`);
+    await post(`/cash-book/delete`, { id: row.id });
     if (editId.value === row.id) editId.value = null;
     flash("ลบแล้ว");
     await refreshDay(row.entryDate);
