@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -48,6 +49,32 @@ export class ProductsController {
   @Post("bulk-prices")
   bulkPrices(@Body() body: { rows?: BulkPriceRow[] }) {
     return this.products.bulkUpdatePrices(body.rows ?? []);
+  }
+
+  /**
+   * nginx บน prod มักบล็อก PATCH/DELETE → ใช้ POST แทน
+   * ต้องอยู่ก่อน :id
+   */
+  @Post("update")
+  updatePost(@Body() body: Partial<UpsertProductDto> & { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสสินค้า");
+    const { id: _id, ...rest } = body;
+    return this.products.update(id, rest);
+  }
+
+  @Post("delete")
+  removePost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสสินค้า");
+    return this.products.remove(id);
+  }
+
+  @Post("clear-image")
+  clearImagePost(@Body() body: { id?: string }) {
+    const id = String(body?.id ?? "").trim();
+    if (!id) throw new BadRequestException("ไม่พบรหัสสินค้า");
+    return this.products.clearImage(id);
   }
 
   @Get(":id")

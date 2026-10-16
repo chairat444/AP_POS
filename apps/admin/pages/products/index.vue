@@ -52,7 +52,7 @@ const emptyForm = (): ProductForm => ({
   active: true,
 });
 
-const { get, post, patch, del, upload, assetUrl } = useAdminApi();
+const { get, post, patch, upload, assetUrl } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
@@ -469,7 +469,8 @@ async function save() {
     const body = toPayload();
     let id = editingId.value;
     if (id) {
-      await patch(`/products/${id}`, body);
+      // POST สำรอง — nginx HTTPS บางชุดบล็อก PATCH (ได้ 403)
+      await post(`/products/update`, { id, ...body });
     } else {
       const created = await post<Product>("/products", body);
       id = created.id;
@@ -480,7 +481,7 @@ async function save() {
       fd.append("file", imageFile.value);
       await upload(`/products/${id}/image`, fd);
     } else if (id && removeImage.value && imageUrl.value) {
-      await del(`/products/${id}/image`);
+      await post(`/products/clear-image`, { id });
     }
 
     closeModal();
@@ -503,7 +504,7 @@ async function remove(row: Product) {
   saving.value = true;
   error.value = "";
   try {
-    await del(`/products/${row.id}`);
+    await post(`/products/delete`, { id: row.id });
     await load();
   } catch (e) {
     error.value = e instanceof Error ? e.message : "ลบไม่สำเร็จ";
