@@ -355,6 +355,9 @@ export const purchaseRaw = pgTable("purchase_raw", {
   branchId: text("branch_id").notNull(),
   branchLabel: text("branch_label"),
   rawText: text("raw_text").notNull(),
+  /** draft จากมือถือ (ยังไม่กดส่ง) — ไม่แจ้งเตือน / ไม่ขึ้นแผง */
+  draftJson: text("draft_json"),
+  draftUpdatedAt: timestamp("draft_updated_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 

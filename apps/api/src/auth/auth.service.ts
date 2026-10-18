@@ -89,6 +89,7 @@ export class AuthService implements OnModuleInit {
     }
     pinFails.delete(failKey);
 
+    // แท็บเล็ตสาขาเปิดค้างทั้งวัน — 7 วัน กันโดนไล่ PIN กลางทาง (draft ค้างเครื่องแยกต่างหาก)
     const token = signToken(
       {
         sub: user.id,
@@ -97,7 +98,7 @@ export class AuthService implements OnModuleInit {
         role: user.role,
         scope: "purchase-order",
       },
-      60 * 60 * 12,
+      60 * 60 * 24 * 7,
     );
     return {
       token,

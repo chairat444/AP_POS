@@ -29,6 +29,17 @@ const apiBase = computed(() =>
 const ORDER_TOKEN_KEY = "ap-pos.purchase-order.token";
 const ORDER_USER_KEY = "ap-pos.purchase-order.user";
 const ORDER_BRANCH_KEY = "ap-pos.purchase-order.branchId";
+/** draft ที่ยังไม่กดส่ง — ค้างเครื่องกันหายตอนรีเฟรช/โดนไล่ PIN */
+const ORDER_DRAFT_PREFIX = "ap-pos.purchase-order.draft.";
+/** ชี้ draft ล่าสุดของสาขา (Android ฆ่าแท็บ / ข้ามวันยังกู้ได้) */
+const ORDER_DRAFT_LATEST_PREFIX = "ap-pos.purchase-order.draft-latest.";
+
+type LocalDraft = {
+  branchId: string;
+  day: string;
+  savedAt: number;
+  lines: OrderLine[];
+};
 
 const PIN_LEN = 4;
 const PIN_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "⌫"] as const;
@@ -52,7 +63,7 @@ const submitted = ref(false);
 const justSent = ref(false);
 let justSentTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** ป๊อปอัปเพิ่ม/แก้ */
+/** ป๊อปอัปเพิ่ม/แก้ — ลิสต์สั้นเหมือนเดิม อ่านง่าย */
 const modalOpen = ref(false);
 const editingId = ref<string | null>(null);
 const modalName = ref("");
@@ -61,7 +72,7 @@ const modalGroupKey = ref("market");
 const modalMode = ref<Mode>("remain");
 const modalRemaining = ref("");
 const modalError = ref("");
-/** ความสูงคีย์บอร์ด — ใช้เลื่อน sheet อย่างเดียว (debounce กันเด้ง) */
+/** ความสูงคีย์บอร์ด (debounce กันเด้งจอ Android) */
 const kbInset = ref(0);
 const searchFocused = ref(false);
 const searchInput = ref<HTMLInputElement | null>(null);
@@ -126,38 +137,408 @@ function errMsg(e: unknown, fallback: string) {
 
 function persistSession() {
   try {
-    if (token.value) localStorage.setItem(ORDER_TOKEN_KEY, token.value);
-    else localStorage.removeItem(ORDER_TOKEN_KEY);
-    if (user.value) localStorage.setItem(ORDER_USER_KEY, JSON.stringify(user.value));
-    else localStorage.removeItem(ORDER_USER_KEY);
-    if (branchId.value) localStorage.setItem(ORDER_BRANCH_KEY, branchId.value);
+    if (token.value) storageSet(ORDER_TOKEN_KEY, token.value);
+    else storageRemove(ORDER_TOKEN_KEY);
+    if (user.value) storageSet(ORDER_USER_KEY, JSON.stringify(user.value));
+    else storageRemove(ORDER_USER_KEY);
+    if (branchId.value) storageSet(ORDER_BRANCH_KEY, branchId.value);
   } catch {
     /* ignore */
   }
 }
 
+/** วันสั่งของตามเวลาไทย — ให้ตรงกับเซิร์ฟ (ห้ามใช้ UTC) */
+function todayBangkok() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+function draftStorageKey(branch: string, dayKey: string) {
+  return `${ORDER_DRAFT_PREFIX}${branch}|${dayKey}`;
+}
+
+function draftLatestKey(branch: string) {
+  return `${ORDER_DRAFT_LATEST_PREFIX}${branch}`;
+}
+
+function storageGet(key: string): string | null {
+  try {
+    return localStorage.getItem(key) ?? sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function storageSet(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+  // สำรอง — Chrome Android บางเครื่องเคลียร์ localStorage ภายใต้แรงกดพื้นที่
+  try {
+    sessionStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+}
+
+function storageRemove(key: string) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
+function parseDraftJson(raw: string | null, branch: string, dayKey?: string): LocalDraft | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as LocalDraft;
+    if (!parsed || parsed.branchId !== branch) return null;
+    if (dayKey && parsed.day !== dayKey) return null;
+    if (!Array.isArray(parsed.lines) || !parsed.lines.length) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function readLocalDraft(branch: string, dayKey: string): LocalDraft | null {
+  if (!branch || !dayKey) return null;
+  return parseDraftJson(storageGet(draftStorageKey(branch, dayKey)), branch, dayKey);
+}
+
+/** ลบ draft เครื่องของสาขาที่ไม่ใช่วันนี้ — ไม่กู้ข้ามวัน */
+function purgeStaleLocalDrafts(branch: string, keepDay: string) {
+  if (!branch || !keepDay) return;
+  const prefix = `${ORDER_DRAFT_PREFIX}${branch}|`;
+  const keepKey = draftStorageKey(branch, keepDay);
+  const sweep = (store: Storage | undefined) => {
+    if (!store) return;
+    try {
+      const keys: string[] = [];
+      for (let i = 0; i < store.length; i++) {
+        const k = store.key(i);
+        if (!k || !k.startsWith(prefix)) continue;
+        if (k === keepKey) continue;
+        keys.push(k);
+      }
+      for (const k of keys) {
+        try {
+          store.removeItem(k);
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  };
+  try {
+    sweep(localStorage);
+  } catch {
+    /* ignore */
+  }
+  try {
+    sweep(sessionStorage);
+  } catch {
+    /* ignore */
+  }
+  const latest = storageGet(draftLatestKey(branch));
+  if (latest && latest !== keepDay) storageRemove(draftLatestKey(branch));
+}
+
+let serverDraftTimer: ReturnType<typeof setTimeout> | null = null;
+let serverDraftInflight: Promise<void> | null = null;
+let skipServerDraftSync = false;
+/** หลังกดส่ง — กัน save-draft ที่ค้างในเน็ตเขียน draft กลับหลังเซิร์ฟเคลียร์แล้ว */
+let blockServerDraft = false;
+let serverDraftSeq = 0;
+
+function writeLocalDraft() {
+  const branch = branchId.value;
+  const dayKey = day.value;
+  if (!branch || !dayKey) return;
+  if (!lines.value.length) {
+    clearLocalDraft(branch, dayKey);
+    if (!blockServerDraft) scheduleServerDraftSync();
+    return;
+  }
+  // ผู้ใช้แก้ลิสต์หลังส่ง → เปิด sync ใหม่ได้
+  blockServerDraft = false;
+  const payload: LocalDraft = {
+    branchId: branch,
+    day: dayKey,
+    savedAt: Date.now(),
+    lines: lines.value.map((l) => ({ ...l })),
+  };
+  const json = JSON.stringify(payload);
+  storageSet(draftStorageKey(branch, dayKey), json);
+  storageSet(draftLatestKey(branch), dayKey);
+  scheduleServerDraftSync();
+}
+
+function clearLocalDraft(branch?: string, dayKey?: string) {
+  const b = branch ?? branchId.value;
+  const d = dayKey ?? day.value;
+  if (!b || !d) return;
+  storageRemove(draftStorageKey(b, d));
+  try {
+    if (storageGet(draftLatestKey(b)) === d) storageRemove(draftLatestKey(b));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** เซฟ draft ขึ้นเซิร์ฟเงียบๆ ตามสาขา+วัน (debounce) — ไม่แจ้งเตือน */
+function scheduleServerDraftSync(delayMs = 900) {
+  if (skipServerDraftSync || blockServerDraft) return;
+  if (step.value !== "form") return;
+  if (!token.value || !branchId.value) return;
+  if (serverDraftTimer) clearTimeout(serverDraftTimer);
+  serverDraftTimer = setTimeout(() => {
+    serverDraftTimer = null;
+    void flushServerDraft();
+  }, delayMs);
+}
+
+async function flushServerDraft(opts?: { forceEmpty?: boolean }) {
+  // forceEmpty หลังส่งต้องผ่านได้ แม้กำลัง skip ตอน openForm
+  if (skipServerDraftSync && !opts?.forceEmpty) return;
+  if (blockServerDraft && !opts?.forceEmpty) return;
+  if (!token.value || !branchId.value || !day.value) return;
+  if (step.value !== "form" && !opts?.forceEmpty) return;
+  if (serverDraftTimer) {
+    clearTimeout(serverDraftTimer);
+    serverDraftTimer = null;
+  }
+  const seq = ++serverDraftSeq;
+  const payload = {
+    branchId: branchId.value,
+    day: day.value,
+    lines: opts?.forceEmpty
+      ? []
+      : lines.value.map((l) => ({
+          id: l.id,
+          name: l.name,
+          catalogId: l.catalogId,
+          groupKey: l.groupKey,
+          mode: l.mode,
+          remaining: l.remaining,
+        })),
+  };
+  const run = async () => {
+    // ถูกยกเลิกโดย submit / sync ใหม่กว่า
+    if (seq !== serverDraftSeq && !opts?.forceEmpty) return;
+    if (blockServerDraft && !opts?.forceEmpty) return;
+    try {
+      await api<{ ok: boolean }>("/purchases/order/save-draft", {
+        method: "POST",
+        body: payload,
+      });
+    } catch (e: unknown) {
+      // เน็ตหลุดไม่เป็นไร — ของยังอยู่ในเครื่อง · อย่าไล่ PIN จากตรงนี้
+      if (isAuthExpired(e) && !opts?.forceEmpty) {
+        writeLocalDraftWithoutServer();
+        clearSession();
+        error.value = "เซสชันหมด · รายการยังอยู่ ใส่ PIN ใหม่ได้";
+      }
+    }
+  };
+  serverDraftInflight = (serverDraftInflight ?? Promise.resolve())
+    .then(run, run)
+    .then(() => {
+      serverDraftInflight = null;
+    });
+  await serverDraftInflight;
+}
+
+/** เซฟเครื่องอย่างเดียว — กัน loop ตอน sync เซิร์ฟ */
+function writeLocalDraftWithoutServer(savedAt?: number) {
+  const branch = branchId.value;
+  const dayKey = day.value;
+  if (!branch || !dayKey || !lines.value.length) return;
+  const payload: LocalDraft = {
+    branchId: branch,
+    day: dayKey,
+    // คง savedAt จากเซิร์ฟ — กันเครื่องนี้ชนะเครื่องอื่นโดยไม่แก้จริง
+    savedAt: savedAt ?? Date.now(),
+    lines: lines.value.map((l) => ({ ...l })),
+  };
+  storageSet(draftStorageKey(branch, dayKey), JSON.stringify(payload));
+  storageSet(draftLatestKey(branch), dayKey);
+}
+
+async function stopServerDraftAfterSubmit() {
+  blockServerDraft = true;
+  serverDraftSeq += 1;
+  if (serverDraftTimer) {
+    clearTimeout(serverDraftTimer);
+    serverDraftTimer = null;
+  }
+  try {
+    await serverDraftInflight;
+  } catch {
+    /* ignore */
+  }
+  // เคลียร์ซ้ำ กันคำขอ save-draft ที่ค้างเขียนกลับหลัง submit
+  try {
+    await flushServerDraft({ forceEmpty: true });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Android สลับแอป/ปิดจอ — เซฟทันทีก่อนแท็บถูกฆ่า */
+function flushDraftForAndroid() {
+  if (step.value !== "form") return;
+  if (!branchId.value) return;
+  persistSession();
+  // ส่งแล้วกำลังบล็อก sync — อย่าเสก draft ในเครื่องกลับจากลิสต์บนจอ
+  if (blockServerDraft) return;
+  // ถ้ายังไม่มี day จากเซิร์ฟ ใช้วันไทยชั่วคราว — ห้าม UTC
+  if (!day.value) {
+    day.value = todayBangkok();
+  }
+  writeLocalDraftWithoutServer();
+  void flushServerDraft();
+}
+
+function resumeOfflineForm(reason: string): boolean {
+  const branch = branchId.value;
+  if (!branch || !token.value || !user.value) return false;
+  const dayKey = day.value || todayBangkok();
+  const local = readLocalDraft(branch, dayKey);
+  if (!local?.lines?.length) return false;
+  if (local.day !== dayKey) return false;
+  day.value = dayKey;
+  lines.value = local.lines.map((l) => ({ ...l }));
+  step.value = "form";
+  error.value = reason;
+  message.value = `กู้รายการค้าง ${local.lines.length} รายการ`;
+  return true;
+}
+
+/** ไล่ PIN เฉพาะโทเคนหมด/ไม่มี — อย่าใช้ 403 (สิทธิ์อื่น/พร็อกซี) */
+function isAuthExpired(e: unknown) {
+  const status =
+    (e as { statusCode?: number; status?: number })?.statusCode ??
+    (e as { status?: number })?.status;
+  return status === 401;
+}
+
+/** อ่าน exp จากโทเคนในเครื่อง — เช็คได้ทันที ไม่ต้องรอเรียก API */
+function tokenExpiresAt(raw?: string): number | null {
+  const t = raw ?? token.value;
+  if (!t) return null;
+  try {
+    const body = t.split(".")[0];
+    if (!body) return null;
+    const payload = JSON.parse(
+      atob(body.replace(/-/g, "+").replace(/_/g, "/")),
+    ) as { exp?: number };
+    return typeof payload.exp === "number" ? payload.exp : null;
+  } catch {
+    return null;
+  }
+}
+
+function isTokenAlive(raw?: string): boolean {
+  const exp = tokenExpiresAt(raw);
+  if (exp == null) return false;
+  // เผื่อนาฬิกาเครื่องเพี้ยนเล็กน้อย
+  return exp > Math.floor(Date.now() / 1000) + 30;
+}
+
+/**
+ * เช็คเซสชันตั้งแต่ต้น / ตอนกลับมาเปิดแท็บ
+ * - โทเคนหมดในเครื่อง → ไล่ PIN ทันที (ก่อนให้น้องพิมพ์)
+ * - โทเคนยังดีแต่เน็ตพลาด → ไม่ไล่ PIN
+ */
+function ensureLocalSession(kickMsg = "เซสชันหมด · ใส่ PIN ใหม่"): boolean {
+  if (!token.value) {
+    token.value = storageGet(ORDER_TOKEN_KEY) || "";
+  }
+  if (!user.value) {
+    try {
+      const raw = storageGet(ORDER_USER_KEY);
+      user.value = raw ? JSON.parse(raw) : null;
+    } catch {
+      user.value = null;
+    }
+  }
+  if (!token.value || !user.value || !isTokenAlive(token.value)) {
+    clearSession();
+    error.value = kickMsg;
+    return false;
+  }
+  return true;
+}
+
+/** เรียกเซิร์ฟยืนยัน — ใช้ตอนเข้าหน้า/ก่อนส่งเท่านั้น ไม่เรียกตอนเพิ่มลิสต์ */
+async function verifySessionWithServer(): Promise<"ok" | "expired" | "offline"> {
+  if (!ensureLocalSession()) return "expired";
+  try {
+    await loadMeta();
+    return "ok";
+  } catch (e: unknown) {
+    if (isAuthExpired(e)) {
+      clearSession();
+      error.value = "เซสชันหมด · ใส่ PIN ใหม่";
+      return "expired";
+    }
+    return "offline";
+  }
+}
+
+/** เคลียร์แค่ล็อกอิน — ห้ามลบ draft ในเครื่อง */
 function clearSession() {
+  // หลังส่งแล้วลิสต์ยังโชว์บนจอ — อย่าเสก draft กลับตอนกดออก
+  if (
+    !blockServerDraft &&
+    branchId.value &&
+    day.value &&
+    lines.value.length
+  ) {
+    writeLocalDraftWithoutServer();
+  }
+  blockServerDraft = false;
+  serverDraftSeq += 1;
+  if (serverDraftTimer) {
+    clearTimeout(serverDraftTimer);
+    serverDraftTimer = null;
+  }
+  const keepBranch = branchId.value;
   token.value = "";
   user.value = null;
-  branchId.value = "";
   lines.value = [];
   catalog.value = [];
   step.value = "pin";
   pin.value = "";
-  error.value = "";
   message.value = "";
   pinShake.value = false;
   justSent.value = false;
+  submitted.value = false;
   if (justSentTimer) {
     clearTimeout(justSentTimer);
     justSentTimer = null;
   }
   closeModal();
   persistSession();
-  try {
-    localStorage.removeItem(ORDER_BRANCH_KEY);
-  } catch {
-    /* ignore */
+  // คงสาขาไว้ — ใส่ PIN ใหม่แล้วกลับฟอร์มเดิม + กู้ draft
+  if (keepBranch) {
+    branchId.value = keepBranch;
+    storageSet(ORDER_BRANCH_KEY, keepBranch);
   }
 }
 
@@ -205,7 +586,9 @@ async function loginPin() {
     pin.value = "";
     persistSession();
     await loadMeta();
-    const savedBranch = localStorage.getItem(ORDER_BRANCH_KEY) || "";
+    // หลังโดนไล่ PIN — ใช้สาขาที่คงไว้ในแรม/storage (อย่าอ่านแค่ localStorage)
+    const savedBranch =
+      branchId.value || storageGet(ORDER_BRANCH_KEY) || "";
     if (savedBranch && branches.value.some((b) => b.id === savedBranch)) {
       branchId.value = savedBranch;
       await openForm();
@@ -260,13 +643,15 @@ async function openForm() {
   error.value = "";
   message.value = "";
   q.value = "";
-  closeModal();
+  // เปิดฟอร์มใหม่ — ปลดบล็อกจากรอบส่งค้าง (เช่น โดนไล่ PIN กลางทาง)
+  blockServerDraft = false;
   try {
     const [itemsData, draftData] = await Promise.all([
       api<{ items: SuggestItem[] }>(
         `/purchases/order/items?branchId=${encodeURIComponent(branchId.value)}`,
       ),
       api<{
+        day: string;
         submitted: boolean;
         items: Array<{
           name: string;
@@ -275,6 +660,11 @@ async function openForm() {
           qtyText: string | null;
           note: string | null;
         }>;
+        mobileDraft: {
+          savedAt: number;
+          staffName: string | null;
+          lines: OrderLine[];
+        } | null;
       }>(
         `/purchases/order/draft?branchId=${encodeURIComponent(branchId.value)}`,
       ),
@@ -282,30 +672,85 @@ async function openForm() {
 
     catalog.value = itemsData.items ?? [];
     submitted.value = draftData.submitted;
+    // ยึดวันจากเซิร์ฟเสมอ — draft ใช้ได้แค่วันนั้น
+    if (draftData.day) day.value = draftData.day;
+    const dayKey = day.value || todayBangkok();
+    day.value = dayKey;
+    purgeStaleLocalDrafts(branchId.value, dayKey);
 
-    // ลิสต์หลัก = ของที่ส่งวันนี้แล้วเท่านั้น (ว่างถ้ายังไม่ส่ง)
-    lines.value = (draftData.items ?? []).map((prev, i) => {
-      const flags = parseDraftFlags(prev.qtyText, prev.note);
-      return {
-        id: `line-${i}-${prev.name}`,
-        name: prev.name,
-        catalogId: prev.catalogId,
-        groupKey: prev.groupKey,
-        mode: flags.mode,
-        remaining: flags.remaining,
-      };
-    });
+    const submittedLines: OrderLine[] = (draftData.items ?? []).map(
+      (prev, i) => {
+        const flags = parseDraftFlags(prev.qtyText, prev.note);
+        return {
+          id: `line-${i}-${prev.name}`,
+          name: prev.name,
+          catalogId: prev.catalogId,
+          groupKey: prev.groupKey,
+          mode: flags.mode,
+          remaining: flags.remaining,
+        };
+      },
+    );
+
+    // เฉพาะวันปัจจุบันเท่านั้น — ไม่กู้ข้ามวัน
+    const local = readLocalDraft(branchId.value, dayKey);
+    const remote = draftData.mobileDraft?.lines?.length
+      ? draftData.mobileDraft
+      : null;
+
+    // เลือก draft วันนี้เท่านั้น · ถ้าส่งแล้วและไม่มี mobileDraft → โชว์ของที่ส่ง ไม่เอาร่างเก่าในเครื่องทับ
+    skipServerDraftSync = true;
+    let restoredDraft = false;
+    try {
+      const localAt = local?.savedAt ?? 0;
+      const remoteAt = remote?.savedAt ?? 0;
+      if (remote?.lines?.length && local?.lines?.length && localAt > remoteAt) {
+        lines.value = local.lines.map((l) => ({ ...l }));
+        message.value = `กู้รายการค้าง ${local.lines.length} รายการ`;
+        restoredDraft = true;
+      } else if (remote?.lines?.length) {
+        lines.value = remote.lines.map((l) => ({
+          ...l,
+          mode: (["remain", "spare", "empty", "order"].includes(l.mode)
+            ? l.mode
+            : "remain") as Mode,
+        }));
+        const who = remote.staffName ? ` · จาก${remote.staffName}` : "";
+        message.value = `กู้รายการค้าง ${remote.lines.length} รายการ${who}`;
+        writeLocalDraftWithoutServer(remote.savedAt || undefined);
+        restoredDraft = true;
+      } else if (local?.lines?.length && !draftData.submitted) {
+        lines.value = local.lines.map((l) => ({ ...l }));
+        message.value = `กู้รายการค้าง ${local.lines.length} รายการ`;
+        restoredDraft = true;
+      } else if (draftData.submitted && submittedLines.length) {
+        lines.value = submittedLines;
+        clearLocalDraft(branchId.value, dayKey);
+      } else {
+        lines.value = [];
+        if (local) clearLocalDraft(branchId.value, dayKey);
+      }
+    } finally {
+      skipServerDraftSync = false;
+    }
     step.value = "form";
+    // sync เฉพาะตอนกู้ draft จริง — อย่าเอาของที่ส่งแล้วไปเขียนเป็น draft ใหม่
+    if (restoredDraft) scheduleServerDraftSync(400);
   } catch (e: unknown) {
-    const status =
-      (e as { statusCode?: number; status?: number })?.statusCode ??
-      (e as { status?: number })?.status;
-    if (status === 401 || status === 403) {
+    if (isAuthExpired(e)) {
       clearSession();
       error.value = "เซสชันหมด · ใส่ PIN ใหม่";
       return;
     }
-    error.value = errMsg(e, "โหลดไม่สำเร็จ");
+    // Android เน็ตหลุดบ่อย — อย่าดีดกลับ PIN ถ้ายังมีรายการในเครื่อง
+    if (
+      resumeOfflineForm(
+        "เน็ตไม่นิ่ง · ใช้รายการในเครื่องต่อได้ · พอเน็ตกลับค่อยกดส่ง",
+      )
+    ) {
+      return;
+    }
+    error.value = errMsg(e, "โหลดไม่สำเร็จ · ลองใหม่ได้ รายการในเครื่องยังอยู่");
   } finally {
     pending.value = false;
   }
@@ -330,7 +775,6 @@ function blurActive() {
     /* ignore */
   }
   searchFocused.value = false;
-  // กัน iOS กระโดดสกอลล์ตอนคีย์บอร์ดหุบ
   requestAnimationFrame(() => {
     try {
       window.scrollTo(0, y);
@@ -341,6 +785,8 @@ function blurActive() {
 }
 
 function openAddModal(name: string, catalogId: string | null, groupKey: string) {
+  // เช็คในเครื่องก่อนเปิดฟอร์ม — อย่าให้น้องกรอกแล้วค่อยโดนไล่ PIN
+  if (!ensureLocalSession("เซสชันหมด · ใส่ PIN ใหม่ก่อนเพิ่มรายการ")) return;
   const n = name.trim();
   if (!n) {
     error.value = "พิมพ์หรือเลือกชื่อของ";
@@ -353,7 +799,8 @@ function openAddModal(name: string, catalogId: string | null, groupKey: string) 
   modalMode.value = "remain";
   modalRemaining.value = "";
   modalError.value = "";
-  // เปิด sheet ก่อน แล้วค่อยปิดคีย์บอร์ด — ลดอาการเด้งจอ
+  q.value = "";
+  searchFocused.value = false;
   modalOpen.value = true;
   error.value = "";
   message.value = "";
@@ -366,8 +813,6 @@ function onPlus() {
     error.value = "พิมพ์ชื่อของก่อน";
     return;
   }
-  // ใช้ชื่อในลิสต์เฉพาะตอนพิมพ์ตรงทุกตัวอักษร — ไม่บังคับ suggestion ใกล้เคียง
-  // (เช่น กระทิ อย่าดึงเป็น กระทิงแดง) · อยากใช้ชื่อจากลิสต์ให้แตะ suggestion
   const typedKey = typed.toLowerCase().replace(/\s+/g, "");
   const exact = catalog.value.find((h) => {
     const nameKey = h.name.toLowerCase().replace(/\s+/g, "");
@@ -384,7 +829,6 @@ function onPlus() {
 }
 
 function pickSuggest(it: SuggestItem) {
-  q.value = it.name;
   openAddModal(it.name, it.catalogId, it.groupKey);
 }
 
@@ -397,8 +841,68 @@ function openEdit(line: OrderLine) {
   modalMode.value = line.mode;
   modalRemaining.value = line.remaining;
   modalError.value = "";
+  q.value = "";
+  searchFocused.value = false;
   modalOpen.value = true;
   error.value = "";
+}
+
+function onModalRemainingInput(e: Event) {
+  const el = e.target as HTMLInputElement;
+  modalRemaining.value = el.value
+    .replace(/[^\d.]/g, "")
+    .replace(/(\..*)\./g, "$1");
+  modalError.value = "";
+  if (modalMode.value === "empty") modalMode.value = "remain";
+}
+
+function bumpModal(delta: number) {
+  const cur = Number(modalRemaining.value || 0);
+  const next = Math.max(0, Math.round((cur + delta) * 100) / 100);
+  modalRemaining.value = next === 0 ? "" : String(next);
+  if (modalMode.value === "empty") modalMode.value = "remain";
+}
+
+function saveModal() {
+  // เพิ่มลิสต์เป็นงานในเครื่องอย่างเดียว — ห้ามเรียก API / ห้ามไล่ PIN จากเน็ต
+  if (!ensureLocalSession("เซสชันหมด · รายการที่พิมพ์ยังถูกเซฟไว้ ใส่ PIN ใหม่ได้")) {
+    writeLocalDraft();
+    closeModal();
+    return;
+  }
+  if (modalMode.value === "order" && !modalRemaining.value.trim()) {
+    modalError.value = "ใส่จำนวนที่ต้องการขอ";
+    return;
+  }
+
+  const payload: OrderLine = {
+    id: editingId.value || `line-${Date.now()}`,
+    name: modalName.value.trim(),
+    catalogId: modalCatalogId.value,
+    groupKey: modalGroupKey.value,
+    mode: modalMode.value,
+    remaining:
+      modalMode.value === "empty" ? "" : modalRemaining.value.trim(),
+  };
+
+  if (editingId.value) {
+    const idx = lines.value.findIndex((l) => l.id === editingId.value);
+    if (idx >= 0) lines.value[idx] = payload;
+    message.value = `แก้「${payload.name}」แล้ว`;
+  } else {
+    const dup = lines.value.findIndex((l) => l.name === payload.name);
+    if (dup >= 0) {
+      lines.value[dup] = { ...payload, id: lines.value[dup].id };
+      message.value = `อัปเดต「${payload.name}」ในลิสต์แล้ว`;
+    } else {
+      lines.value = [payload, ...lines.value];
+      message.value = `เพิ่ม「${payload.name}」แล้ว`;
+    }
+  }
+  q.value = "";
+  error.value = "";
+  closeModal();
+  writeLocalDraft();
 }
 
 function syncKeyboardInset() {
@@ -437,60 +941,11 @@ function onSearchBlur() {
   }, 180);
 }
 
-function onModalRemainingInput(e: Event) {
-  const el = e.target as HTMLInputElement;
-  modalRemaining.value = el.value.replace(/[^\d.]/g, "").replace(/(\..*)\./g, "$1");
-  modalError.value = "";
-  if (modalMode.value === "empty") modalMode.value = "remain";
-}
-
-function bumpModal(delta: number) {
-  const cur = Number(modalRemaining.value || 0);
-  const next = Math.max(0, Math.round((cur + delta) * 100) / 100);
-  modalRemaining.value = next === 0 ? "" : String(next);
-  if (modalMode.value === "empty") modalMode.value = "remain";
-}
-
-function saveModal() {
-  // เหลือ / สำรอง — จำนวนไม่บังคับ · ขอ — ต้องมีจำนวน
-  if (modalMode.value === "order" && !modalRemaining.value.trim()) {
-    modalError.value = "ใส่จำนวนที่ต้องการขอ";
-    return;
-  }
-
-  const payload: OrderLine = {
-    id: editingId.value || `line-${Date.now()}`,
-    name: modalName.value.trim(),
-    catalogId: modalCatalogId.value,
-    groupKey: modalGroupKey.value,
-    mode: modalMode.value,
-    remaining:
-      modalMode.value === "empty" ? "" : modalRemaining.value.trim(),
-  };
-
-  if (editingId.value) {
-    const idx = lines.value.findIndex((l) => l.id === editingId.value);
-    if (idx >= 0) lines.value[idx] = payload;
-    message.value = `แก้「${payload.name}」แล้ว`;
-  } else {
-    const dup = lines.value.findIndex((l) => l.name === payload.name);
-    if (dup >= 0) {
-      lines.value[dup] = { ...payload, id: lines.value[dup].id };
-      message.value = `อัปเดต「${payload.name}」ในลิสต์แล้ว`;
-    } else {
-      lines.value = [payload, ...lines.value];
-      message.value = `เพิ่ม「${payload.name}」แล้ว`;
-    }
-  }
-  q.value = "";
-  error.value = "";
-  closeModal();
-}
-
 function removeLine(line: OrderLine) {
   lines.value = lines.value.filter((l) => l.id !== line.id);
   message.value = `ลบ「${line.name}」แล้ว`;
   error.value = "";
+  writeLocalDraft();
 }
 
 function showJustSent(count: number) {
@@ -514,7 +969,35 @@ async function submit() {
     error.value = "ยังไม่มีรายการ · กด + เพิ่มก่อน";
     return;
   }
+  const needQty = lines.value.find(
+    (l) => l.mode === "order" && !String(l.remaining || "").trim(),
+  );
+  if (needQty) {
+    error.value = `「${needQty.name}」เลือกขอแล้ว · แตะรายการแล้วใส่จำนวน`;
+    openEdit(needQty);
+    return;
+  }
   if (saving.value) return;
+  // กัน sync ค้างเขียน draft ทับหลังส่ง — เซฟแค่เครื่องก่อน
+  blockServerDraft = true;
+  serverDraftSeq += 1;
+  if (serverDraftTimer) {
+    clearTimeout(serverDraftTimer);
+    serverDraftTimer = null;
+  }
+  writeLocalDraftWithoutServer();
+  // ยืนยันกับเซิร์ฟก่อนส่ง — หมดอายุรู้ทันที ไม่เสียรายการ
+  const session = await verifySessionWithServer();
+  if (session === "expired") {
+    // clearSession แล้ว — อย่าค้างบล็อก sync รอบหน้า
+    return;
+  }
+  if (session === "offline") {
+    blockServerDraft = false;
+    error.value =
+      "เน็ตไม่นิ่ง · รายการยังอยู่ ลองกดส่งอีกครั้งเมื่อสัญญาณกลับ";
+    return;
+  }
   saving.value = true;
   error.value = "";
   message.value = "";
@@ -541,14 +1024,15 @@ async function submit() {
         },
       },
     );
+    await stopServerDraftAfterSubmit();
+    clearLocalDraft();
     showJustSent(res.itemCount ?? count);
   } catch (e: unknown) {
-    const status =
-      (e as { statusCode?: number; status?: number })?.statusCode ??
-      (e as { status?: number })?.status;
-    if (status === 401 || status === 403) {
+    if (isAuthExpired(e)) {
+      // เซฟรายการก่อนไล่ PIN — ล็อกอินใหม่แล้วกู้ต่อได้
+      writeLocalDraftWithoutServer();
       clearSession();
-      error.value = "เซสชันหมด · ใส่ PIN ใหม่";
+      error.value = "เซสชันหมด · ใส่ PIN ใหม่ (รายการยังอยู่)";
       return;
     }
     // บางทีเซิร์ฟรับแล้ว แต่เน็ตมือถือตัดก่อนได้ response — รีโหลด draft เช็ค
@@ -560,13 +1044,17 @@ async function submit() {
         `/purchases/order/draft?branchId=${encodeURIComponent(branchId.value)}`,
       );
       if (draft.submitted && (draft.items?.length ?? 0) > 0) {
+        await stopServerDraftAfterSubmit();
+        clearLocalDraft();
         showJustSent(draft.items.length);
         return;
       }
     } catch {
       /* ignore */
     }
-    error.value = errMsg(e, "ส่งไม่สำเร็จ · ลองกดอีกครั้ง");
+    blockServerDraft = false;
+    writeLocalDraft();
+    error.value = errMsg(e, "ส่งไม่สำเร็จ · ลองกดอีกครั้ง (รายการยังอยู่)");
   } finally {
     saving.value = false;
   }
@@ -585,39 +1073,143 @@ function onPinKeydown(e: KeyboardEvent) {
   }
 }
 
+function onVisibilityFlush() {
+  if (document.visibilityState === "hidden") {
+    flushDraftForAndroid();
+    return;
+  }
+  // กลับมาเปิดแท็บ — เช็คโทเคนในเครื่องทันที ก่อนให้น้องพิมพ์ต่อ
+  if (step.value === "form" || step.value === "branch") {
+    ensureLocalSession();
+  }
+}
+
+function onPageHideFlush() {
+  flushDraftForAndroid();
+}
+
+function onPageShowRestore(e: PageTransitionEvent) {
+  // กลับจาก bfcache / แท็บที่เคยถูกพัก — ถ้ารายการว่างแต่มี draft วันนี้ให้กู้
+  if (e.persisted || (step.value === "form" && !lines.value.length)) {
+    const dayKey = day.value || todayBangkok();
+    const local = branchId.value
+      ? readLocalDraft(branchId.value, dayKey)
+      : null;
+    if (local?.lines?.length && local.day === dayKey && !lines.value.length) {
+      day.value = dayKey;
+      lines.value = local.lines.map((l) => ({ ...l }));
+      message.value = `กู้รายการค้าง ${local.lines.length} รายการ`;
+    }
+  }
+}
+
 onMounted(async () => {
+  // กัน Android Chrome ดึงลงแล้วรีเฟรชทั้งหน้า (รายการในแรมหาย)
+  try {
+    document.documentElement.style.overscrollBehaviorY = "none";
+    document.body.style.overscrollBehaviorY = "none";
+  } catch {
+    /* ignore */
+  }
   window.addEventListener("keydown", onPinKeydown);
   window.addEventListener("resize", syncKeyboardInset);
+  window.addEventListener("pagehide", onPageHideFlush);
+  window.addEventListener("pageshow", onPageShowRestore);
+  document.addEventListener("visibilitychange", onVisibilityFlush);
   window.visualViewport?.addEventListener("resize", syncKeyboardInset);
   window.visualViewport?.addEventListener("scroll", syncKeyboardInset);
+  // Chrome Android: freeze/resume
+  window.addEventListener("freeze", onPageHideFlush as EventListener);
   syncKeyboardInset();
   try {
-    token.value = localStorage.getItem(ORDER_TOKEN_KEY) || "";
-    const rawUser = localStorage.getItem(ORDER_USER_KEY);
+    token.value = storageGet(ORDER_TOKEN_KEY) || "";
+    const rawUser = storageGet(ORDER_USER_KEY);
     user.value = rawUser ? JSON.parse(rawUser) : null;
-    branchId.value = localStorage.getItem(ORDER_BRANCH_KEY) || "";
+    branchId.value = storageGet(ORDER_BRANCH_KEY) || "";
   } catch {
     token.value = "";
   }
+  // เช็คหมดอายุในเครื่องก่อน — หมดแล้วให้ใส่ PIN ทันที ไม่ต้องโหลดฟอร์ม
   if (!token.value || !user.value) return;
+  if (!isTokenAlive(token.value)) {
+    clearSession();
+    error.value = "เซสชันหมด · ใส่ PIN ใหม่";
+    return;
+  }
   pending.value = true;
   try {
-    await loadMeta();
+    const session = await verifySessionWithServer();
+    if (session === "expired") return;
+    if (session === "offline") {
+      if (
+        resumeOfflineForm(
+          "เน็ตไม่นิ่ง · ใช้รายการในเครื่องต่อได้ · พอเน็ตกลับค่อยกดส่ง",
+        )
+      ) {
+        return;
+      }
+      step.value = branchId.value ? "branch" : "pin";
+      error.value =
+        "เชื่อมต่อไม่สำเร็จ · ลองใหม่อีกครั้ง (รายการในเครื่องยังอยู่)";
+      return;
+    }
     if (branchId.value && branches.value.some((b) => b.id === branchId.value)) {
       await openForm();
     } else {
       step.value = "branch";
     }
-  } catch {
-    clearSession();
+  } catch (e: unknown) {
+    // กันพลาด — ห้าม clearSession แบบเก่าที่ไล่ PIN ทุก error
+    if (isAuthExpired(e)) {
+      clearSession();
+      error.value = "เซสชันหมด · ใส่ PIN ใหม่";
+    } else if (
+      resumeOfflineForm(
+        "เน็ตไม่นิ่ง · ใช้รายการในเครื่องต่อได้ · พอเน็ตกลับค่อยกดส่ง",
+      )
+    ) {
+      /* form เปิดจาก draft แล้ว */
+    } else {
+      step.value = branchId.value ? "branch" : "form";
+      if (branchId.value && !lines.value.length) {
+        const dayKey = day.value || todayBangkok();
+        const local = readLocalDraft(branchId.value, dayKey);
+        if (local?.lines?.length && local.day === dayKey) {
+          day.value = dayKey;
+          lines.value = local.lines.map((l) => ({ ...l }));
+          step.value = "form";
+        }
+      }
+      error.value = errMsg(
+        e,
+        "เชื่อมต่อไม่สำเร็จ · ลองใหม่อีกครั้ง (รายการในเครื่องยังอยู่)",
+      );
+    }
   } finally {
     pending.value = false;
   }
 });
 
+watch(
+  lines,
+  () => {
+    if (skipServerDraftSync) return;
+    if (step.value === "form" && branchId.value) {
+      if (!day.value) day.value = todayBangkok();
+      writeLocalDraft();
+    }
+  },
+  { deep: true },
+);
+
 onBeforeUnmount(() => {
+  flushDraftForAndroid();
   window.removeEventListener("keydown", onPinKeydown);
   window.removeEventListener("resize", syncKeyboardInset);
+  window.removeEventListener("pagehide", onPageHideFlush);
+  window.removeEventListener("pageshow", onPageShowRestore);
+  document.removeEventListener("visibilitychange", onVisibilityFlush);
+  window.removeEventListener("freeze", onPageHideFlush as EventListener);
   window.visualViewport?.removeEventListener("resize", syncKeyboardInset);
   window.visualViewport?.removeEventListener("scroll", syncKeyboardInset);
   if (kbRaf) cancelAnimationFrame(kbRaf);
@@ -749,7 +1341,7 @@ onBeforeUnmount(() => {
             @keydown.enter.prevent="onPlus"
           />
           <button type="button" class="po__addbtn" @click="onPlus">+</button>
-          <ul v-if="q.trim() && searchHits.length" class="po__suggest">
+          <ul v-if="!modalOpen && q.trim() && searchHits.length" class="po__suggest">
             <li
               v-for="it in searchHits"
               :key="it.key"
@@ -823,10 +1415,7 @@ onBeforeUnmount(() => {
     </footer>
 
     <!-- ป๊อปอัป เหลือ / สำรอง / หมด / ขอ -->
-    <div
-      v-if="modalOpen"
-      class="po__modal"
-    >
+    <div v-if="modalOpen" class="po__modal">
       <div class="po__sheet" role="dialog" aria-modal="true">
         <div class="po__sheet-head">
           <h2>{{ editingId ? "แก้ไข" : "เพิ่มรายการ" }}</h2>
@@ -899,6 +1488,7 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
+
     </template>
   </div>
 </template>
@@ -920,7 +1510,10 @@ onBeforeUnmount(() => {
   background: var(--po-snow);
   color: var(--po-ink);
   font-family: "IBM Plex Sans Thai", system-ui, sans-serif;
+  /* Android Chrome: กันดึงลงแล้วรีโหลดทั้งหน้า */
   overscroll-behavior: none;
+  overscroll-behavior-y: none;
+  -webkit-overflow-scrolling: touch;
 }
 .po--gate {
   max-width: none;

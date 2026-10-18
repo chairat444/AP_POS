@@ -331,8 +331,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         branch_id TEXT NOT NULL,
         branch_label TEXT,
         raw_text TEXT NOT NULL,
+        draft_json TEXT,
+        draft_updated_at TIMESTAMPTZ,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE purchase_raw ADD COLUMN IF NOT EXISTS draft_json TEXT;
+      ALTER TABLE purchase_raw ADD COLUMN IF NOT EXISTS draft_updated_at TIMESTAMPTZ;
       CREATE UNIQUE INDEX IF NOT EXISTS purchase_raw_day_branch_uidx
         ON purchase_raw (day_id, branch_id);
       CREATE TABLE IF NOT EXISTS purchase_lines (

@@ -51,6 +51,33 @@ export class PurchaseOrderController {
     return this.purchases.orderDraft(branchId ?? "", day);
   }
 
+  /** เซฟ draft เงียบๆ ตามสาขา — ไม่แจ้งเตือน */
+  @AllowPurchaseOrder()
+  @Post("save-draft")
+  saveDraft(
+    @Req() req: AuthedRequest,
+    @Body()
+    body: {
+      branchId?: string;
+      day?: string;
+      lines?: Array<{
+        id?: string;
+        name: string;
+        catalogId?: string | null;
+        groupKey?: string;
+        mode?: string;
+        remaining?: string;
+      }>;
+    },
+  ) {
+    return this.purchases.saveMobileDraft({
+      branchId: body.branchId ?? "",
+      day: body.day,
+      staffName: req.user?.name,
+      lines: body.lines ?? [],
+    });
+  }
+
   @AllowPurchaseOrder()
   @Post("submit")
   submit(

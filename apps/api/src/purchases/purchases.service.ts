@@ -1442,6 +1442,185 @@ export class PurchasesService implements OnModuleInit {
         qtyText: l.qtyText,
         note: l.note,
       })),
+      /** draft มือถือที่ยังไม่กดส่ง — แชร์ตามสาขา+วันนี้ ไม่แจ้งเตือน */
+      mobileDraft: this.parseMobileDraft(raw?.draftJson ?? null, d.day),
+    };
+  }
+
+  private parseMobileDraft(raw: string | null, expectDay?: string) {
+    if (!raw?.trim()) return null;
+    try {
+      const parsed = JSON.parse(raw) as {
+        savedAt?: number;
+        day?: string;
+        staffName?: string | null;
+        lines?: Array<{
+          id?: string;
+          name?: string;
+          catalogId?: string | null;
+          groupKey?: string;
+          mode?: string;
+          remaining?: string;
+        }>;
+      };
+      // กัน JSON เก่าที่ปนวันผิด (ถ้ามีฟิลด์ day)
+      if (
+        expectDay &&
+        parsed.day &&
+        parsed.day !== expectDay
+      ) {
+        return null;
+      }
+      if (!Array.isArray(parsed.lines) || !parsed.lines.length) return null;
+      const lines = parsed.lines
+        .map((l, i) => {
+          const name = String(l?.name ?? "").trim();
+          if (!name) return null;
+          const mode = ["remain", "spare", "empty", "order"].includes(
+            String(l?.mode ?? ""),
+          )
+            ? String(l.mode)
+            : "remain";
+          return {
+            id: String(l?.id ?? `line-${i}-${name}`),
+            name,
+            catalogId: l?.catalogId ?? null,
+            groupKey: String(l?.groupKey ?? "market"),
+            mode,
+            remaining: String(l?.remaining ?? ""),
+          };
+        })
+        .filter(Boolean) as Array<{
+        id: string;
+        name: string;
+        catalogId: string | null;
+        groupKey: string;
+        mode: string;
+        remaining: string;
+      }>;
+      if (!lines.length) return null;
+      return {
+        savedAt: Number(parsed.savedAt) || 0,
+        staffName: parsed.staffName?.trim() || null,
+        lines,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * เซฟ draft มือถือเงียบๆ ตามสาขา+วัน — ไม่ ingest / ไม่แจ้งเตือน
+   * รับเฉพาะวันนี้ (Asia/Bangkok) — ไม่เขียนข้ามวัน
+   */
+  async saveMobileDraft(opts: {
+    branchId: string;
+    day?: string;
+    staffName?: string;
+    lines: Array<{
+      id?: string;
+      name: string;
+      catalogId?: string | null;
+      groupKey?: string;
+      mode?: string;
+      remaining?: string;
+    }>;
+  }) {
+    if (!opts.branchId) throw new BadRequestException("ระบุสาขา");
+    const branch = (
+      await this.database.db
+        .select()
+        .from(pg.branches)
+        .where(
+          and(
+            eq(pg.branches.id, opts.branchId),
+            isNull(pg.branches.deletedAt),
+          ),
+        )
+        .limit(1)
+    )[0];
+    if (!branch) throw new NotFoundException("ไม่พบสาขา");
+
+    const today = todayBangkok();
+    const requested = String(opts.day ?? "").trim();
+    if (requested && !/^\d{4}-\d{2}-\d{2}$/.test(requested)) {
+      throw new BadRequestException("วันไม่ถูกต้อง");
+    }
+    if (requested && requested !== today) {
+      throw new BadRequestException("draft ใช้ได้เฉพาะวันนี้");
+    }
+
+    const cleaned = (opts.lines ?? [])
+      .map((l, i) => {
+        const name = String(l?.name ?? "").trim();
+        if (!name) return null;
+        const mode = ["remain", "spare", "empty", "order"].includes(
+          String(l?.mode ?? ""),
+        )
+          ? String(l.mode)
+          : "remain";
+        return {
+          id: String(l?.id ?? `line-${i}-${name}`),
+          name,
+          catalogId: l?.catalogId ?? null,
+          groupKey: String(l?.groupKey ?? "market"),
+          mode,
+          remaining: String(l?.remaining ?? ""),
+        };
+      })
+      .filter(Boolean);
+
+    const d = await this.getOrCreateDay(today);
+    const stamp = now();
+    const savedAt = Date.now();
+    const draftJson =
+      cleaned.length === 0
+        ? null
+        : JSON.stringify({
+            savedAt,
+            day: today,
+            staffName: opts.staffName?.trim() || null,
+            lines: cleaned,
+          });
+
+    const rawRows = await this.database.db
+      .select()
+      .from(pg.purchaseRaw)
+      .where(
+        and(
+          eq(pg.purchaseRaw.dayId, d.id),
+          eq(pg.purchaseRaw.branchId, opts.branchId),
+        ),
+      )
+      .limit(1);
+
+    if (rawRows[0]) {
+      await this.database.db
+        .update(pg.purchaseRaw)
+        .set({
+          draftJson,
+          draftUpdatedAt: draftJson ? stamp : null,
+          updatedAt: stamp,
+        })
+        .where(eq(pg.purchaseRaw.id, rawRows[0].id));
+    } else {
+      await this.database.db.insert(pg.purchaseRaw).values({
+        id: `praw-${randomUUID().slice(0, 8)}`,
+        dayId: d.id,
+        branchId: opts.branchId,
+        branchLabel: branch.name,
+        rawText: "",
+        draftJson,
+        draftUpdatedAt: draftJson ? stamp : null,
+        updatedAt: stamp,
+      });
+    }
+
+    return {
+      ok: true,
+      day: d.day,
+      savedAt: draftJson ? savedAt : null,
+      lineCount: cleaned.length,
     };
   }
 
@@ -1516,6 +1695,26 @@ export class PurchasesService implements OnModuleInit {
     });
     const dayLabel = opts.day ?? board?.day?.day ?? null;
     const itemCount = lines.filter((l) => !l.startsWith("#")).length;
+
+    // ส่งจริงแล้ว — เคลียร์ draft มือถือของสาขานี้
+    try {
+      const d = await this.getOrCreateDay(opts.day ?? dayLabel ?? undefined);
+      await this.database.db
+        .update(pg.purchaseRaw)
+        .set({
+          draftJson: null,
+          draftUpdatedAt: null,
+          updatedAt: now(),
+        })
+        .where(
+          and(
+            eq(pg.purchaseRaw.dayId, d.id),
+            eq(pg.purchaseRaw.branchId, opts.branchId),
+          ),
+        );
+    } catch {
+      /* ignore — ส่งสำเร็จแล้ว อย่าให้เคลียร์ draft ทำให้ fail */
+    }
 
     const notifyItems = opts.items.filter((item) => {
       const name = String(item.name ?? "").trim();
