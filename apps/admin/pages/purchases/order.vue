@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { normalizePurchaseKey } from "@ap-pos/shared";
+
 definePageMeta({ layout: false });
 
 type Branch = { id: string; code: string; name: string };
@@ -59,9 +61,32 @@ const day = ref("");
 const catalog = ref<SuggestItem[]>([]);
 const q = ref("");
 const lines = ref<OrderLine[]>([]);
+/** ชื่อที่ลบจากลิสต์ — ส่งให้เซิร์ฟตัดออกตอนรวมกับของเก่า */
+const removedNames = ref<string[]>([]);
 const submitted = ref(false);
 const justSent = ref(false);
 let justSentTimer: ReturnType<typeof setTimeout> | null = null;
+
+function rememberRemoved(name: string) {
+  const n = name.trim();
+  if (!n) return;
+  const key = normalizePurchaseKey(n);
+  if (!key) return;
+  if (
+    removedNames.value.some((x) => normalizePurchaseKey(x) === key)
+  ) {
+    return;
+  }
+  removedNames.value = [...removedNames.value, n];
+}
+
+function forgetRemoved(name: string) {
+  const key = normalizePurchaseKey(name.trim());
+  if (!key) return;
+  removedNames.value = removedNames.value.filter(
+    (x) => normalizePurchaseKey(x) !== key,
+  );
+}
 
 /** ป๊อปอัปเพิ่ม/แก้ — ลิสต์สั้นเหมือนเดิม อ่านง่าย */
 const modalOpen = ref(false);
@@ -672,6 +697,7 @@ async function openForm() {
 
     catalog.value = itemsData.items ?? [];
     submitted.value = draftData.submitted;
+    removedNames.value = [];
     // ยึดวันจากเซิร์ฟเสมอ — draft ใช้ได้แค่วันนั้น
     if (draftData.day) day.value = draftData.day;
     const dayKey = day.value || todayBangkok();
@@ -899,6 +925,8 @@ function saveModal() {
       message.value = `เพิ่ม「${payload.name}」แล้ว`;
     }
   }
+  // เพิ่มกลับชื่อที่เคยลบ → ไม่ต้องตัดตอนส่ง
+  forgetRemoved(payload.name);
   q.value = "";
   error.value = "";
   closeModal();
@@ -942,6 +970,7 @@ function onSearchBlur() {
 }
 
 function removeLine(line: OrderLine) {
+  rememberRemoved(line.name);
   lines.value = lines.value.filter((l) => l.id !== line.id);
   message.value = `ลบ「${line.name}」แล้ว`;
   error.value = "";
@@ -965,7 +994,7 @@ function showJustSent(count: number) {
 }
 
 async function submit() {
-  if (!lines.value.length) {
+  if (!lines.value.length && !removedNames.value.length) {
     error.value = "ยังไม่มีรายการ · กด + เพิ่มก่อน";
     return;
   }
@@ -1021,12 +1050,14 @@ async function submit() {
           branchId: branchId.value,
           day: day.value,
           items,
+          removeNames: removedNames.value,
         },
       },
     );
     await stopServerDraftAfterSubmit();
     clearLocalDraft();
-    // โหลดรายการรวมหลังส่ง (ส่งซ้ำจะรวมกับของเดิม ไม่ทับทั้งก้อน)
+    removedNames.value = [];
+    // โหลดรายการรวมหลังส่ง (ส่งซ้ำจะรวมกับของเดิม · ลบแล้วตัดออก)
     try {
       const draft = await api<{
         submitted: boolean;
@@ -1040,24 +1071,22 @@ async function submit() {
       }>(
         `/purchases/order/draft?branchId=${encodeURIComponent(branchId.value)}`,
       );
-      if (draft.items?.length) {
-        skipServerDraftSync = true;
-        try {
-          lines.value = draft.items.map((prev, i) => {
-            const flags = parseDraftFlags(prev.qtyText, prev.note);
-            return {
-              id: `line-${i}-${prev.name}`,
-              name: prev.name,
-              catalogId: prev.catalogId,
-              groupKey: prev.groupKey,
-              mode: flags.mode,
-              remaining: flags.remaining,
-            };
-          });
-          submitted.value = true;
-        } finally {
-          skipServerDraftSync = false;
-        }
+      skipServerDraftSync = true;
+      try {
+        lines.value = (draft.items ?? []).map((prev, i) => {
+          const flags = parseDraftFlags(prev.qtyText, prev.note);
+          return {
+            id: `line-${i}-${prev.name}`,
+            name: prev.name,
+            catalogId: prev.catalogId,
+            groupKey: prev.groupKey,
+            mode: flags.mode,
+            remaining: flags.remaining,
+          };
+        });
+        submitted.value = Boolean(draft.submitted);
+      } finally {
+        skipServerDraftSync = false;
       }
     } catch {
       /* ใช้จำนวนจาก response ก็พอ */

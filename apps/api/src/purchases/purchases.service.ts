@@ -1666,6 +1666,8 @@ export class PurchasesService implements OnModuleInit {
     branchId: string;
     day?: string;
     staffName?: string;
+    /** ชื่อที่น้องลบจากลิสต์ — รวมของเก่าแล้วตัดชื่อเหล่านี้ออก */
+    removeNames?: string[];
     items: Array<{
       name: string;
       catalogId?: string | null;
@@ -1722,7 +1724,10 @@ export class PurchasesService implements OnModuleInit {
         order: item.order,
       });
     }
-    if (!incoming.length) {
+    const removeNamesIn = (opts.removeNames ?? [])
+      .map((n) => String(n ?? "").trim())
+      .filter(Boolean);
+    if (!incoming.length && !removeNamesIn.length) {
       throw new BadRequestException("ยังไม่ได้กรอกรายการ");
     }
 
@@ -1771,8 +1776,26 @@ export class PurchasesService implements OnModuleInit {
       }
     }
 
+    // ลบตามที่มือถือบอกมา — ไม่ดึงของเก่าที่ถูกลบกลับ
+    const removeKeys = new Set(
+      removeNamesIn
+        .map((n) => normalizePurchaseKey(n))
+        .filter(Boolean),
+    );
+    const finalRows =
+      removeKeys.size === 0
+        ? merged
+        : merged.filter((item) => {
+            const key = normalizePurchaseKey(item.name);
+            return !key || !removeKeys.has(key);
+          });
+
+    if (!finalRows.length && !removeKeys.size) {
+      throw new BadRequestException("ยังไม่ได้กรอกรายการ");
+    }
+
     const lines: string[] = [];
-    for (const item of merged) {
+    for (const item of finalRows) {
       const line = formatPurchaseLine({
         name: item.name,
         remaining: item.remaining,
@@ -1787,6 +1810,7 @@ export class PurchasesService implements OnModuleInit {
     }
 
     // ingest เขียนแผงแล้ว — ข้าม board ทั้งก้อน (รายการยาวเคยช้าจนมือถือคิดว่าส่งไม่ติด)
+    // rawText ว่างได้เมื่อลบหมดแล้ว (ยังมี # ส่งโดย)
     const board = await this.ingest({
       day: day.day,
       branchId: opts.branchId,
