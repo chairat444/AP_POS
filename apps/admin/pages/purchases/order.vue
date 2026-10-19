@@ -19,6 +19,8 @@ type OrderLine = {
   groupKey: string;
   mode: Mode;
   remaining: string;
+  /** true = ตรงกับของบนแผงแล้ว · false = ยังไม่ส่ง/แก้หลังส่ง */
+  sent: boolean;
 };
 
 const config = useRuntimeConfig();
@@ -111,6 +113,30 @@ function lineSummary(line: OrderLine) {
   }
   return line.remaining ? `มี${line.remaining}` : "คงเหลือ";
 }
+
+/** คีย์เทียบกับของบนแผง — ชื่อ+สถานะ+จำนวนตรงกัน = ส่งแล้ว */
+function lineBoardKey(line: {
+  name: string;
+  mode: Mode;
+  remaining: string;
+}) {
+  return `${line.name.trim().toLowerCase()}|${line.mode}|${String(line.remaining ?? "").trim()}`;
+}
+
+function markSentAgainstBoard(rows: OrderLine[], board: OrderLine[]) {
+  const keys = new Set(board.map(lineBoardKey));
+  return rows.map((l) => ({
+    ...l,
+    sent: keys.has(lineBoardKey(l)),
+  }));
+}
+
+const sentCount = computed(
+  () => lines.value.filter((l) => l.sent).length,
+);
+const unsentCount = computed(
+  () => lines.value.filter((l) => !l.sent).length,
+);
 
 function headers(): Record<string, string> {
   const h: Record<string, string> = {};
@@ -688,6 +714,7 @@ async function openForm() {
           groupKey: prev.groupKey,
           mode: flags.mode,
           remaining: flags.remaining,
+          sent: true,
         };
       },
     );
@@ -703,29 +730,36 @@ async function openForm() {
     try {
       const localAt = local?.savedAt ?? 0;
       const remoteAt = remote?.savedAt ?? 0;
+      let next: OrderLine[] = [];
       if (remote?.lines?.length && local?.lines?.length && localAt > remoteAt) {
-        lines.value = local.lines.map((l) => ({ ...l }));
+        next = local.lines.map((l) => ({
+          ...l,
+          sent: Boolean(l.sent),
+        }));
         message.value = `กู้รายการค้าง ${local.lines.length} รายการ`;
       } else if (remote?.lines?.length) {
-        lines.value = remote.lines.map((l) => ({
+        next = remote.lines.map((l) => ({
           ...l,
           mode: (["remain", "spare", "empty", "order"].includes(l.mode)
             ? l.mode
             : "remain") as Mode,
+          sent: Boolean((l as OrderLine).sent),
         }));
         const who = remote.staffName ? ` · จาก${remote.staffName}` : "";
         message.value = `กู้รายการค้าง ${remote.lines.length} รายการ${who}`;
       } else if (local?.lines?.length) {
-        // มี draft ในเครื่อง — ใช้ต่อ (ควรรวมของที่เคยส่งไว้แล้ว)
-        lines.value = local.lines.map((l) => ({ ...l }));
+        next = local.lines.map((l) => ({
+          ...l,
+          sent: Boolean(l.sent),
+        }));
         message.value = `กู้รายการค้าง ${local.lines.length} รายการ`;
       } else if (submittedLines.length) {
-        // ไม่มี draft → โหลดของที่ส่งแล้วขึ้นลิสต์ = ฐานของ draft ต่อไป
-        lines.value = submittedLines;
+        next = submittedLines;
       } else {
-        lines.value = [];
+        next = [];
       }
-      // ให้ draft ในเครื่อง = ลิสต์ที่โชว์เสมอ (รวมของที่เคยส่ง)
+      // เทียบกับของบนแผง — ตรงกัน = ส่งแล้ว · ไม่ตรง = ยังไม่ส่ง
+      lines.value = markSentAgainstBoard(next, submittedLines);
       if (lines.value.length) writeLocalDraftWithoutServer();
       else clearLocalDraft(branchId.value, dayKey);
     } finally {
@@ -880,16 +914,31 @@ function saveModal() {
     mode: modalMode.value,
     remaining:
       modalMode.value === "empty" ? "" : modalRemaining.value.trim(),
+    sent: false,
   };
 
   if (editingId.value) {
     const idx = lines.value.findIndex((l) => l.id === editingId.value);
-    if (idx >= 0) lines.value[idx] = payload;
+    if (idx >= 0) {
+      const prev = lines.value[idx]!;
+      const unchanged =
+        prev.name === payload.name &&
+        prev.mode === payload.mode &&
+        prev.remaining === payload.remaining;
+      lines.value[idx] = {
+        ...payload,
+        sent: unchanged ? prev.sent : false,
+      };
+    }
     message.value = `แก้「${payload.name}」แล้ว`;
   } else {
     const dup = lines.value.findIndex((l) => l.name === payload.name);
     if (dup >= 0) {
-      lines.value[dup] = { ...payload, id: lines.value[dup].id };
+      lines.value[dup] = {
+        ...payload,
+        id: lines.value[dup]!.id,
+        sent: false,
+      };
       message.value = `อัปเดต「${payload.name}」ในลิสต์แล้ว`;
     } else {
       lines.value = [payload, ...lines.value];
@@ -1048,6 +1097,7 @@ async function submit() {
             groupKey: prev.groupKey,
             mode: flags.mode,
             remaining: flags.remaining,
+            sent: true,
           };
         });
         submitted.value = Boolean(draft.submitted);
@@ -1058,7 +1108,8 @@ async function submit() {
         skipServerDraftSync = false;
       }
     } catch {
-      // เน็ตหลุดหลังส่งสำเร็จ — คงลิสต์ที่ส่งไว้เป็น draft
+      // เน็ตหลุดหลังส่งสำเร็จ — คงลิสต์ที่ส่งไว้เป็น draft · ถือว่าส่งแล้ว
+      lines.value = lines.value.map((l) => ({ ...l, sent: true }));
       writeLocalDraftWithoutServer();
     }
     // ปลดบล็อกแล้ว sync draft เต็มขึ้นเซิร์ฟ ให้เครื่องอื่นสาขาเดียวกันเห็นชุดล่าสุด
@@ -1104,6 +1155,7 @@ async function submit() {
               groupKey: prev.groupKey,
               mode: flags.mode,
               remaining: flags.remaining,
+              sent: true,
             };
           });
           submitted.value = true;
@@ -1422,6 +1474,11 @@ onBeforeUnmount(() => {
           รายการที่สั่ง
           <span>{{ lines.length }}</span>
         </h2>
+        <p v-if="lines.length" class="po__list-meta">
+          <span class="po__meta-sent">ส่งแล้ว {{ sentCount }}</span>
+          <span class="po__meta-dot">·</span>
+          <span class="po__meta-new">ยังไม่ส่ง {{ unsentCount }}</span>
+        </p>
       </div>
 
       <div v-if="pending" class="po__empty">กำลังโหลด...</div>
@@ -1430,18 +1487,31 @@ onBeforeUnmount(() => {
       </div>
 
       <ul v-else class="po__list">
-        <li v-for="line in lines" :key="line.id" class="po__item">
+        <li
+          v-for="line in lines"
+          :key="line.id"
+          class="po__item"
+          :class="{ 'is-unsent': !line.sent }"
+        >
           <button type="button" class="po__item-info" @click="openEdit(line)">
             <strong>{{ line.name }}</strong>
-            <span
-              class="po__badge"
-              :class="{
-                'is-spare': line.mode === 'spare',
-                'is-out': line.mode === 'empty',
-                'is-order': line.mode === 'order',
-              }"
-            >
-              {{ lineSummary(line) }}
+            <span class="po__item-tags">
+              <span
+                class="po__send"
+                :class="line.sent ? 'is-sent' : 'is-new'"
+              >
+                {{ line.sent ? "ส่งแล้ว" : "ยังไม่ส่ง" }}
+              </span>
+              <span
+                class="po__badge"
+                :class="{
+                  'is-spare': line.mode === 'spare',
+                  'is-out': line.mode === 'empty',
+                  'is-order': line.mode === 'order',
+                }"
+              >
+                {{ lineSummary(line) }}
+              </span>
             </span>
           </button>
           <button
@@ -1476,7 +1546,9 @@ onBeforeUnmount(() => {
             ? "กำลังส่ง..."
             : justSent
               ? "ส่งแล้ว ✓"
-              : `ส่งทั้งหมด (${lines.length})`
+              : unsentCount > 0
+                ? `ส่งทั้งหมด (${lines.length}) · ใหม่ ${unsentCount}`
+                : `ส่งทั้งหมด (${lines.length})`
         }}
       </button>
     </footer>
@@ -2031,6 +2103,24 @@ onBeforeUnmount(() => {
 .po__list-title span {
   color: var(--po-red);
 }
+.po__list-meta {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  font-weight: 650;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.po__meta-sent {
+  color: #3f6b4a;
+}
+.po__meta-new {
+  color: #9b1c1c;
+}
+.po__meta-dot {
+  color: #b0a8a8;
+}
 .po__empty {
   padding: 2.5rem 0.5rem;
   text-align: center;
@@ -2057,6 +2147,10 @@ onBeforeUnmount(() => {
   padding: 0.35rem 0.35rem 0.35rem 0.65rem;
   min-height: 3rem;
 }
+.po__item.is-unsent {
+  border-color: #e8b4b4;
+  background: #fff8f8;
+}
 .po__item-info {
   border: 0;
   background: transparent;
@@ -2075,7 +2169,30 @@ onBeforeUnmount(() => {
   font-size: 0.98rem;
   font-weight: 700;
   line-height: 1.2;
+  flex: 1 1 auto;
   min-width: 0;
+}
+.po__item-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+.po__send {
+  font-size: 0.72rem;
+  font-weight: 750;
+  border-radius: 999px;
+  padding: 0.15rem 0.45rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.po__send.is-sent {
+  background: #e7f3ea;
+  color: #2f6b3c;
+}
+.po__send.is-new {
+  background: #fde8e8;
+  color: #9b1c1c;
 }
 .po__badge {
   font-size: 0.84rem;
