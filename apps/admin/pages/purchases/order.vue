@@ -1026,7 +1026,47 @@ async function submit() {
     );
     await stopServerDraftAfterSubmit();
     clearLocalDraft();
-    showJustSent(res.itemCount ?? count);
+    // โหลดรายการรวมหลังส่ง (ส่งซ้ำจะรวมกับของเดิม ไม่ทับทั้งก้อน)
+    try {
+      const draft = await api<{
+        submitted: boolean;
+        items: Array<{
+          name: string;
+          catalogId: string | null;
+          groupKey: string;
+          qtyText: string | null;
+          note: string | null;
+        }>;
+      }>(
+        `/purchases/order/draft?branchId=${encodeURIComponent(branchId.value)}`,
+      );
+      if (draft.items?.length) {
+        skipServerDraftSync = true;
+        try {
+          lines.value = draft.items.map((prev, i) => {
+            const flags = parseDraftFlags(prev.qtyText, prev.note);
+            return {
+              id: `line-${i}-${prev.name}`,
+              name: prev.name,
+              catalogId: prev.catalogId,
+              groupKey: prev.groupKey,
+              mode: flags.mode,
+              remaining: flags.remaining,
+            };
+          });
+          submitted.value = true;
+        } finally {
+          skipServerDraftSync = false;
+        }
+      }
+    } catch {
+      /* ใช้จำนวนจาก response ก็พอ */
+    }
+    showJustSent(
+      typeof res.itemCount === "number"
+        ? res.itemCount
+        : lines.value.length || count,
+    );
   } catch (e: unknown) {
     if (isAuthExpired(e)) {
       // เซฟรายการก่อนไล่ PIN — ล็อกอินใหม่แล้วกู้ต่อได้

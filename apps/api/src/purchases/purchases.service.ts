@@ -1624,8 +1624,43 @@ export class PurchasesService implements OnModuleInit {
     };
   }
 
+  /** แปลง qtyText/note บนแผงกลับเป็นสถานะมือถือ — ใช้ตอนรวมส่งซ้ำ */
+  private flagsFromStoredLine(qtyText: string | null, note: string | null) {
+    const blob = `${qtyText ?? ""} ${note ?? ""}`;
+    if (/หมด/.test(blob)) {
+      return {
+        remaining: null as string | null,
+        spare: false,
+        empty: true,
+        order: false,
+      };
+    }
+    if (/ขอ|สั่ง/.test(blob)) {
+      const m =
+        blob.match(/(?:ขอ|สั่ง)\s*(\d+(?:\.\d+)?)/) ||
+        blob.match(/(\d+(?:\.\d+)?)/);
+      return {
+        remaining: m?.[1] ?? null,
+        spare: false,
+        empty: false,
+        order: true,
+      };
+    }
+    const spare = /สำรอง/.test(blob);
+    const m =
+      blob.match(/มี\s*(\d+(?:\.\d+)?)/) || blob.match(/(\d+(?:\.\d+)?)/);
+    return {
+      remaining: m?.[1] ?? null,
+      spare,
+      empty: false,
+      order: false,
+    };
+  }
+
   /**
    * น้องส่งคงเหลือจากมือถือ → แปลงเป็นข้อความแบบเดิม แล้ว ingest
+   * ส่งซ้ำในวันเดียวกัน = รวมกับของเดิม (ชื่อเดิมทับค่าใหม่ · ของใหม่ต่อท้าย)
+   * ห้ามทับทั้งก้อนด้วยรอบล่าสุดอย่างเดียว — เคยทำให้หลุมดินรายการหาย
    */
   async submitBranchOrder(opts: {
     branchId: string;
@@ -1656,7 +1691,16 @@ export class PurchasesService implements OnModuleInit {
     )[0];
     if (!branch) throw new NotFoundException("ไม่พบสาขา");
 
-    const lines: string[] = [];
+    type SubmitRow = {
+      name: string;
+      catalogId?: string | null;
+      remaining?: number | string | null;
+      spare?: boolean;
+      empty?: boolean;
+      order?: boolean;
+    };
+
+    const incoming: SubmitRow[] = [];
     for (const item of opts.items) {
       const name = String(item.name ?? "").trim();
       if (!name) continue;
@@ -1669,8 +1713,68 @@ export class PurchasesService implements OnModuleInit {
       ) {
         continue;
       }
-      const line = formatPurchaseLine({
+      incoming.push({
         name,
+        catalogId: item.catalogId,
+        remaining: item.remaining,
+        spare: item.spare,
+        empty: item.empty,
+        order: item.order,
+      });
+    }
+    if (!incoming.length) {
+      throw new BadRequestException("ยังไม่ได้กรอกรายการ");
+    }
+
+    const day = await this.getOrCreateDay(opts.day);
+    const existingRows = await this.database.db
+      .select()
+      .from(pg.purchaseLines)
+      .where(
+        and(
+          eq(pg.purchaseLines.dayId, day.id),
+          eq(pg.purchaseLines.branchId, opts.branchId),
+          isNull(pg.purchaseLines.deletedAt),
+        ),
+      )
+      .orderBy(asc(pg.purchaseLines.sortOrder));
+
+    const merged: SubmitRow[] = [];
+    const indexByKey = new Map<string, number>();
+
+    for (const row of existingRows) {
+      const name = String(row.name ?? "").trim();
+      if (!name) continue;
+      const key = normalizePurchaseKey(name);
+      const flags = this.flagsFromStoredLine(row.qtyText, row.note);
+      const entry: SubmitRow = {
+        name,
+        catalogId: row.catalogId,
+        remaining: flags.remaining,
+        spare: flags.spare,
+        empty: flags.empty,
+        order: flags.order,
+      };
+      if (key) {
+        indexByKey.set(key, merged.length);
+      }
+      merged.push(entry);
+    }
+
+    for (const item of incoming) {
+      const key = normalizePurchaseKey(item.name);
+      if (key && indexByKey.has(key)) {
+        merged[indexByKey.get(key)!] = item;
+      } else {
+        if (key) indexByKey.set(key, merged.length);
+        merged.push(item);
+      }
+    }
+
+    const lines: string[] = [];
+    for (const item of merged) {
+      const line = formatPurchaseLine({
+        name: item.name,
         remaining: item.remaining,
         spare: item.spare,
         empty: item.empty,
@@ -1678,22 +1782,19 @@ export class PurchasesService implements OnModuleInit {
       });
       if (line) lines.push(line);
     }
-    if (!lines.length) {
-      throw new BadRequestException("ยังไม่ได้กรอกรายการ");
-    }
     if (opts.staffName?.trim()) {
       lines.push(`# ส่งโดย ${opts.staffName.trim()}`);
     }
 
     // ingest เขียนแผงแล้ว — ข้าม board ทั้งก้อน (รายการยาวเคยช้าจนมือถือคิดว่าส่งไม่ติด)
     const board = await this.ingest({
-      day: opts.day,
+      day: day.day,
       branchId: opts.branchId,
       branchLabel: branch.name,
       rawText: lines.join("\n"),
       skipBoard: true,
     });
-    const dayLabel = opts.day ?? board?.day?.day ?? null;
+    const dayLabel = opts.day ?? board?.day?.day ?? day.day;
     const itemCount = lines.filter((l) => !l.startsWith("#")).length;
 
     // ส่งจริงแล้ว — เคลียร์ draft มือถือของสาขานี้
