@@ -86,8 +86,6 @@ export class PurchaseOrderController {
     body: {
       branchId?: string;
       day?: string;
-      /** รายการที่ลบจากลิสต์มือถือ — ไม่ให้รวมของเก่ากลับ */
-      removeNames?: string[];
       items?: Array<{
         name: string;
         catalogId?: string | null;
@@ -103,7 +101,6 @@ export class PurchaseOrderController {
       branchId: body.branchId ?? "",
       day: body.day,
       staffName: req.user?.name,
-      removeNames: body.removeNames ?? [],
       items: body.items ?? [],
     });
   }

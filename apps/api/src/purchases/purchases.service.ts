@@ -1624,50 +1624,15 @@ export class PurchasesService implements OnModuleInit {
     };
   }
 
-  /** แปลง qtyText/note บนแผงกลับเป็นสถานะมือถือ — ใช้ตอนรวมส่งซ้ำ */
-  private flagsFromStoredLine(qtyText: string | null, note: string | null) {
-    const blob = `${qtyText ?? ""} ${note ?? ""}`;
-    if (/หมด/.test(blob)) {
-      return {
-        remaining: null as string | null,
-        spare: false,
-        empty: true,
-        order: false,
-      };
-    }
-    if (/ขอ|สั่ง/.test(blob)) {
-      const m =
-        blob.match(/(?:ขอ|สั่ง)\s*(\d+(?:\.\d+)?)/) ||
-        blob.match(/(\d+(?:\.\d+)?)/);
-      return {
-        remaining: m?.[1] ?? null,
-        spare: false,
-        empty: false,
-        order: true,
-      };
-    }
-    const spare = /สำรอง/.test(blob);
-    const m =
-      blob.match(/มี\s*(\d+(?:\.\d+)?)/) || blob.match(/(\d+(?:\.\d+)?)/);
-    return {
-      remaining: m?.[1] ?? null,
-      spare,
-      empty: false,
-      order: false,
-    };
-  }
-
   /**
-   * น้องส่งคงเหลือจากมือถือ → แปลงเป็นข้อความแบบเดิม แล้ว ingest
-   * ส่งซ้ำในวันเดียวกัน = รวมกับของเดิม (ชื่อเดิมทับค่าใหม่ · ของใหม่ต่อท้าย)
-   * ห้ามทับทั้งก้อนด้วยรอบล่าสุดอย่างเดียว — เคยทำให้หลุมดินรายการหาย
+   * น้องส่งคงเหลือจากมือถือ → แปลงเป็นข้อความ แล้ว ingest แทนที่ทั้งก้อนของสาขาวันนี้
+   * ลิสต์ที่ส่งมา = ชุดจริงทั้งชุด (รวมของที่เคยส่ง + ที่เพิ่ม/ลบบนจอ)
+   * มือถือต้องโหลดของเดิมขึ้นลิสต์ก่อนแก้ — ไม่งั้นจะทับหาย (เคยพังจากลิสต์ไม่ครบ)
    */
   async submitBranchOrder(opts: {
     branchId: string;
     day?: string;
     staffName?: string;
-    /** ชื่อที่น้องลบจากลิสต์ — รวมของเก่าแล้วตัดชื่อเหล่านี้ออก */
-    removeNames?: string[];
     items: Array<{
       name: string;
       catalogId?: string | null;
@@ -1693,16 +1658,7 @@ export class PurchasesService implements OnModuleInit {
     )[0];
     if (!branch) throw new NotFoundException("ไม่พบสาขา");
 
-    type SubmitRow = {
-      name: string;
-      catalogId?: string | null;
-      remaining?: number | string | null;
-      spare?: boolean;
-      empty?: boolean;
-      order?: boolean;
-    };
-
-    const incoming: SubmitRow[] = [];
+    const lines: string[] = [];
     for (const item of opts.items) {
       const name = String(item.name ?? "").trim();
       if (!name) continue;
@@ -1715,89 +1671,8 @@ export class PurchasesService implements OnModuleInit {
       ) {
         continue;
       }
-      incoming.push({
-        name,
-        catalogId: item.catalogId,
-        remaining: item.remaining,
-        spare: item.spare,
-        empty: item.empty,
-        order: item.order,
-      });
-    }
-    const removeNamesIn = (opts.removeNames ?? [])
-      .map((n) => String(n ?? "").trim())
-      .filter(Boolean);
-    if (!incoming.length && !removeNamesIn.length) {
-      throw new BadRequestException("ยังไม่ได้กรอกรายการ");
-    }
-
-    const day = await this.getOrCreateDay(opts.day);
-    const existingRows = await this.database.db
-      .select()
-      .from(pg.purchaseLines)
-      .where(
-        and(
-          eq(pg.purchaseLines.dayId, day.id),
-          eq(pg.purchaseLines.branchId, opts.branchId),
-          isNull(pg.purchaseLines.deletedAt),
-        ),
-      )
-      .orderBy(asc(pg.purchaseLines.sortOrder));
-
-    const merged: SubmitRow[] = [];
-    const indexByKey = new Map<string, number>();
-
-    for (const row of existingRows) {
-      const name = String(row.name ?? "").trim();
-      if (!name) continue;
-      const key = normalizePurchaseKey(name);
-      const flags = this.flagsFromStoredLine(row.qtyText, row.note);
-      const entry: SubmitRow = {
-        name,
-        catalogId: row.catalogId,
-        remaining: flags.remaining,
-        spare: flags.spare,
-        empty: flags.empty,
-        order: flags.order,
-      };
-      if (key) {
-        indexByKey.set(key, merged.length);
-      }
-      merged.push(entry);
-    }
-
-    for (const item of incoming) {
-      const key = normalizePurchaseKey(item.name);
-      if (key && indexByKey.has(key)) {
-        merged[indexByKey.get(key)!] = item;
-      } else {
-        if (key) indexByKey.set(key, merged.length);
-        merged.push(item);
-      }
-    }
-
-    // ลบตามที่มือถือบอกมา — ไม่ดึงของเก่าที่ถูกลบกลับ
-    const removeKeys = new Set(
-      removeNamesIn
-        .map((n) => normalizePurchaseKey(n))
-        .filter(Boolean),
-    );
-    const finalRows =
-      removeKeys.size === 0
-        ? merged
-        : merged.filter((item) => {
-            const key = normalizePurchaseKey(item.name);
-            return !key || !removeKeys.has(key);
-          });
-
-    if (!finalRows.length && !removeKeys.size) {
-      throw new BadRequestException("ยังไม่ได้กรอกรายการ");
-    }
-
-    const lines: string[] = [];
-    for (const item of finalRows) {
       const line = formatPurchaseLine({
-        name: item.name,
+        name,
         remaining: item.remaining,
         spare: item.spare,
         empty: item.empty,
@@ -1805,20 +1680,22 @@ export class PurchasesService implements OnModuleInit {
       });
       if (line) lines.push(line);
     }
+    if (!lines.length) {
+      throw new BadRequestException("ยังไม่ได้กรอกรายการ");
+    }
     if (opts.staffName?.trim()) {
       lines.push(`# ส่งโดย ${opts.staffName.trim()}`);
     }
 
-    // ingest เขียนแผงแล้ว — ข้าม board ทั้งก้อน (รายการยาวเคยช้าจนมือถือคิดว่าส่งไม่ติด)
-    // rawText ว่างได้เมื่อลบหมดแล้ว (ยังมี # ส่งโดย)
+    // แทนที่ทั้งก้อนด้วยลิสต์จากมือถือ — ข้าม board ทั้งก้อน (รายการยาวเคยช้า)
     const board = await this.ingest({
-      day: day.day,
+      day: opts.day,
       branchId: opts.branchId,
       branchLabel: branch.name,
       rawText: lines.join("\n"),
       skipBoard: true,
     });
-    const dayLabel = opts.day ?? board?.day?.day ?? day.day;
+    const dayLabel = opts.day ?? board?.day?.day ?? null;
     const itemCount = lines.filter((l) => !l.startsWith("#")).length;
 
     // ส่งจริงแล้ว — เคลียร์ draft มือถือของสาขานี้

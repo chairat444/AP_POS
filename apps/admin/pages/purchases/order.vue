@@ -1,6 +1,4 @@
 <script setup lang="ts">
-import { normalizePurchaseKey } from "@ap-pos/shared";
-
 definePageMeta({ layout: false });
 
 type Branch = { id: string; code: string; name: string };
@@ -61,32 +59,9 @@ const day = ref("");
 const catalog = ref<SuggestItem[]>([]);
 const q = ref("");
 const lines = ref<OrderLine[]>([]);
-/** ชื่อที่ลบจากลิสต์ — ส่งให้เซิร์ฟตัดออกตอนรวมกับของเก่า */
-const removedNames = ref<string[]>([]);
 const submitted = ref(false);
 const justSent = ref(false);
 let justSentTimer: ReturnType<typeof setTimeout> | null = null;
-
-function rememberRemoved(name: string) {
-  const n = name.trim();
-  if (!n) return;
-  const key = normalizePurchaseKey(n);
-  if (!key) return;
-  if (
-    removedNames.value.some((x) => normalizePurchaseKey(x) === key)
-  ) {
-    return;
-  }
-  removedNames.value = [...removedNames.value, n];
-}
-
-function forgetRemoved(name: string) {
-  const key = normalizePurchaseKey(name.trim());
-  if (!key) return;
-  removedNames.value = removedNames.value.filter(
-    (x) => normalizePurchaseKey(x) !== key,
-  );
-}
 
 /** ป๊อปอัปเพิ่ม/แก้ — ลิสต์สั้นเหมือนเดิม อ่านง่าย */
 const modalOpen = ref(false);
@@ -697,7 +672,6 @@ async function openForm() {
 
     catalog.value = itemsData.items ?? [];
     submitted.value = draftData.submitted;
-    removedNames.value = [];
     // ยึดวันจากเซิร์ฟเสมอ — draft ใช้ได้แค่วันนั้น
     if (draftData.day) day.value = draftData.day;
     const dayKey = day.value || todayBangkok();
@@ -718,22 +692,20 @@ async function openForm() {
       },
     );
 
-    // เฉพาะวันปัจจุบันเท่านั้น — ไม่กู้ข้ามวัน
+    // draft = ลิสต์ทั้งก้อนที่โชว์บนจอ (รวมของที่เคยส่ง)
+    // ลำดับ: draft มือถือที่ใหม่สุด → ของที่ส่งแล้ว → ว่าง
     const local = readLocalDraft(branchId.value, dayKey);
     const remote = draftData.mobileDraft?.lines?.length
       ? draftData.mobileDraft
       : null;
 
-    // เลือก draft วันนี้เท่านั้น · ถ้าส่งแล้วและไม่มี mobileDraft → โชว์ของที่ส่ง ไม่เอาร่างเก่าในเครื่องทับ
     skipServerDraftSync = true;
-    let restoredDraft = false;
     try {
       const localAt = local?.savedAt ?? 0;
       const remoteAt = remote?.savedAt ?? 0;
       if (remote?.lines?.length && local?.lines?.length && localAt > remoteAt) {
         lines.value = local.lines.map((l) => ({ ...l }));
         message.value = `กู้รายการค้าง ${local.lines.length} รายการ`;
-        restoredDraft = true;
       } else if (remote?.lines?.length) {
         lines.value = remote.lines.map((l) => ({
           ...l,
@@ -743,25 +715,24 @@ async function openForm() {
         }));
         const who = remote.staffName ? ` · จาก${remote.staffName}` : "";
         message.value = `กู้รายการค้าง ${remote.lines.length} รายการ${who}`;
-        writeLocalDraftWithoutServer(remote.savedAt || undefined);
-        restoredDraft = true;
-      } else if (local?.lines?.length && !draftData.submitted) {
+      } else if (local?.lines?.length) {
+        // มี draft ในเครื่อง — ใช้ต่อ (ควรรวมของที่เคยส่งไว้แล้ว)
         lines.value = local.lines.map((l) => ({ ...l }));
         message.value = `กู้รายการค้าง ${local.lines.length} รายการ`;
-        restoredDraft = true;
-      } else if (draftData.submitted && submittedLines.length) {
+      } else if (submittedLines.length) {
+        // ไม่มี draft → โหลดของที่ส่งแล้วขึ้นลิสต์ = ฐานของ draft ต่อไป
         lines.value = submittedLines;
-        clearLocalDraft(branchId.value, dayKey);
       } else {
         lines.value = [];
-        if (local) clearLocalDraft(branchId.value, dayKey);
       }
+      // ให้ draft ในเครื่อง = ลิสต์ที่โชว์เสมอ (รวมของที่เคยส่ง)
+      if (lines.value.length) writeLocalDraftWithoutServer();
+      else clearLocalDraft(branchId.value, dayKey);
     } finally {
       skipServerDraftSync = false;
     }
     step.value = "form";
-    // sync เฉพาะตอนกู้ draft จริง — อย่าเอาของที่ส่งแล้วไปเขียนเป็น draft ใหม่
-    if (restoredDraft) scheduleServerDraftSync(400);
+    if (lines.value.length) scheduleServerDraftSync(400);
   } catch (e: unknown) {
     if (isAuthExpired(e)) {
       clearSession();
@@ -925,8 +896,6 @@ function saveModal() {
       message.value = `เพิ่ม「${payload.name}」แล้ว`;
     }
   }
-  // เพิ่มกลับชื่อที่เคยลบ → ไม่ต้องตัดตอนส่ง
-  forgetRemoved(payload.name);
   q.value = "";
   error.value = "";
   closeModal();
@@ -970,7 +939,6 @@ function onSearchBlur() {
 }
 
 function removeLine(line: OrderLine) {
-  rememberRemoved(line.name);
   lines.value = lines.value.filter((l) => l.id !== line.id);
   message.value = `ลบ「${line.name}」แล้ว`;
   error.value = "";
@@ -994,7 +962,7 @@ function showJustSent(count: number) {
 }
 
 async function submit() {
-  if (!lines.value.length && !removedNames.value.length) {
+  if (!lines.value.length) {
     error.value = "ยังไม่มีรายการ · กด + เพิ่มก่อน";
     return;
   }
@@ -1014,6 +982,7 @@ async function submit() {
     clearTimeout(serverDraftTimer);
     serverDraftTimer = null;
   }
+  // ลิสต์บนจอ = ชุดที่จะแทนทั้งก้อน — เซฟ draft ให้ครบก่อนส่ง
   writeLocalDraftWithoutServer();
   // ยืนยันกับเซิร์ฟก่อนส่ง — หมดอายุรู้ทันที ไม่เสียรายการ
   const session = await verifySessionWithServer();
@@ -1050,14 +1019,11 @@ async function submit() {
           branchId: branchId.value,
           day: day.value,
           items,
-          removeNames: removedNames.value,
         },
       },
     );
     await stopServerDraftAfterSubmit();
-    clearLocalDraft();
-    removedNames.value = [];
-    // โหลดรายการรวมหลังส่ง (ส่งซ้ำจะรวมกับของเดิม · ลบแล้วตัดออก)
+    // โหลดของบนแผงกลับมา = ฐาน draft ต่อ (ลิสต์เต็มหลังแทนที่)
     try {
       const draft = await api<{
         submitted: boolean;
@@ -1085,12 +1051,19 @@ async function submit() {
           };
         });
         submitted.value = Boolean(draft.submitted);
+        // draft ในเครื่อง = ของที่เพิ่งส่งทั้งก้อน — พร้อมแก้ต่อ/ส่งซ้ำ
+        if (lines.value.length) writeLocalDraftWithoutServer();
+        else clearLocalDraft();
       } finally {
         skipServerDraftSync = false;
       }
     } catch {
-      /* ใช้จำนวนจาก response ก็พอ */
+      // เน็ตหลุดหลังส่งสำเร็จ — คงลิสต์ที่ส่งไว้เป็น draft
+      writeLocalDraftWithoutServer();
     }
+    // ปลดบล็อกแล้ว sync draft เต็มขึ้นเซิร์ฟ ให้เครื่องอื่นสาขาเดียวกันเห็นชุดล่าสุด
+    blockServerDraft = false;
+    if (lines.value.length) scheduleServerDraftSync(300);
     showJustSent(
       typeof res.itemCount === "number"
         ? res.itemCount
@@ -1114,7 +1087,32 @@ async function submit() {
       );
       if (draft.submitted && (draft.items?.length ?? 0) > 0) {
         await stopServerDraftAfterSubmit();
-        clearLocalDraft();
+        skipServerDraftSync = true;
+        try {
+          lines.value = (draft.items as Array<{
+            name: string;
+            catalogId: string | null;
+            groupKey: string;
+            qtyText: string | null;
+            note: string | null;
+          }>).map((prev, i) => {
+            const flags = parseDraftFlags(prev.qtyText, prev.note);
+            return {
+              id: `line-${i}-${prev.name}`,
+              name: prev.name,
+              catalogId: prev.catalogId,
+              groupKey: prev.groupKey,
+              mode: flags.mode,
+              remaining: flags.remaining,
+            };
+          });
+          submitted.value = true;
+          writeLocalDraftWithoutServer();
+        } finally {
+          skipServerDraftSync = false;
+        }
+        blockServerDraft = false;
+        scheduleServerDraftSync(300);
         showJustSent(draft.items.length);
         return;
       }
