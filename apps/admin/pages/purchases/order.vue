@@ -1,6 +1,19 @@
 <script setup lang="ts">
 definePageMeta({ layout: false });
 
+useHead({
+  title: "สั่งของ",
+  meta: [
+    {
+      name: "viewport",
+      content:
+        "width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content",
+    },
+    { name: "theme-color", content: "#c62828" },
+    { name: "apple-mobile-web-app-title", content: "สั่งของ" },
+  ],
+});
+
 type Branch = { id: string; code: string; name: string };
 type SuggestItem = {
   key: string;
@@ -31,7 +44,97 @@ const apiBase = computed(() =>
 const ORDER_TOKEN_KEY = "ap-pos.purchase-order.token";
 const ORDER_USER_KEY = "ap-pos.purchase-order.user";
 const ORDER_BRANCH_KEY = "ap-pos.purchase-order.branchId";
+const ORDER_INSTALL_HINT_KEY = "ap-pos.purchase-order.install-hint";
 const PIN_LEN = 4;
+
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
+
+const installStandalone = ref(false);
+const installHowto = ref(false);
+const installCanPrompt = ref(false);
+const installHintHidden = ref(false);
+let deferredInstall: BeforeInstallPromptEvent | null = null;
+
+function isStandaloneApp() {
+  if (typeof window === "undefined") return false;
+  const nav = window.navigator as Navigator & { standalone?: boolean };
+  return (
+    nav.standalone === true ||
+    window.matchMedia("(display-mode: standalone)").matches
+  );
+}
+
+function isIosDevice() {
+  if (typeof navigator === "undefined") return false;
+  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+
+function isIosSafari() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return isIosDevice() && /safari/i.test(ua) && !/crios|fxios|edgios/i.test(ua);
+}
+
+const showInstallHint = computed(
+  () =>
+    step.value === "pin" &&
+    !installStandalone.value &&
+    !installHintHidden.value,
+);
+
+async function installFromPrompt() {
+  if (!deferredInstall) {
+    installHowto.value = true;
+    return;
+  }
+  try {
+    await deferredInstall.prompt();
+    const choice = await deferredInstall.userChoice;
+    deferredInstall = null;
+    installCanPrompt.value = false;
+    if (choice.outcome === "accepted") {
+      installStandalone.value = true;
+      installHowto.value = false;
+    }
+  } catch {
+    installHowto.value = true;
+  }
+}
+
+function dismissInstallHint() {
+  installHintHidden.value = true;
+  installHowto.value = false;
+  try {
+    localStorage.setItem(ORDER_INSTALL_HINT_KEY, "1");
+  } catch {
+    /* ignore */
+  }
+}
+
+function onBeforeInstallPrompt(e: Event) {
+  e.preventDefault();
+  deferredInstall = e as BeforeInstallPromptEvent;
+  installCanPrompt.value = true;
+}
+
+function onAppInstalled() {
+  installStandalone.value = true;
+  installHowto.value = false;
+  deferredInstall = null;
+  installCanPrompt.value = false;
+}
+
+async function registerOrderPwa() {
+  if (!("serviceWorker" in navigator)) return;
+  try {
+    await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+  } catch {
+    /* ignore */
+  }
+}
 const PIN_KEYS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "", "0", "⌫"] as const;
 
 const step = ref<"pin" | "branch" | "form">("pin");
@@ -841,6 +944,15 @@ onMounted(async () => {
   } catch {
     /* ignore */
   }
+  installStandalone.value = isStandaloneApp();
+  try {
+    installHintHidden.value = localStorage.getItem(ORDER_INSTALL_HINT_KEY) === "1";
+  } catch {
+    /* ignore */
+  }
+  window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+  window.addEventListener("appinstalled", onAppInstalled);
+  void registerOrderPwa();
   purgeOldOrderCaches();
   window.addEventListener("keydown", onPinKeydown);
   window.addEventListener("resize", syncKeyboardInset);
@@ -890,6 +1002,8 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+  window.removeEventListener("appinstalled", onAppInstalled);
   window.removeEventListener("keydown", onPinKeydown);
   window.removeEventListener("resize", syncKeyboardInset);
   document.removeEventListener("visibilitychange", onVisibilityFlush);
@@ -912,6 +1026,13 @@ onBeforeUnmount(() => {
     <section v-if="step === 'pin'" class="po-gate">
       <div class="po-gate__bg" aria-hidden="true" />
       <div class="po-gate__inner">
+        <img
+          class="po-gate__icon"
+          src="/apple-touch-icon.png"
+          width="72"
+          height="72"
+          alt=""
+        />
         <p class="po-gate__brand">เอพีหมูสด</p>
         <h1 class="po-gate__title">สั่งของ</h1>
         <p class="po-gate__lead">ใส่ PIN พนักงานเพื่อเริ่ม</p>
@@ -932,6 +1053,50 @@ onBeforeUnmount(() => {
         <p v-if="error" class="po-gate__err">{{ error }}</p>
         <p v-else-if="pending" class="po-gate__hint">กำลังเข้า...</p>
         <p v-else class="po-gate__hint">ครบ 4 หลักแล้วเข้าอัตโนมัติ</p>
+
+        <div v-if="showInstallHint" class="po-install">
+          <button
+            type="button"
+            class="po-install__btn"
+            @click="installCanPrompt ? installFromPrompt() : (installHowto = true)"
+          >
+            ปักไอคอนที่หน้าจอ
+          </button>
+        </div>
+
+        <div
+          v-if="installHowto && showInstallHint"
+          class="po-install-sheet"
+          role="dialog"
+          aria-label="วิธีปักไอคอน"
+          @click.self="installHowto = false"
+        >
+          <div class="po-install-sheet__card">
+            <p class="po-install__title">เปิดจากไอคอนครั้งหน้า ไม่ต้องเข้าเบราว์เซอร์</p>
+            <ol v-if="isIosDevice()" class="po-install__steps">
+              <li v-if="!isIosSafari()">เปิดหน้านี้ด้วย Safari ก่อน (Chrome บน iPhone ปักไอคอนไม่ได้)</li>
+              <li>กดแชร์ (สี่เหลี่ยมมีลูกศรขึ้น) ด้านล่าง</li>
+              <li>เลือก “เพิ่มไปที่หน้าจอโฮม” แล้วกดเพิ่ม</li>
+            </ol>
+            <ol v-else class="po-install__steps">
+              <li>กดเมนู ⋮ มุมบน Chrome</li>
+              <li>เลือก “ติดตั้งแอป” หรือ “เพิ่มไปที่หน้าจอหลัก”</li>
+            </ol>
+            <div class="po-install__row">
+              <button
+                v-if="installCanPrompt"
+                type="button"
+                class="po-install__go"
+                @click="installFromPrompt"
+              >
+                ติดตั้งเลย
+              </button>
+              <button type="button" class="po-install__skip" @click="dismissInstallHint">
+                ไว้ทีหลัง
+              </button>
+            </div>
+          </div>
+        </div>
 
         <div class="po-pad" role="group" aria-label="แป้นตัวเลข">
           <button
@@ -1283,6 +1448,13 @@ onBeforeUnmount(() => {
     transform: none;
   }
 }
+.po-gate__icon {
+  width: 3.4rem;
+  height: 3.4rem;
+  border-radius: 0.9rem;
+  object-fit: cover;
+  box-shadow: 0 6px 16px rgba(142, 27, 27, 0.16);
+}
 .po-gate__brand {
   margin: 0.55rem 0 0;
   font-family: "IBM Plex Sans Thai", system-ui, sans-serif;
@@ -1328,6 +1500,76 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: var(--po-red);
   min-height: 1.25rem;
+}
+.po-install {
+  margin-top: 0.75rem;
+}
+.po-install__btn {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--po-red-deep);
+  padding: 0.35rem;
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}
+.po-install-sheet {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding: 0.75rem;
+  background: rgba(26, 18, 18, 0.32);
+}
+.po-install-sheet__card {
+  width: min(26rem, 100%);
+  border-radius: 1.1rem;
+  background: #fff;
+  padding: 1rem 1.1rem calc(1rem + env(safe-area-inset-bottom));
+  box-shadow: 0 -8px 28px rgba(26, 18, 18, 0.12);
+}
+.po-install__title {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--po-ink);
+}
+.po-install__steps {
+  margin: 0.55rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.84rem;
+  color: #6d5a5a;
+  line-height: 1.45;
+}
+.po-install__steps li + li {
+  margin-top: 0.2rem;
+}
+.po-install__row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+.po-install__go,
+.po-install__skip {
+  flex: 1;
+  min-height: 2.5rem;
+  border-radius: 0.75rem;
+  font-size: 0.88rem;
+  font-weight: 650;
+}
+.po-install__go {
+  border: 0;
+  background: var(--po-red);
+  color: #fff;
+}
+.po-install__skip {
+  border: 1px solid #ead4d4;
+  background: #fff;
+  color: #7a6666;
 }
 .po-gate__out {
   border: 1px solid #ead4d4;

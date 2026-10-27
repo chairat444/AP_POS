@@ -57,8 +57,26 @@ export default defineNuxtConfig({
           href: "/favicon.png?v=2",
         },
         {
+          rel: "apple-touch-icon",
+          href: "/apple-touch-icon.png",
+        },
+        {
+          rel: "manifest",
+          href: "/manifest.webmanifest",
+        },
+        {
           rel: "stylesheet",
           href: "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&display=swap",
+        },
+      ],
+      meta: [
+        { name: "theme-color", content: "#c62828" },
+        { name: "mobile-web-app-capable", content: "yes" },
+        { name: "apple-mobile-web-app-capable", content: "yes" },
+        { name: "apple-mobile-web-app-title", content: "สั่งของ" },
+        {
+          name: "apple-mobile-web-app-status-bar-style",
+          content: "default",
         },
       ],
     },
