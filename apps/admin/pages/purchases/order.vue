@@ -44,7 +44,6 @@ const apiBase = computed(() =>
 const ORDER_TOKEN_KEY = "ap-pos.purchase-order.token";
 const ORDER_USER_KEY = "ap-pos.purchase-order.user";
 const ORDER_BRANCH_KEY = "ap-pos.purchase-order.branchId";
-const ORDER_INSTALL_HINT_KEY = "ap-pos.purchase-order.install-hint";
 const PIN_LEN = 4;
 
 type BeforeInstallPromptEvent = Event & {
@@ -55,7 +54,6 @@ type BeforeInstallPromptEvent = Event & {
 const installStandalone = ref(false);
 const installHowto = ref(false);
 const installCanPrompt = ref(false);
-const installHintHidden = ref(false);
 let deferredInstall: BeforeInstallPromptEvent | null = null;
 
 function isStandaloneApp() {
@@ -78,12 +76,15 @@ function isIosSafari() {
   return isIosDevice() && /safari/i.test(ua) && !/crios|fxios|edgios/i.test(ua);
 }
 
-const showInstallHint = computed(
-  () =>
-    step.value === "pin" &&
-    !installStandalone.value &&
-    !installHintHidden.value,
-);
+const showInstallHint = computed(() => !installStandalone.value);
+
+function openInstall() {
+  if (installCanPrompt.value) {
+    void installFromPrompt();
+    return;
+  }
+  installHowto.value = true;
+}
 
 async function installFromPrompt() {
   if (!deferredInstall) {
@@ -101,16 +102,6 @@ async function installFromPrompt() {
     }
   } catch {
     installHowto.value = true;
-  }
-}
-
-function dismissInstallHint() {
-  installHintHidden.value = true;
-  installHowto.value = false;
-  try {
-    localStorage.setItem(ORDER_INSTALL_HINT_KEY, "1");
-  } catch {
-    /* ignore */
   }
 }
 
@@ -945,11 +936,6 @@ onMounted(async () => {
     /* ignore */
   }
   installStandalone.value = isStandaloneApp();
-  try {
-    installHintHidden.value = localStorage.getItem(ORDER_INSTALL_HINT_KEY) === "1";
-  } catch {
-    /* ignore */
-  }
   window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
   window.addEventListener("appinstalled", onAppInstalled);
   void registerOrderPwa();
@@ -1055,47 +1041,9 @@ onBeforeUnmount(() => {
         <p v-else class="po-gate__hint">ครบ 4 หลักแล้วเข้าอัตโนมัติ</p>
 
         <div v-if="showInstallHint" class="po-install">
-          <button
-            type="button"
-            class="po-install__btn"
-            @click="installCanPrompt ? installFromPrompt() : (installHowto = true)"
-          >
+          <button type="button" class="po-install__btn" @click="openInstall">
             ปักไอคอนที่หน้าจอ
           </button>
-        </div>
-
-        <div
-          v-if="installHowto && showInstallHint"
-          class="po-install-sheet"
-          role="dialog"
-          aria-label="วิธีปักไอคอน"
-          @click.self="installHowto = false"
-        >
-          <div class="po-install-sheet__card">
-            <p class="po-install__title">เปิดจากไอคอนครั้งหน้า ไม่ต้องเข้าเบราว์เซอร์</p>
-            <ol v-if="isIosDevice()" class="po-install__steps">
-              <li v-if="!isIosSafari()">เปิดหน้านี้ด้วย Safari ก่อน (Chrome บน iPhone ปักไอคอนไม่ได้)</li>
-              <li>กดแชร์ (สี่เหลี่ยมมีลูกศรขึ้น) ด้านล่าง</li>
-              <li>เลือก “เพิ่มไปที่หน้าจอโฮม” แล้วกดเพิ่ม</li>
-            </ol>
-            <ol v-else class="po-install__steps">
-              <li>กดเมนู ⋮ มุมบน Chrome</li>
-              <li>เลือก “ติดตั้งแอป” หรือ “เพิ่มไปที่หน้าจอหลัก”</li>
-            </ol>
-            <div class="po-install__row">
-              <button
-                v-if="installCanPrompt"
-                type="button"
-                class="po-install__go"
-                @click="installFromPrompt"
-              >
-                ติดตั้งเลย
-              </button>
-              <button type="button" class="po-install__skip" @click="dismissInstallHint">
-                ไว้ทีหลัง
-              </button>
-            </div>
-          </div>
         </div>
 
         <div class="po-pad" role="group" aria-label="แป้นตัวเลข">
@@ -1131,9 +1079,19 @@ onBeforeUnmount(() => {
               สวัสดี {{ user?.name || "พนักงาน" }}
             </p>
           </div>
-          <button type="button" class="po-gate__out" @click="clearSession">
-            ออก
-          </button>
+          <div class="po-branch__actions">
+            <button
+              v-if="showInstallHint"
+              type="button"
+              class="po-gate__out"
+              @click="openInstall"
+            >
+              ปักไอคอน
+            </button>
+            <button type="button" class="po-gate__out" @click="clearSession">
+              ออก
+            </button>
+          </div>
         </header>
 
         <p v-if="error" class="po-gate__err">{{ error }}</p>
@@ -1165,9 +1123,19 @@ onBeforeUnmount(() => {
           <template v-if="submitted"> · แจ้งแล้ว</template>
         </p>
       </div>
-      <button type="button" class="po__textbtn" @click="clearSession">
-        ออก
-      </button>
+      <div class="po__top-actions">
+        <button
+          v-if="showInstallHint"
+          type="button"
+          class="po__textbtn"
+          @click="openInstall"
+        >
+          ปักไอคอน
+        </button>
+        <button type="button" class="po__textbtn" @click="clearSession">
+          ออก
+        </button>
+      </div>
     </header>
 
     <p v-if="error" class="po__flash po__flash--err">{{ error }}</p>
@@ -1356,6 +1324,40 @@ onBeforeUnmount(() => {
     </div>
 
     </template>
+
+    <div
+      v-if="installHowto && showInstallHint"
+      class="po-install-sheet"
+      role="dialog"
+      aria-label="วิธีปักไอคอน"
+      @click.self="installHowto = false"
+    >
+      <div class="po-install-sheet__card">
+        <p class="po-install__title">เปิดจากไอคอนครั้งหน้า ไม่ต้องเข้าเบราว์เซอร์</p>
+        <ol v-if="isIosDevice()" class="po-install__steps">
+          <li v-if="!isIosSafari()">เปิดหน้านี้ด้วย Safari ก่อน (Chrome บน iPhone ปักไอคอนไม่ได้)</li>
+          <li>กดแชร์ (สี่เหลี่ยมมีลูกศรขึ้น) ด้านล่าง</li>
+          <li>เลือก “เพิ่มไปที่หน้าจอโฮม” แล้วกดเพิ่ม</li>
+        </ol>
+        <ol v-else class="po-install__steps">
+          <li>กดเมนู ⋮ มุมบน Chrome</li>
+          <li>เลือก “ติดตั้งแอป” หรือ “เพิ่มไปที่หน้าจอหลัก”</li>
+        </ol>
+        <div class="po-install__row">
+          <button
+            v-if="installCanPrompt"
+            type="button"
+            class="po-install__go"
+            @click="installFromPrompt"
+          >
+            ติดตั้งเลย
+          </button>
+          <button type="button" class="po-install__skip" @click="installHowto = false">
+            ปิด
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -1516,9 +1518,9 @@ onBeforeUnmount(() => {
   text-underline-offset: 0.18em;
 }
 .po-install-sheet {
-  position: absolute;
+  position: fixed;
   inset: 0;
-  z-index: 8;
+  z-index: 40;
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -1675,6 +1677,12 @@ onBeforeUnmount(() => {
   gap: 1rem;
   margin-bottom: 0.35rem;
 }
+.po-branch__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.4rem;
+}
 .po-branch__list {
   display: flex;
   flex-direction: column;
@@ -1762,6 +1770,12 @@ onBeforeUnmount(() => {
   margin: 0.2rem 0 0;
   font-size: 0.85rem;
   color: #6b6b6b;
+}
+.po__top-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.15rem;
 }
 .po__textbtn {
   border: 0;
