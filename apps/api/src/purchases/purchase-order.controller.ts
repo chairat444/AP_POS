@@ -51,33 +51,62 @@ export class PurchaseOrderController {
     return this.purchases.orderDraft(branchId ?? "", day);
   }
 
-  /** เซฟ draft เงียบๆ ตามสาขา — ไม่แจ้งเตือน */
+  /** เพิ่ม/แก้รายการเดียว ขึ้นแผงทันที — ไม่แจ้งเตือน */
   @AllowPurchaseOrder()
-  @Post("save-draft")
-  saveDraft(
+  @Post("item")
+  upsertItem(
     @Req() req: AuthedRequest,
     @Body()
     body: {
       branchId?: string;
       day?: string;
-      lines?: Array<{
-        id?: string;
-        name: string;
-        catalogId?: string | null;
-        groupKey?: string;
-        mode?: string;
-        remaining?: string;
-      }>;
+      lineId?: string | null;
+      previousName?: string | null;
+      name?: string;
+      catalogId?: string | null;
+      groupKey?: string;
+      remaining?: number | string | null;
+      spare?: boolean;
+      empty?: boolean;
+      order?: boolean;
     },
   ) {
-    return this.purchases.saveMobileDraft({
+    return this.purchases.upsertMobileOrderItem({
       branchId: body.branchId ?? "",
       day: body.day,
-      staffName: req.user?.name,
-      lines: body.lines ?? [],
+      lineId: body.lineId,
+      previousName: body.previousName,
+      name: body.name ?? "",
+      catalogId: body.catalogId,
+      groupKey: body.groupKey,
+      remaining: body.remaining,
+      spare: body.spare,
+      empty: body.empty,
+      order: body.order,
     });
   }
 
+  /** ลบรายการเดียวออกจากแผงวันนี้ */
+  @AllowPurchaseOrder()
+  @Post("item-remove")
+  removeItem(
+    @Body()
+    body: {
+      branchId?: string;
+      day?: string;
+      lineId?: string | null;
+      name?: string;
+    },
+  ) {
+    return this.purchases.removeMobileOrderItem({
+      branchId: body.branchId ?? "",
+      day: body.day,
+      lineId: body.lineId,
+      name: body.name,
+    });
+  }
+
+  /** แจ้ง Discord จากของบนแผง — ไม่ทับลิสต์ */
   @AllowPurchaseOrder()
   @Post("submit")
   submit(
@@ -86,22 +115,12 @@ export class PurchaseOrderController {
     body: {
       branchId?: string;
       day?: string;
-      items?: Array<{
-        name: string;
-        catalogId?: string | null;
-        remaining?: number | string | null;
-        spare?: boolean;
-        empty?: boolean;
-        order?: boolean;
-        touched?: boolean;
-      }>;
     },
   ) {
-    return this.purchases.submitBranchOrder({
+    return this.purchases.notifyMobileOrder({
       branchId: body.branchId ?? "",
       day: body.day,
       staffName: req.user?.name,
-      items: body.items ?? [],
     });
   }
 }

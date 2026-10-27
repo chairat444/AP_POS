@@ -969,11 +969,26 @@ async function removeItem(item: BoardItem) {
 async function clearBoardDay() {
   if (!board.value) return;
   const n = board.value.lineCount;
+  const perBranch = new Map<string, number>();
+  for (const col of board.value.columns) {
+    for (const item of col.items) {
+      for (const b of item.byBranch) {
+        if (!b.lineId) continue;
+        const label = shortBranchName(b.branchName);
+        perBranch.set(label, (perBranch.get(label) ?? 0) + 1);
+      }
+    }
+  }
+  const branchHint = [...perBranch.entries()]
+    .map(([name, c]) => `${name} ${c}`)
+    .join(" · ");
   const ok = await askConfirm({
     title: "ล้างแผงวันนี้ทั้งหมด?",
     message: `ลบรายการซื้อของวันที่ ${formatDayLabel(day.value)} ทั้งหมด${n ? ` (${n} รายการ)` : ""}`,
-    detail: "ลบทั้งแผงสรุปและข้อความที่วางจากสาขา · ใช้ตอนแผงมั่ว แล้ววางใหม่ได้เลย · ไม่กระทบแคตตาล็อกสินค้า",
-    confirmLabel: "ล้างแผงวันนี้",
+    detail: branchHint
+      ? `จะลบของที่สาขาส่งแล้วด้วย: ${branchHint} · อย่ากดถ้ากำลังซื้อของอยู่`
+      : "ลบทั้งแผงสรุปและข้อความที่วางจากสาขา · ใช้ตอนแผงมั่ว แล้ววางใหม่ได้เลย",
+    confirmLabel: "ลบของทุกสาขา",
   });
   if (!ok) return;
   saving.value = true;

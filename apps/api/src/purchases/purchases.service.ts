@@ -110,6 +110,42 @@ function resolvePurchaseGroup(groupKey?: string | null): string {
   return PURCHASE_DEFAULT_GROUP;
 }
 
+/** แปลงแถวบนแผงกลับเป็นข้อความสั่งของ */
+function storedToRawLine(
+  name: string,
+  qtyText: string | null,
+  note: string | null,
+): string {
+  const blob = `${qtyText ?? ""} ${note ?? ""}`;
+  const empty = /หมด/.test(blob);
+  const spare = /สำรอง/.test(blob);
+  const order = /ขอ|สั่ง/.test(blob);
+  const num = blob.match(/(\d+(?:\.\d+)?)/)?.[1] ?? null;
+  return (
+    formatPurchaseLine({
+      name,
+      empty: empty && !order,
+      spare,
+      order,
+      remaining: empty && !order ? null : num,
+    }) || name
+  );
+}
+
+function flagsFromStored(qtyText: string | null, note: string | null) {
+  const blob = `${qtyText ?? ""} ${note ?? ""}`;
+  const empty = /หมด/.test(blob);
+  const spare = /สำรอง/.test(blob);
+  const order = /ขอ|สั่ง/.test(blob);
+  const num = blob.match(/(\d+(?:\.\d+)?)/)?.[1] ?? null;
+  return {
+    remaining: empty && !order ? null : num,
+    spare,
+    empty: empty && !order,
+    order,
+  };
+}
+
 @Injectable()
 export class PurchasesService implements OnModuleInit {
   constructor(
@@ -1436,6 +1472,7 @@ export class PurchasesService implements OnModuleInit {
       submitted: Boolean(raw?.rawText?.trim()),
       rawText: raw?.rawText ?? "",
       items: lines.map((l) => ({
+        id: l.id,
         name: l.name,
         catalogId: l.catalogId,
         groupKey: l.groupKey,
@@ -1462,6 +1499,7 @@ export class PurchasesService implements OnModuleInit {
           mode?: string;
           remaining?: string;
         }>;
+        removedNames?: string[];
       };
       // กัน JSON เก่าที่ปนวันผิด (ถ้ามีฟิลด์ day)
       if (
@@ -1471,7 +1509,22 @@ export class PurchasesService implements OnModuleInit {
       ) {
         return null;
       }
-      if (!Array.isArray(parsed.lines) || !parsed.lines.length) return null;
+      const removedNames = [
+        ...new Set(
+          (parsed.removedNames ?? [])
+            .map((n) => String(n ?? "").trim())
+            .filter(Boolean),
+        ),
+      ];
+      if (!Array.isArray(parsed.lines) || !parsed.lines.length) {
+        if (!removedNames.length) return null;
+        return {
+          savedAt: Number(parsed.savedAt) || 0,
+          staffName: parsed.staffName?.trim() || null,
+          lines: [],
+          removedNames,
+        };
+      }
       const lines = parsed.lines
         .map((l, i) => {
           const name = String(l?.name ?? "").trim();
@@ -1498,11 +1551,12 @@ export class PurchasesService implements OnModuleInit {
         mode: string;
         remaining: string;
       }>;
-      if (!lines.length) return null;
+      if (!lines.length && !removedNames.length) return null;
       return {
         savedAt: Number(parsed.savedAt) || 0,
         staffName: parsed.staffName?.trim() || null,
         lines,
+        removedNames,
       };
     } catch {
       return null;
@@ -1525,6 +1579,7 @@ export class PurchasesService implements OnModuleInit {
       mode?: string;
       remaining?: string;
     }>;
+    removedNames?: string[];
   }) {
     if (!opts.branchId) throw new BadRequestException("ระบุสาขา");
     const branch = (
@@ -1573,14 +1628,22 @@ export class PurchasesService implements OnModuleInit {
     const d = await this.getOrCreateDay(today);
     const stamp = now();
     const savedAt = Date.now();
+    const removedNames = [
+      ...new Set(
+        (opts.removedNames ?? [])
+          .map((n) => String(n ?? "").trim())
+          .filter(Boolean),
+      ),
+    ];
     const draftJson =
-      cleaned.length === 0
+      cleaned.length === 0 && removedNames.length === 0
         ? null
         : JSON.stringify({
             savedAt,
             day: today,
             staffName: opts.staffName?.trim() || null,
             lines: cleaned,
+            removedNames,
           });
 
     const rawRows = await this.database.db
@@ -1624,130 +1687,255 @@ export class PurchasesService implements OnModuleInit {
     };
   }
 
-  /**
-   * น้องส่งคงเหลือจากมือถือ → แปลงเป็นข้อความ แล้ว ingest แทนที่ทั้งก้อนของสาขาวันนี้
-   * ลิสต์ที่ส่งมา = ชุดจริงทั้งชุด (รวมของที่เคยส่ง + ที่เพิ่ม/ลบบนจอ)
-   * มือถือต้องโหลดของเดิมขึ้นลิสต์ก่อนแก้ — ไม่งั้นจะทับหาย (เคยพังจากลิสต์ไม่ครบ)
-   */
-  async submitBranchOrder(opts: {
-    branchId: string;
-    day?: string;
-    staffName?: string;
-    items: Array<{
-      name: string;
-      catalogId?: string | null;
-      remaining?: number | string | null;
-      spare?: boolean;
-      empty?: boolean;
-      order?: boolean;
-      touched?: boolean;
-    }>;
-  }) {
-    if (!opts.branchId) throw new BadRequestException("ระบุสาขา");
+  private async requireBranch(branchId: string) {
+    if (!branchId) throw new BadRequestException("ระบุสาขา");
     const branch = (
       await this.database.db
         .select()
         .from(pg.branches)
         .where(
-          and(
-            eq(pg.branches.id, opts.branchId),
-            isNull(pg.branches.deletedAt),
-          ),
+          and(eq(pg.branches.id, branchId), isNull(pg.branches.deletedAt)),
         )
         .limit(1)
     )[0];
     if (!branch) throw new NotFoundException("ไม่พบสาขา");
+    return branch;
+  }
 
-    const lines: string[] = [];
-    for (const item of opts.items) {
-      const name = String(item.name ?? "").trim();
-      if (!name) continue;
-      if (
-        !item.touched &&
-        item.remaining == null &&
-        !item.spare &&
-        !item.empty &&
-        !item.order
-      ) {
-        continue;
-      }
-      const line = formatPurchaseLine({
-        name,
-        remaining: item.remaining,
-        spare: item.spare,
-        empty: item.empty,
-        order: item.order,
-      });
-      if (line) lines.push(line);
-    }
-    if (!lines.length) {
-      throw new BadRequestException("ยังไม่ได้กรอกรายการ");
-    }
-    if (opts.staffName?.trim()) {
-      lines.push(`# ส่งโดย ${opts.staffName.trim()}`);
-    }
+  private async liveBranchLines(dayId: string, branchId: string) {
+    return this.database.db
+      .select()
+      .from(pg.purchaseLines)
+      .where(
+        and(
+          eq(pg.purchaseLines.dayId, dayId),
+          eq(pg.purchaseLines.branchId, branchId),
+          isNull(pg.purchaseLines.deletedAt),
+        ),
+      )
+      .orderBy(asc(pg.purchaseLines.sortOrder));
+  }
 
-    // แทนที่ทั้งก้อนด้วยลิสต์จากมือถือ — ข้าม board ทั้งก้อน (รายการยาวเคยช้า)
-    const board = await this.ingest({
-      day: opts.day,
-      branchId: opts.branchId,
-      branchLabel: branch.name,
-      rawText: lines.join("\n"),
-      skipBoard: true,
-    });
-    const dayLabel = opts.day ?? board?.day?.day ?? null;
-    const itemCount = lines.filter((l) => !l.startsWith("#")).length;
-
-    // ส่งจริงแล้ว — เคลียร์ draft มือถือของสาขานี้
-    try {
-      const d = await this.getOrCreateDay(opts.day ?? dayLabel ?? undefined);
+  private async writeBranchRaw(opts: {
+    dayId: string;
+    branchId: string;
+    branchLabel: string;
+    stamp: Date;
+  }) {
+    const rows = await this.liveBranchLines(opts.dayId, opts.branchId);
+    const rawText = rows
+      .map((row) => storedToRawLine(row.name, row.qtyText, row.note))
+      .join("\n");
+    const rawRows = await this.database.db
+      .select()
+      .from(pg.purchaseRaw)
+      .where(
+        and(
+          eq(pg.purchaseRaw.dayId, opts.dayId),
+          eq(pg.purchaseRaw.branchId, opts.branchId),
+        ),
+      )
+      .limit(1);
+    if (rawRows[0]) {
       await this.database.db
         .update(pg.purchaseRaw)
         .set({
-          draftJson: null,
-          draftUpdatedAt: null,
-          updatedAt: now(),
+          rawText,
+          branchLabel: opts.branchLabel,
+          updatedAt: opts.stamp,
         })
-        .where(
-          and(
-            eq(pg.purchaseRaw.dayId, d.id),
-            eq(pg.purchaseRaw.branchId, opts.branchId),
-          ),
-        );
-    } catch {
-      /* ignore — ส่งสำเร็จแล้ว อย่าให้เคลียร์ draft ทำให้ fail */
+        .where(eq(pg.purchaseRaw.id, rawRows[0].id));
+    } else {
+      await this.database.db.insert(pg.purchaseRaw).values({
+        id: `praw-${randomUUID().slice(0, 8)}`,
+        dayId: opts.dayId,
+        branchId: opts.branchId,
+        branchLabel: opts.branchLabel,
+        rawText,
+        updatedAt: opts.stamp,
+      });
+    }
+    return rows;
+  }
+
+  /** เพิ่ม/แก้รายการเดียวของสาขาวันนี้ — ขึ้นแผงทันที ไม่แจ้งเตือน */
+  async upsertMobileOrderItem(opts: {
+    branchId: string;
+    day?: string;
+    lineId?: string | null;
+    previousName?: string | null;
+    name: string;
+    catalogId?: string | null;
+    groupKey?: string;
+    remaining?: number | string | null;
+    spare?: boolean;
+    empty?: boolean;
+    order?: boolean;
+  }) {
+    const branch = await this.requireBranch(opts.branchId);
+    const name = String(opts.name ?? "").trim();
+    if (!name) throw new BadRequestException("ระบุชื่อสินค้า");
+    const text = formatPurchaseLine({
+      name,
+      remaining: opts.remaining,
+      spare: opts.spare,
+      empty: opts.empty,
+      order: opts.order,
+    });
+    const parsed = parsePurchaseText(text)[0];
+    if (!parsed) throw new BadRequestException("รายการไม่ถูกต้อง");
+
+    const day = await this.getOrCreateDay(opts.day);
+    const stamp = now();
+    const live = await this.liveBranchLines(day.id, opts.branchId);
+    const { items: catalogItems } = await this.listCatalog();
+    const cat = await this.matchCatalog(parsed.name, catalogItems);
+    const storedName = cat?.name ?? parsed.name;
+    const nameKey =
+      normalizePurchaseKey(storedName) || normalizePurchaseKey(parsed.name);
+    const prevKey = normalizePurchaseKey(
+      String(opts.previousName ?? "").trim(),
+    );
+    const lineId = String(opts.lineId ?? "").trim();
+
+    const byId = lineId ? live.find((row) => row.id === lineId) : undefined;
+    const byName = nameKey
+      ? live.find((row) => normalizePurchaseKey(row.name) === nameKey)
+      : undefined;
+    const byPrev =
+      prevKey && prevKey !== nameKey
+        ? live.find((row) => normalizePurchaseKey(row.name) === prevKey)
+        : undefined;
+    const hit = byName ?? byId ?? byPrev;
+    const groupKey = resolvePurchaseGroup(
+      hit?.groupKey || opts.groupKey || (cat?.groupKey as string) || PURCHASE_DEFAULT_GROUP,
+    );
+
+    let savedId = hit?.id ?? "";
+    if (hit) {
+      await this.database.db
+        .update(pg.purchaseLines)
+        .set({
+          name: storedName,
+          qtyText: parsed.qtyText,
+          note: parsed.note,
+          catalogId: cat?.id ?? hit.catalogId,
+          matched: cat ? 1 : hit.matched,
+          groupKey,
+          updatedAt: stamp,
+        })
+        .where(eq(pg.purchaseLines.id, hit.id));
+      if (byId && byName && byId.id !== byName.id) {
+        await this.database.db
+          .update(pg.purchaseLines)
+          .set({ deletedAt: stamp, updatedAt: stamp })
+          .where(eq(pg.purchaseLines.id, byId.id));
+        savedId = byName.id;
+      }
+    } else {
+      savedId = `pline-${randomUUID().slice(0, 10)}`;
+      const sortOrder = live.reduce((m, r) => Math.max(m, r.sortOrder), 0) + 1;
+      await this.database.db.insert(pg.purchaseLines).values({
+        id: savedId,
+        dayId: day.id,
+        branchId: opts.branchId,
+        catalogId: cat?.id ?? opts.catalogId ?? null,
+        name: storedName,
+        qtyText: parsed.qtyText,
+        note: parsed.note,
+        groupKey,
+        matched: cat ? 1 : 0,
+        sortOrder,
+        updatedAt: stamp,
+        deletedAt: null,
+      });
     }
 
-    const notifyItems = opts.items.filter((item) => {
-      const name = String(item.name ?? "").trim();
-      if (!name) return false;
-      return Boolean(
-        item.touched ||
-          item.remaining != null ||
-          item.spare ||
-          item.empty ||
-          item.order,
-      );
+    const rows = await this.writeBranchRaw({
+      dayId: day.id,
+      branchId: opts.branchId,
+      branchLabel: branch.name,
+      stamp,
     });
+    const item = rows.find((row) => row.id === savedId) ?? rows[0];
+    if (!item) throw new BadRequestException("บันทึกรายการไม่สำเร็จ");
+    return {
+      ok: true,
+      day: day.day,
+      item: {
+        id: item.id,
+        name: item.name,
+        catalogId: item.catalogId,
+        groupKey: item.groupKey,
+        qtyText: item.qtyText,
+        note: item.note,
+      },
+    };
+  }
+
+  /** ลบรายการเดียวออกจากแผงสาขาวันนี้ */
+  async removeMobileOrderItem(opts: {
+    branchId: string;
+    day?: string;
+    lineId?: string | null;
+    name?: string;
+  }) {
+    const branch = await this.requireBranch(opts.branchId);
+    const day = await this.getOrCreateDay(opts.day);
+    const stamp = now();
+    const live = await this.liveBranchLines(day.id, opts.branchId);
+    const lineId = String(opts.lineId ?? "").trim();
+    const nameKey = normalizePurchaseKey(String(opts.name ?? "").trim());
+    const hit =
+      (lineId ? live.find((row) => row.id === lineId) : undefined) ??
+      (nameKey
+        ? live.find((row) => normalizePurchaseKey(row.name) === nameKey)
+        : undefined);
+    if (!hit) throw new NotFoundException("ไม่พบรายการ");
+
+    await this.database.db
+      .update(pg.purchaseLines)
+      .set({ deletedAt: stamp, updatedAt: stamp })
+      .where(eq(pg.purchaseLines.id, hit.id));
+
+    const rows = await this.writeBranchRaw({
+      dayId: day.id,
+      branchId: opts.branchId,
+      branchLabel: branch.name,
+      stamp,
+    });
+    return { ok: true, day: day.day, itemCount: rows.length };
+  }
+
+  /** แจ้ง Discord จากของบนแผงวันนี้ — ไม่ทับลิสต์ */
+  async notifyMobileOrder(opts: {
+    branchId: string;
+    day?: string;
+    staffName?: string;
+  }) {
+    const branch = await this.requireBranch(opts.branchId);
+    const day = await this.getOrCreateDay(opts.day);
+    const rows = await this.liveBranchLines(day.id, opts.branchId);
+    if (!rows.length) {
+      throw new BadRequestException("ยังไม่มีรายการบนแผง");
+    }
+
     void this.notify.notifyPurchaseOrder({
       branchId: opts.branchId,
       branchName: branch.name,
       branchCode: branch.code,
       staffName: opts.staffName,
-      day: dayLabel ?? undefined,
-      items: notifyItems.map((item) => ({
-        name: String(item.name).trim(),
-        remaining: item.remaining,
-        spare: item.spare,
-        empty: item.empty,
-        order: item.order,
+      day: day.day,
+      items: rows.map((row) => ({
+        name: row.name,
+        ...flagsFromStored(row.qtyText, row.note),
       })),
     });
 
     return {
       ok: true,
-      itemCount,
-      day: dayLabel,
+      itemCount: rows.length,
+      day: day.day,
     };
   }
 }
