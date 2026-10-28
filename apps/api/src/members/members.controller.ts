@@ -48,6 +48,15 @@ export class MembersController {
   }
 
   /**
+   * nginx หน้า HTTPS บางชุดบล็อก POST /members (ได้ 403)
+   * ต้องอยู่ก่อน :id
+   */
+  @Post("create")
+  createPost(@Body() body: UpsertMemberDto) {
+    return this.members.create(body);
+  }
+
+  /**
    * nginx บน prod มักบล็อก PATCH/DELETE → ใช้ POST แทน
    * ต้องอยู่ก่อน :id
    */

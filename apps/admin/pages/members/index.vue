@@ -27,7 +27,11 @@ const emptyForm = (): MemberForm => ({
   points: "0",
 });
 
-const { get, post } = useAdminApi();
+const nameInput = ref<HTMLInputElement | null>(null);
+const phoneInput = ref<HTMLInputElement | null>(null);
+const pointsInput = ref<HTMLInputElement | null>(null);
+
+const { get, post, postForm } = useAdminApi();
 const { askConfirm } = useConfirmDialog();
 const pending = ref(false);
 const saving = ref(false);
@@ -156,6 +160,26 @@ async function load() {
   }
 }
 
+function errMsg(e: unknown, fallback: string) {
+  const status =
+    (e as { statusCode?: number; status?: number })?.statusCode ??
+    (e as { status?: number })?.status;
+  if (status === 403) {
+    return "บันทึกไม่ผ่าน (403) · ลองกดบันทึกอีกครั้ง ไม่ต้องรีเฟรชทั้งหน้า";
+  }
+  const msg = (e as { data?: { message?: string | string[] } })?.data?.message;
+  if (Array.isArray(msg) && msg.length) return msg.join(", ");
+  if (typeof msg === "string" && msg.trim()) return msg;
+  return e instanceof Error ? e.message : fallback;
+}
+
+function focusNameSoon() {
+  void nextTick(() => {
+    nameInput.value?.focus();
+    nameInput.value?.select();
+  });
+}
+
 async function openCreate() {
   editingId.value = null;
   form.value = emptyForm();
@@ -166,6 +190,7 @@ async function openCreate() {
     // server จะออกเลขให้อีกทีตอนบันทึก
   }
   modalOpen.value = true;
+  focusNameSoon();
 }
 
 function openEdit(row: Member) {
@@ -177,36 +202,100 @@ function openEdit(row: Member) {
     points: String(row.points ?? 0),
   };
   modalOpen.value = true;
+  focusNameSoon();
+}
+
+function onFieldEnter(field: "name" | "phone" | "points") {
+  if (field === "name") {
+    phoneInput.value?.focus();
+    return;
+  }
+  if (field === "phone") {
+    pointsInput.value?.focus();
+    pointsInput.value?.select();
+    return;
+  }
+  void save();
 }
 
 function closeModal() {
   modalOpen.value = false;
 }
 
+function digits(phone?: string | null) {
+  return String(phone ?? "").replace(/\D/g, "");
+}
+
+function findPhoneOwner(phone: string) {
+  const p = digits(phone);
+  if (p.length < 9) return null;
+  return (
+    rows.value.find(
+      (row) => digits(row.phone) === p && row.id !== editingId.value,
+    ) ?? null
+  );
+}
+
+async function warnDuplicatePhone(owner: Member) {
+  const phone = digits(form.value.phone);
+  error.value = `เบอร์ ${phone} มีสมาชิกแล้ว · ${owner.code} ${owner.name}`;
+  const openExisting = await askConfirm({
+    title: "เบอร์โทรซ้ำ",
+    message: `เบอร์ ${phone} มีสมาชิกแล้ว`,
+    detail: `${owner.code}  ${owner.name}`,
+    confirmLabel: "เปิดคนนี้",
+    cancelLabel: "แก้เบอร์",
+    tone: "primary",
+  });
+  if (openExisting) openEdit(owner);
+}
+
 async function save() {
+  if (saving.value) return;
   if (!form.value.name.trim()) {
     error.value = "กรุณากรอกชื่อสมาชิก";
+    return;
+  }
+  if (!digits(form.value.phone)) {
+    error.value = "กรุณากรอกเบอร์โทร";
+    return;
+  }
+  const localDup = findPhoneOwner(form.value.phone);
+  if (localDup) {
+    await warnDuplicatePhone(localDup);
     return;
   }
   saving.value = true;
   error.value = "";
   try {
     const body = {
-      code: form.value.code.trim() || undefined,
       name: form.value.name.trim(),
       phone: form.value.phone.trim(),
       points: Math.max(0, Math.floor(Number(form.value.points) || 0)),
     };
     if (editingId.value) {
-      // nginx บล็อก PATCH → ใช้ POST
-      await post("/members/update", { id: editingId.value, ...body });
+      await postForm("/members/update", {
+        id: editingId.value,
+        code: form.value.code.trim() || undefined,
+        ...body,
+      });
     } else {
-      await post("/members", body);
+      await postForm("/members/create", body);
     }
     closeModal();
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "บันทึกไม่สำเร็จ";
+    const msg = errMsg(e, "บันทึกไม่สำเร็จ");
+    error.value = msg;
+    if (/มีสมาชิกแล้ว/.test(msg)) {
+      await load();
+      const owner = findPhoneOwner(form.value.phone);
+      if (owner) {
+        saving.value = false;
+        await warnDuplicatePhone(owner);
+        return;
+      }
+    }
   } finally {
     saving.value = false;
   }
@@ -227,7 +316,7 @@ async function remove(row: Member) {
     await post("/members/delete", { id: row.id });
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : "ลบไม่สำเร็จ";
+    error.value = errMsg(e, "ลบไม่สำเร็จ");
   } finally {
     saving.value = false;
   }
@@ -384,7 +473,12 @@ onMounted(load);
     </div>
 
     <div v-if="modalOpen" class="ui-modal">
-      <div class="ui-modal__panel" role="dialog" aria-modal="true">
+      <form
+        class="ui-modal__panel"
+        role="dialog"
+        aria-modal="true"
+        @submit.prevent="save"
+      >
         <div class="ui-modal__head">
           <h2>{{ editingId ? "แก้ไขสมาชิก" : "เพิ่มสมาชิก" }}</h2>
           <button class="ui-icon-btn" type="button" @click="closeModal">×</button>
@@ -398,20 +492,47 @@ onMounted(load);
                 class="ui-input"
                 type="text"
                 readonly
+                tabindex="-1"
                 title="ออกเลขอัตโนมัติ"
               />
             </label>
             <label class="ui-field">
               <span>ชื่อ *</span>
-              <input v-model="form.name" class="ui-input" type="text" />
+              <input
+                ref="nameInput"
+                v-model="form.name"
+                class="ui-input"
+                type="text"
+                enterkeyhint="next"
+                autocomplete="name"
+                @keydown.enter.prevent="onFieldEnter('name')"
+              />
             </label>
             <label class="ui-field">
-              <span>เบอร์โทร</span>
-              <input v-model="form.phone" class="ui-input" type="text" />
+              <span>เบอร์โทร *</span>
+              <input
+                ref="phoneInput"
+                v-model="form.phone"
+                class="ui-input"
+                type="tel"
+                inputmode="tel"
+                enterkeyhint="next"
+                autocomplete="tel"
+                @keydown.enter.prevent="onFieldEnter('phone')"
+              />
             </label>
             <label class="ui-field">
               <span>แต้ม</span>
-              <input v-model="form.points" class="ui-input" type="number" min="0" step="1" />
+              <input
+                ref="pointsInput"
+                v-model="form.points"
+                class="ui-input"
+                type="number"
+                min="0"
+                step="1"
+                enterkeyhint="done"
+                @keydown.enter.prevent="onFieldEnter('points')"
+              />
             </label>
           </div>
           <p v-if="error && modalOpen" class="ui-members__form-error">{{ error }}</p>
@@ -419,15 +540,14 @@ onMounted(load);
         <div class="ui-modal__foot">
           <button type="button" class="ui-btn ui-btn--ghost" @click="closeModal">ยกเลิก</button>
           <button
-            type="button"
+            type="submit"
             class="ui-btn ui-btn--primary"
             :disabled="saving"
-            @click="save"
           >
             {{ saving ? "กำลังบันทึก..." : "บันทึก" }}
           </button>
         </div>
-      </div>
+      </form>
     </div>
   </div>
 </template>

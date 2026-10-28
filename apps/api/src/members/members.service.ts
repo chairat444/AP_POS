@@ -52,8 +52,14 @@ function toRecord(
   };
 }
 
-function clampPoints(points: number | undefined): number {
-  return Math.max(0, Math.floor(points ?? 0));
+function clampPoints(points: number | string | undefined): number {
+  const n = Math.floor(Number(points));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function isUniqueViolation(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /unique|duplicate key|23505/i.test(msg);
 }
 
 function normalizePhone(phone: string | undefined | null): string {
@@ -210,8 +216,6 @@ export class MembersService implements OnModuleInit {
   }
 
   async create(dto: UpsertMemberDto) {
-    const id = `m-${randomUUID().slice(0, 8)}`;
-    const code = dto.code?.trim() || (await this.nextMemberCode()).code;
     const points = clampPoints(dto.points);
     const name = dto.name.trim();
     const phone = normalizePhone(dto.phone);
@@ -221,29 +225,43 @@ export class MembersService implements OnModuleInit {
     const dup = await this.findActiveByPhone(phone);
     if (dup) {
       throw new BadRequestException(
-        `เบอร์นี้มีสมาชิกแล้ว (${dup.code} ${dup.name})`,
+        `เบอร์โทรนี้มีสมาชิกแล้ว: ${dup.name} (${dup.code})`,
       );
     }
     const ts = now();
-    await this.database.db.insert(pg.customers).values({
-      id,
-      code,
-      name,
-      phone,
-      points,
-      createdAt: ts,
-      updatedAt: ts,
-      deletedAt: null,
-    });
+    // รหัสออกที่เซิร์ฟเวอร์เสมอ — กันโค้ดค้างในฟอร์มชน unique แล้วต้องรีเฟรช
+    let createdId = "";
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const id = `m-${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+      const code = (await this.nextMemberCode()).code;
+      try {
+        await this.database.db.insert(pg.customers).values({
+          id,
+          code,
+          name,
+          phone,
+          points,
+          createdAt: ts,
+          updatedAt: ts,
+          deletedAt: null,
+        });
+        createdId = id;
+        break;
+      } catch (e) {
+        if (attempt < 5 && isUniqueViolation(e)) continue;
+        throw e;
+      }
+    }
+    if (!createdId) throw new BadRequestException("บันทึกไม่สำเร็จ ลองอีกครั้ง");
     if (points > 0) {
       await this.writeLedger({
-        customerId: id,
+        customerId: createdId,
         delta: points,
         reason: "admin_adjust",
         branchId: "admin",
       });
     }
-    return this.get(id);
+    return this.get(createdId);
   }
 
   async update(id: string, dto: Partial<UpsertMemberDto>) {
@@ -256,7 +274,7 @@ export class MembersService implements OnModuleInit {
       const dup = await this.findActiveByPhone(nextPhone, id);
       if (dup) {
         throw new BadRequestException(
-          `เบอร์นี้มีสมาชิกแล้ว (${dup.code} ${dup.name})`,
+          `เบอร์โทรนี้มีสมาชิกแล้ว: ${dup.name} (${dup.code})`,
         );
       }
     }

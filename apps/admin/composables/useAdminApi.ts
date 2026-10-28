@@ -35,6 +35,14 @@ export function useAdminApi() {
     get: <T>(path: string) => request<T>(path),
     post: <T>(path: string, body: unknown) =>
       request<T>(path, { method: "POST", body }),
+    postForm: <T>(path: string, body: Record<string, string | number | undefined | null>) => {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(body)) {
+        if (value == null) continue;
+        params.set(key, String(value));
+      }
+      return request<T>(path, { method: "POST", body: params });
+    },
     patch: <T>(path: string, body: unknown) =>
       request<T>(path, { method: "PATCH", body }),
     put: <T>(path: string, body: unknown) =>
