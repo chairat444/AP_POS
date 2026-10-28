@@ -13,7 +13,9 @@ export type MemberRecord = {
 
 export type UpsertMemberDto = {
   code?: string;
-  name: string;
+  name?: string;
+  /** UTF-8 hex ของชื่อ — กัน WAF หน้า HTTPS บล็อกบางชื่อไทย */
+  nameEnc?: string;
   phone?: string;
   points?: number;
 };

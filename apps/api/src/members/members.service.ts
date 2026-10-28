@@ -66,6 +66,15 @@ function normalizePhone(phone: string | undefined | null): string {
   return String(phone ?? "").replace(/\D/g, "");
 }
 
+function readName(dto: { name?: string; nameEnc?: string }) {
+  const enc = String(dto.nameEnc ?? "").trim();
+  if (/^[0-9a-f]+$/i.test(enc) && enc.length % 2 === 0 && enc.length >= 2) {
+    const decoded = Buffer.from(enc, "hex").toString("utf8").replace(/\u0000/g, "").trim();
+    if (decoded) return decoded;
+  }
+  return String(dto.name ?? "").trim();
+}
+
 @Injectable()
 export class MembersService implements OnModuleInit {
   constructor(private readonly database: DatabaseService) {}
@@ -217,7 +226,7 @@ export class MembersService implements OnModuleInit {
 
   async create(dto: UpsertMemberDto) {
     const points = clampPoints(dto.points);
-    const name = dto.name.trim();
+    const name = readName(dto);
     const phone = normalizePhone(dto.phone);
     if (!name) throw new BadRequestException("กรอกชื่อสมาชิก");
     if (!phone) throw new BadRequestException("กรอกเบอร์โทร");
@@ -282,7 +291,7 @@ export class MembersService implements OnModuleInit {
       .update(pg.customers)
       .set({
         code: dto.code?.trim() ?? current.code,
-        name: dto.name?.trim() ?? current.name,
+        name: readName(dto) || current.name,
         phone: nextPhone,
         points: nextPoints,
         updatedAt: now(),

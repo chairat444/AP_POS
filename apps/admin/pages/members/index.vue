@@ -226,6 +226,12 @@ function digits(phone?: string | null) {
   return String(phone ?? "").replace(/\D/g, "");
 }
 
+function utf8Hex(text: string) {
+  return Array.from(new TextEncoder().encode(text), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
 function findPhoneOwner(phone: string) {
   const p = digits(phone);
   if (p.length < 9) return null;
@@ -269,7 +275,7 @@ async function save() {
   error.value = "";
   try {
     const body = {
-      name: form.value.name.trim(),
+      nameEnc: utf8Hex(form.value.name.trim()),
       phone: form.value.phone.trim(),
       points: Math.max(0, Math.floor(Number(form.value.points) || 0)),
     };
