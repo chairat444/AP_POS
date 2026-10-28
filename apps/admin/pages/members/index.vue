@@ -9,9 +9,17 @@ type Member = {
   points: number;
   createdAt?: string;
   lastUsedAt?: string | null;
+  lastUsedBranch?: string | null;
 };
 
-type SortKey = "points" | "name" | "code" | "phone" | "createdAt" | "lastUsedAt";
+type SortKey =
+  | "points"
+  | "name"
+  | "code"
+  | "phone"
+  | "createdAt"
+  | "lastUsedAt"
+  | "lastUsedBranch";
 
 type MemberForm = {
   code: string;
@@ -64,6 +72,14 @@ function formatWhen(iso?: string | null) {
   });
 }
 
+function shortBranch(name?: string | null) {
+  if (!name) return "ยังไม่เคยใช้";
+  if (/หลุมดิน/.test(name)) return "หลุมดิน";
+  if (/เจ็ดเสมียน/.test(name)) return "เจ็ดเสมียน";
+  if (/บ้านฆ้อง|ฆ้อง/.test(name)) return "บ้านฆ้อง";
+  return name;
+}
+
 const filtered = computed(() => {
   const s = q.value.trim().toLowerCase();
   const digits = s.replace(/\D/g, "");
@@ -95,6 +111,12 @@ const filtered = computed(() => {
     }
     if (sortKey.value === "lastUsedAt") {
       return (ts(a.lastUsedAt) - ts(b.lastUsedAt)) * dir;
+    }
+    if (sortKey.value === "lastUsedBranch") {
+      return (
+        (a.lastUsedBranch ?? "").localeCompare(b.lastUsedBranch ?? "", "th") *
+        dir
+      );
     }
     return a.name.localeCompare(b.name, "th") * dir;
   });
@@ -138,6 +160,7 @@ const sortLabel = computed(() => {
     phone: "เบอร์",
     createdAt: "วันที่สมัคร",
     lastUsedAt: "ใช้งานล่าสุด",
+    lastUsedBranch: "ล่าสุดสาขา",
   };
   return labels[sortKey.value];
 });
@@ -430,6 +453,15 @@ onMounted(load);
                   ใช้ล่าสุด{{ sortMark("lastUsedAt") }}
                 </button>
               </th>
+              <th>
+                <button
+                  type="button"
+                  class="ui-th-sort"
+                  @click="toggleSort('lastUsedBranch')"
+                >
+                  ล่าสุดสาขา{{ sortMark("lastUsedBranch") }}
+                </button>
+              </th>
               <th class="ui-table__actions">จัดการ</th>
             </tr>
           </thead>
@@ -445,6 +477,7 @@ onMounted(load);
               <td class="ui-members__when">
                 {{ row.lastUsedAt ? formatWhen(row.lastUsedAt) : "ยังไม่เคยใช้" }}
               </td>
+              <td class="ui-members__when">{{ shortBranch(row.lastUsedBranch) }}</td>
               <td class="ui-table__actions">
                 <div class="ui-members__actions">
                   <NuxtLink

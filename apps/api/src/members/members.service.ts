@@ -4,7 +4,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { and, asc, desc, eq, gt, isNull, max, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, ne, sql } from "drizzle-orm";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -30,9 +30,19 @@ function now() {
   return new Date();
 }
 
+function lastUsedBranchLabel(
+  branchId: string | null | undefined,
+  branchName: string | null | undefined,
+): string | null {
+  if (!branchId) return null;
+  if (branchId === "admin") return "แอดมิน";
+  return branchName || branchId;
+}
+
 function toRecord(
   row: typeof pg.customers.$inferSelect,
   lastUsedAt?: Date | null,
+  lastUsedBranch?: string | null,
 ): MemberRecord {
   const created =
     row.createdAt instanceof Date
@@ -49,6 +59,7 @@ function toRecord(
     createdAt: created.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     lastUsedAt: lastUsedAt ? lastUsedAt.toISOString() : null,
+    lastUsedBranch: lastUsedBranch ?? null,
   };
 }
 
@@ -161,21 +172,40 @@ export class MembersService implements OnModuleInit {
   }
 
   async list() {
+    const lastUse = this.database.db
+      .selectDistinctOn([pg.pointLedger.customerId], {
+        customerId: pg.pointLedger.customerId,
+        lastUsedAt: pg.pointLedger.createdAt,
+        branchId: pg.pointLedger.branchId,
+      })
+      .from(pg.pointLedger)
+      .orderBy(
+        pg.pointLedger.customerId,
+        desc(pg.pointLedger.createdAt),
+        desc(pg.pointLedger.id),
+      )
+      .as("last_use");
+
     const rows = await this.database.db
       .select({
         customer: pg.customers,
-        lastUsedAt: max(pg.pointLedger.createdAt),
+        lastUsedAt: lastUse.lastUsedAt,
+        lastUsedBranchId: lastUse.branchId,
+        lastUsedBranchName: pg.branches.name,
       })
       .from(pg.customers)
-      .leftJoin(
-        pg.pointLedger,
-        eq(pg.pointLedger.customerId, pg.customers.id),
-      )
+      .leftJoin(lastUse, eq(lastUse.customerId, pg.customers.id))
+      .leftJoin(pg.branches, eq(pg.branches.id, lastUse.branchId))
       .where(isNull(pg.customers.deletedAt))
-      .groupBy(pg.customers.id)
       .orderBy(desc(pg.customers.createdAt));
     return {
-      members: rows.map((r) => toRecord(r.customer, r.lastUsedAt)),
+      members: rows.map((r) =>
+        toRecord(
+          r.customer,
+          r.lastUsedAt,
+          lastUsedBranchLabel(r.lastUsedBranchId, r.lastUsedBranchName),
+        ),
+      ),
       syncedAt: now().toISOString(),
     };
   }
