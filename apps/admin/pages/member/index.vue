@@ -507,43 +507,35 @@ onBeforeUnmount(clearIdle);
         <p>สมาชิก · สะสมแต้ม</p>
       </header>
 
-      <p v-if="showLineBonus" class="mk__line-bonus">
-        {{ lineOffer.headline }}
-      </p>
-
-      <div class="mk__perk">
-        <p class="mk__perk-lead">
-          สมัครฟรี ไม่มีค่าใช้จ่าย · สะสมแต้มไว้ใช้แทนเงินสด
+      <div class="mk__card">
+        <p v-if="showLineBonus" class="mk__line-bonus">
+          {{ lineOffer.headline }}
         </p>
         <ul class="mk__perk-list">
           <li>
-            <strong>ซื้อครบ 100 บาท</strong>
+            <strong>100 บาท</strong>
             <span>ได้ 1 แต้ม</span>
           </li>
           <li>
-            <strong>1 แต้ม = 1 บาท</strong>
-            <span>ใช้หักเงินในบิลถัดไป</span>
+            <strong>1 แต้ม</strong>
+            <span>= 1 บาท</span>
           </li>
           <li>
-            <strong>แต้มไม่มีวันหมดอายุ</strong>
-            <span>สะสมไว้ใช้เมื่อไหร่ก็ได้</span>
+            <strong>ไม่หมดอายุ</strong>
+            <span>ใช้ได้เรื่อยไป</span>
           </li>
         </ul>
       </div>
 
       <div class="mk__actions">
         <button type="button" class="mk__tile mk__tile--check" @click="goCheck">
-          <span class="mk__tile-kicker">มีบัตรแล้ว</span>
           <strong>เช็คแต้ม</strong>
           <span class="mk__tile-hint">ใส่เบอร์โทร</span>
         </button>
         <button type="button" class="mk__tile mk__tile--join" @click="goJoin">
-          <span class="mk__tile-kicker">ยังไม่เป็นสมาชิก</span>
           <strong>สมัครสมาชิก</strong>
           <span class="mk__tile-hint">{{
-            showLineBonus
-              ? `ฟรี · รับ ${lineOffer.points} แต้ม`
-              : "ฟรี · ไม่มีค่าใช้จ่าย"
+            showLineBonus ? `รับ ${lineOffer.points} แต้ม` : "สมัครฟรี"
           }}</span>
         </button>
       </div>
@@ -765,6 +757,22 @@ onBeforeUnmount(clearIdle);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
+.mk:has(.mk__home) {
+  display: flex;
+  flex-direction: column;
+  height: 100svh;
+  min-height: 100svh;
+  max-height: 100svh;
+  overflow: hidden;
+  padding: max(0.7rem, env(safe-area-inset-top)) 1.05rem
+    max(0.85rem, env(safe-area-inset-bottom));
+}
+.mk:has(.mk__home) .mk__bg {
+  background:
+    radial-gradient(95% 55% at 50% -12%, #ffc8c8 0%, transparent 58%),
+    radial-gradient(70% 40% at 110% 108%, #ffd8b8 0%, transparent 52%),
+    linear-gradient(180deg, #fff8f6 0%, #f6e9e6 100%);
+}
 .mk *,
 .mk *::before,
 .mk *::after {
@@ -787,6 +795,13 @@ onBeforeUnmount(clearIdle);
   min-height: calc(100dvh - 2.5rem);
   animation: mk-in 0.35s ease both;
 }
+.mk__home {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  gap: 0.75rem;
+  justify-content: center;
+}
 @keyframes mk-in {
   from {
     opacity: 0;
@@ -800,6 +815,66 @@ onBeforeUnmount(clearIdle);
 .mk__brand {
   text-align: center;
   padding: 1.25rem 0 0.5rem;
+}
+.mk__home .mk__brand {
+  padding: 0.2rem 0 0;
+}
+.mk__home .mk__logo {
+  width: 4.35rem;
+  height: 4.35rem;
+  padding: 0.18rem;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 0 3px #fff,
+    0 0 0 5px #efc2c2,
+    0 12px 26px #c6282828;
+}
+.mk__home .mk__brand h1 {
+  margin: 0.55rem 0 0.08rem;
+  font-size: clamp(1.55rem, 6.2vw, 1.95rem);
+}
+.mk__home .mk__brand p {
+  font-size: 0.92rem;
+  letter-spacing: 0.04em;
+}
+.mk__home .mk__card {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.65rem;
+  min-height: 0;
+  margin-top: 0.15rem;
+  padding: 1.05rem 0.75rem 1rem;
+  overflow: hidden;
+  border-radius: 1.35rem;
+  background: linear-gradient(180deg, #ffffff 0%, #fffaf7 100%);
+  border: 1px solid #f0d6d2;
+  box-shadow:
+    0 1px 0 #fff inset,
+    0 16px 36px #c6282812;
+}
+.mk__home .mk__card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #c62828 0%, #e8a598 50%, #c62828 100%);
+}
+.mk__home .mk__line-bonus {
+  margin: 0.15rem 0.15rem 0;
+  padding: 0.48rem 0.75rem;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #fff6d8 0%, #fde7a8 100%);
+  color: #7a4e00;
+  font-size: 0.9rem;
+  font-weight: 750;
+  box-shadow: 0 1px 0 #fff6 inset;
 }
 .mk__logo {
   width: 5.5rem;
@@ -856,22 +931,6 @@ onBeforeUnmount(clearIdle);
   background: #d1fae5;
   border-color: #34d399;
 }
-.mk__perk {
-  margin: 0.15rem 0 0.35rem;
-  padding: 1rem 1.05rem 1.05rem;
-  border-radius: 1.05rem;
-  background: #fff;
-  border: 1px solid var(--mk-line);
-  box-shadow: 0 8px 22px #c628280c;
-}
-.mk__perk-lead {
-  margin: 0 0 0.75rem;
-  text-align: center;
-  font-size: 1.02rem;
-  font-weight: 650;
-  line-height: 1.45;
-  color: var(--mk-red-deep);
-}
 .mk__perk-list {
   list-style: none;
   margin: 0;
@@ -879,29 +938,64 @@ onBeforeUnmount(clearIdle);
   display: grid;
   gap: 0.55rem;
 }
+.mk__home .mk__perk-list {
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0;
+}
 .mk__perk-list li {
   display: grid;
   gap: 0.1rem;
   padding: 0.55rem 0.7rem;
   border-radius: 0.75rem;
   background: var(--mk-red-soft);
-}
-.mk__perk-list strong {
-  font-size: 1.05rem;
-  font-weight: 750;
+  font-size: 0.95rem;
+  font-weight: 650;
+  line-height: 1.3;
   color: var(--mk-ink);
-  line-height: 1.25;
 }
-.mk__perk-list span {
-  font-size: 0.92rem;
-  color: #7a5a5a;
-  line-height: 1.35;
+.mk__home .mk__perk-list li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.12rem;
+  padding: 0.55rem 0.25rem;
+  background: transparent;
+  text-align: center;
+}
+.mk__home .mk__perk-list li + li::before {
+  content: "";
+  position: absolute;
+  top: 18%;
+  bottom: 18%;
+  left: 0;
+  width: 1px;
+  background: #f0d4d0;
+}
+.mk__home .mk__perk-list strong {
+  font-size: 1.02rem;
+  font-weight: 800;
+  color: var(--mk-red-deep);
+  line-height: 1.2;
+}
+.mk__home .mk__perk-list span {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #8a6a6a;
+  line-height: 1.3;
 }
 .mk__actions {
   display: grid;
   gap: 0.85rem;
   margin-top: auto;
   padding-bottom: 0.5rem;
+}
+.mk__home .mk__actions {
+  grid-template-columns: 1fr;
+  gap: 0.55rem;
+  margin-top: 0.15rem;
+  padding-bottom: 0;
 }
 .mk__tile {
   display: flex;
@@ -919,6 +1013,16 @@ onBeforeUnmount(clearIdle);
     border-color 0.15s ease,
     box-shadow 0.15s ease;
 }
+.mk__home .mk__tile {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 3.7rem;
+  padding: 0.75rem 1rem 0.75rem 1.1rem;
+  border-radius: 1.1rem;
+  text-align: left;
+}
 .mk__tile:active {
   transform: scale(0.985);
 }
@@ -932,6 +1036,19 @@ onBeforeUnmount(clearIdle);
   color: #fff;
   box-shadow: 0 12px 28px #c6282840;
 }
+.mk__home .mk__tile--check {
+  background: #fff;
+  border-color: #f0c8c4;
+  box-shadow: 0 8px 20px #c6282810;
+}
+.mk__home .mk__tile--join {
+  background: linear-gradient(165deg, #d32f2f 0%, var(--mk-red-deep) 100%);
+  box-shadow: 0 12px 26px #c6282845;
+}
+.mk__home .mk__tile--join .mk__tile-hint {
+  color: #ffe8e8;
+  opacity: 0.92;
+}
 .mk__tile-kicker {
   font-size: 0.88rem;
   font-weight: 600;
@@ -941,6 +1058,23 @@ onBeforeUnmount(clearIdle);
   font-size: 1.65rem;
   font-weight: 750;
   line-height: 1.15;
+}
+.mk__home .mk__tile strong {
+  font-size: 1.18rem;
+}
+.mk__home .mk__tile-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.82rem;
+  font-weight: 650;
+  opacity: 0.78;
+}
+.mk__home .mk__tile-hint::after {
+  content: "›";
+  font-size: 1.15rem;
+  line-height: 1;
+  opacity: 0.7;
 }
 .mk__tile-hint {
   font-size: 0.95rem;
@@ -1314,10 +1448,13 @@ onBeforeUnmount(clearIdle);
     padding: 1.75rem 1.75rem 2rem;
   }
   .mk__home .mk__actions {
-    grid-template-columns: 1fr 1fr;
-    margin-top: 2rem;
+    grid-template-columns: 1fr;
+    margin-top: 0;
   }
-  .mk__tile {
+  .mk__home .mk__tile {
+    min-height: 3.9rem;
+  }
+  .mk__panel:not(.mk__home) .mk__tile {
     min-height: 11rem;
     justify-content: center;
   }
