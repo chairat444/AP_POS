@@ -10,6 +10,7 @@ type Member = {
   createdAt?: string;
   lastUsedAt?: string | null;
   lastUsedBranch?: string | null;
+  lineLinked?: boolean;
 };
 
 type SortKey =
@@ -468,7 +469,10 @@ onMounted(load);
           <tbody>
             <tr v-for="row in pageRows" :key="row.id">
               <td>{{ row.code }}</td>
-              <td>{{ row.name }}</td>
+              <td>
+                {{ row.name }}
+                <span v-if="row.lineLinked" class="ui-members__line">ไลน์</span>
+              </td>
               <td>{{ row.phone || "-" }}</td>
               <td>
                 <strong>{{ row.points.toLocaleString("th-TH") }}</strong>
@@ -629,5 +633,17 @@ onMounted(load);
   white-space: nowrap;
   font-size: 0.86rem;
   color: #475569;
+}
+
+.ui-members__line {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #166534;
+  font-size: 0.7rem;
+  font-weight: 700;
+  vertical-align: 0.1em;
 }
 </style>

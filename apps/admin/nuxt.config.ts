@@ -91,6 +91,8 @@ export default defineNuxtConfig({
       apiBase: process.env.NUXT_PUBLIC_API_BASE || "/api",
       appName: process.env.NUXT_PUBLIC_APP_NAME || "AP POS Admin",
       appShortName: process.env.NUXT_PUBLIC_APP_SHORT_NAME || "AP",
+      lineLiffId:
+        process.env.NUXT_PUBLIC_LINE_LIFF_ID || "2012019273-uobv7VUH",
     },
   },
 });

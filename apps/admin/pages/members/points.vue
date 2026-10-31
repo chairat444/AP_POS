@@ -43,6 +43,7 @@ const reasonLabel: Record<string, string> = {
   sale_earn: "ได้แต้มจากบิล",
   sale_redeem: "ใช้แต้มเป็นส่วนลด",
   admin_adjust: "ปรับจากแอดมิน",
+  line_signup: "ของขวัญสมัครผ่านไลน์",
   "migrate sale earn": "ได้แต้มจากบิล (ย้ายข้อมูล)",
   "migrate sale redeem": "ใช้แต้ม (ย้ายข้อมูล)",
   "migrate opening points": "ยอดยกมาตอนย้ายข้อมูล",

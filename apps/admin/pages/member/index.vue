@@ -44,8 +44,19 @@ const member = ref<MemberView | null>(null);
 /** รหัสจาก QR (?k=) — เก็บ session ไว้ช่วงเปิดหน้า */
 const accessKey = ref("");
 const ready = ref(false);
+/** เปิดจากลิงก์ LINE OA (`&src=line`) หรือ LIFF */
+const fromLine = ref(false);
+const lineIdToken = ref("");
+const lineBound = ref(false);
+const lineOffer = ref({ active: false, points: 0, headline: "" });
 
 const hasAccess = computed(() => Boolean(accessKey.value));
+const showLineBonus = computed(
+  () =>
+    fromLine.value &&
+    lineOffer.value.active &&
+    lineOffer.value.points > 0,
+);
 
 function kioskOpts() {
   return {
@@ -214,10 +225,12 @@ async function submitJoin() {
       points: number;
     }>(`${apiBase.value}/members/kiosk/register`, {
       method: "POST",
-      body: maybeWrapWafRequestBody({ name: n, phone: phone.value }) as Record<
-        string,
-        unknown
-      >,
+      body: maybeWrapWafRequestBody({
+        name: n,
+        phone: phone.value,
+        source: fromLine.value || lineBound.value ? "line" : undefined,
+        idToken: lineIdToken.value || undefined,
+      }) as Record<string, unknown>,
       ...kioskOpts(),
     });
     member.value = {
@@ -297,10 +310,102 @@ function resolveAccessKey() {
   }
 }
 
+function resolveLineSource() {
+  const q = String(route.query.src ?? route.query.from ?? "")
+    .trim()
+    .toLowerCase();
+  if (q === "line" || q === "oa" || q === "liff") {
+    try {
+      sessionStorage.setItem("member-kiosk-src", "line");
+    } catch {
+      /* private mode */
+    }
+    fromLine.value = true;
+    return;
+  }
+  try {
+    fromLine.value = sessionStorage.getItem("member-kiosk-src") === "line";
+  } catch {
+    fromLine.value = false;
+  }
+}
+
+type LineLiff = {
+  init: (opts: { liffId: string }) => Promise<void>;
+  isLoggedIn: () => boolean;
+  isInClient: () => boolean;
+  login: () => void;
+  getIDToken?: () => string | null;
+  getProfile: () => Promise<{ displayName?: string }>;
+};
+
+async function initLiff() {
+  const liffId = String(config.public.lineLiffId || "").trim();
+  if (!liffId || typeof window === "undefined") return;
+  try {
+    const w = window as Window & { liff?: LineLiff };
+    if (!w.liff) {
+      await new Promise<void>((resolve, reject) => {
+        const s = document.createElement("script");
+        s.src = "https://static.line-scdn.net/liff/edge/2/sdk.js";
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error("liff"));
+        document.head.appendChild(s);
+      });
+    }
+    const liff = (window as Window & { liff: LineLiff }).liff;
+    await liff.init({ liffId });
+    if (!liff.isLoggedIn()) {
+      if (liff.isInClient()) liff.login();
+      return;
+    }
+    fromLine.value = true;
+    lineBound.value = true;
+    lineIdToken.value = liff.getIDToken?.() || "";
+    try {
+      const profile = await liff.getProfile();
+      if (!name.value.trim() && profile.displayName) {
+        name.value = profile.displayName;
+      }
+    } catch {
+      /* ยังไม่เปิด scope profile */
+    }
+  } catch {
+    /* เปิดจากเว็บ/QR ปกติ */
+  }
+}
+
+async function loadLineOffer() {
+  if (!hasAccess.value) return;
+  try {
+    const data = await $fetch<{
+      active?: boolean;
+      points?: number;
+      headline?: string;
+    }>(`${apiBase.value}/members/kiosk/offer`, {
+      query: { k: accessKey.value },
+      ...kioskOpts(),
+      timeout: 15_000,
+    });
+    const points = Math.max(0, Math.floor(Number(data.points) || 0));
+    lineOffer.value = {
+      active: Boolean(data.active) && points > 0,
+      points,
+      headline: String(data.headline ?? "").trim(),
+    };
+  } catch {
+    lineOffer.value = { active: false, points: 0, headline: "" };
+  }
+}
+
 onMounted(async () => {
   resolveAccessKey();
+  resolveLineSource();
+  await initLiff();
   ready.value = true;
-  if (hasAccess.value) await loadBranding();
+  if (hasAccess.value) {
+    await Promise.all([loadBranding(), loadLineOffer()]);
+  }
 });
 onBeforeUnmount(clearIdle);
 </script>
@@ -329,6 +434,14 @@ onBeforeUnmount(clearIdle);
         <h1>{{ brandName }}</h1>
         <p>สมาชิก · สะสมแต้ม</p>
       </header>
+
+      <p v-if="showLineBonus" class="mk__line-bonus">
+        {{ lineOffer.headline }}
+        <small>ของขวัญสำหรับสมาชิกใหม่ที่สมัครจากไลน์</small>
+      </p>
+      <p v-else-if="lineBound" class="mk__line-bonus">
+        เปิดจากไลน์แล้ว · สมัครแล้วจะผูกบัญชีนี้
+      </p>
 
       <div class="mk__perk">
         <p class="mk__perk-lead">
@@ -359,7 +472,11 @@ onBeforeUnmount(clearIdle);
         <button type="button" class="mk__tile mk__tile--join" @click="goJoin">
           <span class="mk__tile-kicker">ยังไม่เป็นสมาชิก</span>
           <strong>สมัครสมาชิก</strong>
-          <span class="mk__tile-hint">ฟรี · ไม่มีค่าใช้จ่าย</span>
+          <span class="mk__tile-hint">{{
+            showLineBonus
+              ? `ฟรี · รับ ${lineOffer.points} แต้ม`
+              : "ฟรี · ไม่มีค่าใช้จ่าย"
+          }}</span>
         </button>
       </div>
     </section>
@@ -447,6 +564,7 @@ onBeforeUnmount(clearIdle);
       <button type="button" class="mk__back" @click="resetHome">← กลับ</button>
       <p class="mk__shop">{{ brandName }}</p>
       <h2 class="mk__title">สมัครสมาชิก</h2>
+      <p v-if="showLineBonus" class="mk__line-bonus">{{ lineOffer.headline }}</p>
       <p class="mk__lead">กรอกชื่อกับเบอร์โทร · กดถัดไปเพื่อไปช่องถัดไป</p>
 
       <label class="mk__field">
@@ -522,9 +640,19 @@ onBeforeUnmount(clearIdle);
       <p class="mk__success-name">คุณ{{ member.name }}</p>
       <p class="mk__success-code">รหัสสมาชิก {{ member.code }}</p>
 
+      <p
+        v-if="fromLine && member.points > 0"
+        class="mk__line-bonus mk__line-bonus--got"
+      >
+        ได้รับ {{ formatPoints(member.points) }} แต้มของขวัญจากไลน์แล้ว
+      </p>
+
       <div class="mk__success-card">
         <p class="mk__success-card-title">พร้อมสะสมแต้มแล้ว</p>
         <ul class="mk__success-list">
+          <li v-if="fromLine && member.points > 0">
+            สมัครผ่านไลน์ รับ {{ formatPoints(member.points) }} แต้ม
+          </li>
           <li>ซื้อครบ 100 บาท ได้ 1 แต้ม</li>
           <li>1 แต้มใช้แทนเงินสด 1 บาท</li>
           <li>แต้มไม่มีวันหมดอายุ</li>
@@ -635,6 +763,29 @@ onBeforeUnmount(clearIdle);
   color: #7a5a5a;
   font-size: 1.05rem;
   font-weight: 500;
+}
+.mk__line-bonus {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.95rem;
+  background: #ecfdf5;
+  border: 1px solid #6ee7b7;
+  color: #065f46;
+  font-weight: 800;
+  text-align: center;
+  line-height: 1.35;
+  font-size: 1.05rem;
+}
+.mk__line-bonus small {
+  display: block;
+  margin-top: 0.2rem;
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: #047857;
+}
+.mk__line-bonus--got {
+  background: #d1fae5;
+  border-color: #34d399;
 }
 .mk__perk {
   margin: 0.15rem 0 0.35rem;

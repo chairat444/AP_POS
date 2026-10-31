@@ -21,6 +21,7 @@ import {
   DEFAULT_BRANDING_CONFIG,
   DEFAULT_CUSTOMER_ADS_CONFIG,
   DEFAULT_DISPLAY_CONFIG,
+  DEFAULT_LINE_SIGNUP_CONFIG,
   DEFAULT_POINTS_CONFIG,
   DEFAULT_PRICING_CONFIG,
   type AppSettingsRecord,
@@ -28,12 +29,14 @@ import {
   type CustomerAdItem,
   type CustomerAdsConfig,
   type DisplayConfig,
+  type LineSignupConfig,
   type PointsConfig,
   type PricingConfig,
   type UpdateBrandingDto,
   type UpdateCustomerAdsDto,
   type UpdateDisplayDto,
   type UpdateKeybindingsDto,
+  type UpdateLineSignupDto,
   type UpdatePointsDto,
   type UpdatePricingDto,
 } from "./settings.types";
@@ -44,6 +47,22 @@ const PRICING_KEY = "pricing";
 const BRANDING_KEY = "branding";
 const CUSTOMER_ADS_KEY = "customerAds";
 const KEYBINDINGS_KEY = "keybindings";
+const LINE_SIGNUP_KEY = "lineSignup";
+
+function bangkokToday(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Bangkok" });
+}
+
+function sanitizeYmd(raw: unknown): string {
+  const s = String(raw ?? "").trim().slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
+}
+
+function formatLineHeadline(template: string, points: number): string {
+  const t = template.trim() || DEFAULT_LINE_SIGNUP_CONFIG.headline;
+  if (t.includes("{n}")) return t.split("{n}").join(String(points));
+  return t;
+}
 
 function now() {
   return new Date();
@@ -212,6 +231,72 @@ export class SettingsService implements OnModuleInit {
     } catch {
       return { ...DEFAULT_POINTS_CONFIG };
     }
+  }
+
+  async getLineSignup(): Promise<LineSignupConfig> {
+    const rows = await this.database.db
+      .select()
+      .from(pg.appSettings)
+      .where(eq(pg.appSettings.key, LINE_SIGNUP_KEY))
+      .limit(1);
+    if (!rows[0]) return { ...DEFAULT_LINE_SIGNUP_CONFIG };
+    try {
+      const parsed = JSON.parse(rows[0].value) as Partial<LineSignupConfig>;
+      const bonus = Math.floor(Number(parsed.bonusPoints));
+      const headline = String(parsed.headline ?? "").trim();
+      return {
+        enabled:
+          parsed.enabled == null
+            ? DEFAULT_LINE_SIGNUP_CONFIG.enabled
+            : Boolean(parsed.enabled),
+        bonusPoints:
+          Number.isFinite(bonus) && bonus >= 0
+            ? Math.min(10_000, bonus)
+            : DEFAULT_LINE_SIGNUP_CONFIG.bonusPoints,
+        startDate: sanitizeYmd(parsed.startDate),
+        endDate: sanitizeYmd(parsed.endDate),
+        headline: headline || DEFAULT_LINE_SIGNUP_CONFIG.headline,
+      };
+    } catch {
+      return { ...DEFAULT_LINE_SIGNUP_CONFIG };
+    }
+  }
+
+  /** จำนวนแต้มของขวัญที่ให้จริงวันนี้ · 0 = ปิดหรือนอกช่วง */
+  async activeLineSignupBonus(): Promise<number> {
+    const c = await this.getLineSignup();
+    if (!c.enabled || c.bonusPoints <= 0) return 0;
+    const today = bangkokToday();
+    if (c.startDate && today < c.startDate) return 0;
+    if (c.endDate && today > c.endDate) return 0;
+    return c.bonusPoints;
+  }
+
+  async publicLineOffer() {
+    const c = await this.getLineSignup();
+    const points = await this.activeLineSignupBonus();
+    return {
+      active: points > 0,
+      points,
+      headline: formatLineHeadline(c.headline, points || c.bonusPoints),
+    };
+  }
+
+  lineJoinUrl(): string | null {
+    const liffId = (
+      process.env.LINE_LIFF_ID ||
+      process.env.NUXT_PUBLIC_LINE_LIFF_ID ||
+      "2012019273-uobv7VUH"
+    ).trim();
+    if (liffId) return `https://liff.line.me/${liffId}`;
+    const k = (process.env.MEMBER_KIOSK_KEY ?? "").trim();
+    if (!k) return null;
+    const base = (
+      process.env.PUBLIC_ADMIN_URL ||
+      process.env.NUXT_PUBLIC_SITE_URL ||
+      "https://pos.chinthurakij.com"
+    ).replace(/\/$/, "");
+    return `${base}/member?k=${encodeURIComponent(k)}&src=line`;
   }
 
   async getDisplay(): Promise<DisplayConfig> {
@@ -523,6 +608,36 @@ export class SettingsService implements OnModuleInit {
     }
     await this.upsert(POINTS_KEY, JSON.stringify(next));
     return this.get();
+  }
+
+  async updateLineSignup(dto: UpdateLineSignupDto): Promise<LineSignupConfig> {
+    const current = await this.getLineSignup();
+    const bonus =
+      dto.bonusPoints == null
+        ? current.bonusPoints
+        : Math.floor(Number(dto.bonusPoints));
+    if (!Number.isFinite(bonus) || bonus < 0 || bonus > 10_000) {
+      throw new BadRequestException("แต้มของขวัญต้องเป็น 0–10000");
+    }
+    const startDate =
+      dto.startDate === undefined ? current.startDate : sanitizeYmd(dto.startDate);
+    const endDate =
+      dto.endDate === undefined ? current.endDate : sanitizeYmd(dto.endDate);
+    if (startDate && endDate && endDate < startDate) {
+      throw new BadRequestException("วันสิ้นสุดต้องไม่ก่อนวันเริ่ม");
+    }
+    const headline = String(
+      dto.headline === undefined ? current.headline : dto.headline,
+    ).trim();
+    const next: LineSignupConfig = {
+      enabled: dto.enabled == null ? current.enabled : Boolean(dto.enabled),
+      bonusPoints: bonus,
+      startDate,
+      endDate,
+      headline: headline.slice(0, 80) || DEFAULT_LINE_SIGNUP_CONFIG.headline,
+    };
+    await this.upsert(LINE_SIGNUP_KEY, JSON.stringify(next));
+    return next;
   }
 
   async updateDisplay(dto: UpdateDisplayDto): Promise<AppSettingsRecord> {

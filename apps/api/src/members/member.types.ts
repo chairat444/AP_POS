@@ -4,6 +4,8 @@ export type MemberRecord = {
   name: string;
   phone: string;
   points: number;
+  /** ผูก LINE OA แล้ว */
+  lineLinked?: boolean;
   /** วันที่สมัคร */
   createdAt: string;
   updatedAt: string;
@@ -20,4 +22,5 @@ export type UpsertMemberDto = {
   nameEnc?: string;
   phone?: string;
   points?: number;
+  lineUserId?: string | null;
 };

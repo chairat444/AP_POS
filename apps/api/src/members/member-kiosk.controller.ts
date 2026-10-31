@@ -15,6 +15,7 @@ import {
   requireKioskKey,
 } from "./member-kiosk.access";
 import { MembersService } from "./members.service";
+import { SettingsService } from "../settings/settings.service";
 
 /**
  * สมัคร/เช็คแต้มผ่าน QR → เว็บบนมือถือลูกค้า
@@ -24,7 +25,19 @@ import { MembersService } from "./members.service";
 @Public()
 @Controller("members/kiosk")
 export class MemberKioskController {
-  constructor(private readonly members: MembersService) {}
+  constructor(
+    private readonly members: MembersService,
+    private readonly settings: SettingsService,
+  ) {}
+
+  @Get("offer")
+  offer(
+    @Query("k") k = "",
+    @Headers("x-member-kiosk-key") headerKey = "",
+  ) {
+    requireKioskKey(headerKey || k);
+    return this.settings.publicLineOffer();
+  }
 
   @Get("lookup")
   lookup(
@@ -43,7 +56,7 @@ export class MemberKioskController {
 
   @Post("register")
   register(
-    @Body() body: { name?: string; phone?: string },
+    @Body() body: { name?: string; phone?: string; source?: string; idToken?: string },
     @Query("k") k = "",
     @Headers("x-member-kiosk-key") headerKey = "",
     @Req() req: { ip?: string; headers?: Record<string, string | undefined> },
@@ -59,6 +72,11 @@ export class MemberKioskController {
     assertKioskRate(`kiosk-reg:ip:${ip}`, 8, 60_000);
     assertKioskRate(`kiosk-reg:phone:${phoneKey}`, 3, 60 * 60_000);
 
-    return this.members.registerFromKiosk({ name, phone });
+    return this.members.registerFromKiosk({
+      name,
+      phone,
+      source: body?.source,
+      idToken: body?.idToken,
+    });
   }
 }

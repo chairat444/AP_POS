@@ -61,6 +61,8 @@ export const customers = pgTable("customers", {
   name: text("name").notNull(),
   phone: text("phone"),
   points: integer("points").notNull().default(0),
+  /** LINE user ID จาก LIFF (`U` + 32 hex) · ว่าง = ยังไม่ผูก */
+  lineUserId: text("line_user_id").unique(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),

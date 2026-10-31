@@ -4,15 +4,36 @@ type PointsConfig = {
   bahtPerRedeemPoint: number;
 };
 
+type LineSignup = {
+  enabled: boolean;
+  bonusPoints: number;
+  startDate: string;
+  endDate: string;
+  headline: string;
+  active?: boolean;
+  headlinePreview?: string;
+  joinUrl?: string | null;
+};
+
 const { get, post } = useAdminApi();
 const pending = ref(false);
 const saving = ref(false);
 const error = ref("");
 const ok = ref("");
+const copied = ref(false);
 const form = reactive({
   bahtPerPoint: "100",
   bahtPerRedeemPoint: "1",
 });
+const lineForm = reactive({
+  enabled: true,
+  bonusPoints: "10",
+  startDate: "",
+  endDate: "",
+  headline: "สมัครผ่านไลน์วันนี้รับ {n} แต้ม",
+});
+const joinUrl = ref("");
+const lineActive = ref(false);
 
 const previewEarn = computed(() => {
   const n = Number(form.bahtPerPoint);
@@ -29,14 +50,32 @@ const previewRedeem = computed(() => {
   })} บาท`;
 });
 
+const previewLine = computed(() => {
+  const n = Number(lineForm.bonusPoints);
+  const pts = Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  const t = lineForm.headline.trim() || "สมัครผ่านไลน์วันนี้รับ {n} แต้ม";
+  return t.includes("{n}") ? t.split("{n}").join(String(pts)) : t;
+});
+
 async function load() {
   pending.value = true;
   error.value = "";
   ok.value = "";
   try {
-    const data = await get<{ points: PointsConfig }>("/settings");
+    const [data, line] = await Promise.all([
+      get<{ points: PointsConfig }>("/settings"),
+      get<LineSignup>("/settings/line-signup"),
+    ]);
     form.bahtPerPoint = String(data.points?.bahtPerPoint ?? 100);
     form.bahtPerRedeemPoint = String(data.points?.bahtPerRedeemPoint ?? 1);
+    lineForm.enabled = line.enabled !== false;
+    lineForm.bonusPoints = String(line.bonusPoints ?? 10);
+    lineForm.startDate = line.startDate || "";
+    lineForm.endDate = line.endDate || "";
+    lineForm.headline =
+      line.headline || "สมัครผ่านไลน์วันนี้รับ {n} แต้ม";
+    joinUrl.value = line.joinUrl || "";
+    lineActive.value = Boolean(line.active);
   } catch (e) {
     error.value = e instanceof Error ? e.message : "โหลดตั้งค่าไม่สำเร็จ";
   } finally {
@@ -53,7 +92,14 @@ async function save() {
       bahtPerPoint: Number(form.bahtPerPoint),
       bahtPerRedeemPoint: Number(form.bahtPerRedeemPoint),
     });
-    ok.value = "บันทึกแล้ว — POS จะได้รับตอน sync";
+    await post("/settings/line-signup", {
+      enabled: lineForm.enabled,
+      bonusPoints: Number(lineForm.bonusPoints),
+      startDate: lineForm.startDate,
+      endDate: lineForm.endDate,
+      headline: lineForm.headline,
+    });
+    ok.value = "บันทึกแล้ว — POS จะได้รับอัตราแต้มตอน sync · แคมเปญไลน์ใช้ทันที";
     await load();
   } catch (e: unknown) {
     const msg =
@@ -63,6 +109,19 @@ async function save() {
     error.value = Array.isArray(msg) ? msg.join(", ") : String(msg);
   } finally {
     saving.value = false;
+  }
+}
+
+async function copyJoinUrl() {
+  if (!joinUrl.value) return;
+  try {
+    await navigator.clipboard.writeText(joinUrl.value);
+    copied.value = true;
+    window.setTimeout(() => {
+      copied.value = false;
+    }, 2000);
+  } catch {
+    error.value = "คัดลอกลิงก์ไม่สำเร็จ · คัดลอกจากช่องด้านล่างเอง";
   }
 }
 
@@ -126,9 +185,74 @@ onMounted(load);
       </div>
     </div>
 
+    <div class="ui-card ui-points-card" style="max-width: 40rem">
+      <div class="ui-card__toolbar">
+        <span class="ui-toolbar-meta ui-toolbar-meta--alone">สมัครผ่าน LINE OA</span>
+      </div>
+      <div style="padding: 1.15rem 1.25rem 1.35rem">
+        <label class="ui-check" style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem">
+          <input v-model="lineForm.enabled" type="checkbox" />
+          <span>ให้แต้มของขวัญตอนสมัครจากลิงก์ไลน์</span>
+        </label>
+        <label class="ui-field">
+          <span>ได้กี่แต้ม</span>
+          <input
+            v-model="lineForm.bonusPoints"
+            class="ui-input"
+            type="number"
+            min="0"
+            max="10000"
+            step="1"
+          />
+        </label>
+        <label class="ui-field">
+          <span>ข้อความบนหน้าสมัคร · ใช้ {"{n}"} แทนจำนวนแต้ม</span>
+          <input
+            v-model="lineForm.headline"
+            class="ui-input"
+            type="text"
+            maxlength="80"
+            placeholder="สมัครผ่านไลน์วันนี้รับ {n} แต้ม"
+          />
+        </label>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem">
+          <label class="ui-field">
+            <span>เริ่ม (ว่าง = ทันที)</span>
+            <input v-model="lineForm.startDate" class="ui-input" type="date" />
+          </label>
+          <label class="ui-field">
+            <span>ถึง (ว่าง = ไม่หมดอายุ)</span>
+            <input v-model="lineForm.endDate" class="ui-input" type="date" />
+          </label>
+        </div>
+        <p class="ui-field-hint">
+          {{ previewLine }}
+          <template v-if="lineForm.enabled">
+            · ตอนนี้{{ lineActive ? "กำลังให้แต้ม" : "ยังไม่ถึงช่วงแคมเปญ" }}
+          </template>
+          <template v-else> · ปิดอยู่</template>
+        </p>
+        <p class="ui-field-hint">
+          ใส่ลิงก์ LIFF นี้ในเมนูลัด / ข้อความต้อนรับของ LINE OA
+          (`https://liff.line.me/…`) ระบบจะผูก LINE user ID ให้
+        </p>
+        <div v-if="joinUrl" style="display: flex; gap: 0.5rem; align-items: stretch">
+          <input class="ui-input" type="text" readonly :value="joinUrl" />
+          <button type="button" class="ui-btn ui-btn--ghost" @click="copyJoinUrl">
+            {{ copied ? "คัดลอกแล้ว" : "คัดลอก" }}
+          </button>
+        </div>
+        <p v-else class="ui-field-hint">
+          ยังไม่มีรหัส kiosk ในเซิร์ฟเวอร์ · เอาลิงก์ QR สมัครสมาชิกมาต่อท้าย
+          <code>&src=line</code>
+        </p>
+      </div>
+    </div>
+
     <div class="ui-points-preview" style="max-width: 40rem">
       <div>{{ previewEarn }}</div>
       <div>{{ previewRedeem }}</div>
+      <div>{{ previewLine }}</div>
     </div>
 
     <div style="margin-top: 1.15rem">

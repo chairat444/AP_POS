@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { pg } from "@ap-pos/db";
 import { DatabaseService } from "../db/database.service";
+import { SettingsService } from "../settings/settings.service";
+import { verifyLineIdToken } from "./line-id-token";
 import type { MemberRecord, UpsertMemberDto } from "./member.types";
 
 export type PointHistoryEntry = {
@@ -56,6 +58,7 @@ function toRecord(
     name: row.name,
     phone: row.phone ?? "",
     points: row.points,
+    lineLinked: Boolean(row.lineUserId),
     createdAt: created.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     lastUsedAt: lastUsedAt ? lastUsedAt.toISOString() : null,
@@ -88,7 +91,10 @@ function readName(dto: { name?: string; nameEnc?: string }) {
 
 @Injectable()
 export class MembersService implements OnModuleInit {
-  constructor(private readonly database: DatabaseService) {}
+  constructor(
+    private readonly database: DatabaseService,
+    private readonly settings: SettingsService,
+  ) {}
 
   async onModuleInit() {
     const existing = await this.database.db.select().from(pg.customers).limit(1);
@@ -162,13 +168,88 @@ export class MembersService implements OnModuleInit {
     return this.findActiveByPhone(phone);
   }
 
-  /** สมัครจาก kiosk — บังคับแต้มเริ่ม 0 · ห้ามตั้งแต้มเอง */
-  async registerFromKiosk(dto: { name?: string; phone?: string }) {
-    return this.create({
-      name: String(dto.name ?? ""),
-      phone: String(dto.phone ?? ""),
-      points: 0,
-    });
+  private async findActiveByLineUserId(lineUserId: string) {
+    if (!lineUserId) return null;
+    const rows = await this.database.db
+      .select()
+      .from(pg.customers)
+      .where(
+        and(isNull(pg.customers.deletedAt), eq(pg.customers.lineUserId, lineUserId)),
+      )
+      .limit(1);
+    return rows[0] ? toRecord(rows[0]) : null;
+  }
+
+  private async linkLineUser(memberId: string, lineUserId: string) {
+    const taken = await this.findActiveByLineUserId(lineUserId);
+    if (taken && taken.id !== memberId) {
+      throw new BadRequestException("ไลน์นี้ผูกกับสมาชิกอื่นแล้ว");
+    }
+    if (taken?.id === memberId) return;
+    await this.database.db
+      .update(pg.customers)
+      .set({ lineUserId, updatedAt: now() })
+      .where(
+        and(
+          eq(pg.customers.id, memberId),
+          isNull(pg.customers.deletedAt),
+          isNull(pg.customers.lineUserId),
+        ),
+      );
+  }
+
+  /** สมัครจาก kiosk — แต้มเริ่ม 0 ยกเว้นแคมเปญสมัครผ่าน LINE ที่ยืนยัน LIFF แล้ว */
+  async registerFromKiosk(dto: {
+    name?: string;
+    phone?: string;
+    source?: string;
+    idToken?: string;
+  }) {
+    const lineUserId = await verifyLineIdToken(dto.idToken);
+    const fromLine =
+      Boolean(lineUserId) ||
+      String(dto.source ?? "").trim().toLowerCase() === "line";
+    if (lineUserId) {
+      const existingLine = await this.findActiveByLineUserId(lineUserId);
+      if (existingLine) {
+        const phone = normalizePhone(dto.phone);
+        if (phone && phone !== normalizePhone(existingLine.phone)) {
+          throw new BadRequestException(
+            `ไลน์นี้ผูกสมาชิกแล้ว: ${existingLine.name} (${existingLine.code})`,
+          );
+        }
+      }
+    }
+    let bonus = 0;
+    let ledgerReason: string | undefined;
+    if (fromLine && lineUserId) {
+      bonus = await this.settings.activeLineSignupBonus();
+      if (bonus > 0) ledgerReason = "line_signup";
+    }
+    try {
+      return await this.create(
+        {
+          name: String(dto.name ?? ""),
+          phone: String(dto.phone ?? ""),
+          points: bonus,
+          lineUserId,
+        },
+        ledgerReason ? { ledgerReason } : undefined,
+      );
+    } catch (e) {
+      if (lineUserId && e instanceof BadRequestException) {
+        const phone = normalizePhone(dto.phone);
+        const dup = phone ? await this.findActiveByPhone(phone) : null;
+        if (dup) {
+          try {
+            await this.linkLineUser(dup.id, lineUserId);
+          } catch {
+            /* ผูกไม่ได้ก็คืน error เดิม */
+          }
+        }
+      }
+      throw e;
+    }
   }
 
   async list() {
@@ -254,7 +335,10 @@ export class MembersService implements OnModuleInit {
     return toRecord(rows[0]);
   }
 
-  async create(dto: UpsertMemberDto) {
+  async create(
+    dto: UpsertMemberDto,
+    opts?: { ledgerReason?: string },
+  ) {
     const points = clampPoints(dto.points);
     const name = readName(dto);
     const phone = normalizePhone(dto.phone);
@@ -280,6 +364,7 @@ export class MembersService implements OnModuleInit {
           name,
           phone,
           points,
+          lineUserId: dto.lineUserId || null,
           createdAt: ts,
           updatedAt: ts,
           deletedAt: null,
@@ -296,7 +381,7 @@ export class MembersService implements OnModuleInit {
       await this.writeLedger({
         customerId: createdId,
         delta: points,
-        reason: "admin_adjust",
+        reason: opts?.ledgerReason || "admin_adjust",
         branchId: "admin",
       });
     }

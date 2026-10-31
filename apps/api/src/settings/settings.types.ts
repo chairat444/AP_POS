@@ -8,6 +8,34 @@ export const DEFAULT_POINTS_CONFIG: PointsConfig = {
   bahtPerRedeemPoint: 1,
 };
 
+/** แต้มของขวัญตอนสมัครผ่านลิงก์ LINE OA (`/member?k=…&src=line`) */
+export type LineSignupConfig = {
+  enabled: boolean;
+  bonusPoints: number;
+  /** YYYY-MM-DD โซนไทย · ว่าง = ไม่จำกัดวันเริ่ม */
+  startDate: string;
+  /** YYYY-MM-DD โซนไทย · ว่าง = ไม่จำกัดวันสิ้นสุด */
+  endDate: string;
+  /** ใช้ {n} แทนจำนวนแต้ม */
+  headline: string;
+};
+
+export const DEFAULT_LINE_SIGNUP_CONFIG: LineSignupConfig = {
+  enabled: true,
+  bonusPoints: 10,
+  startDate: "",
+  endDate: "",
+  headline: "สมัครผ่านไลน์วันนี้รับ {n} แต้ม",
+};
+
+export type UpdateLineSignupDto = {
+  enabled?: boolean;
+  bonusPoints?: number;
+  startDate?: string;
+  endDate?: string;
+  headline?: string;
+};
+
 export type DisplayConfig = {
   /** เปิดจอลูกค้า (จอ 2) */
   customerScreenEnabled: boolean;

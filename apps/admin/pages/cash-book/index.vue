@@ -1840,16 +1840,16 @@ function toggleBuckets() {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 2px;
+  gap: 3px;
 }
 .cb-b__total {
-  font-size: 1rem;
+  font-size: 1.05rem;
   font-weight: 800;
-  color: #1d4ed8;
+  color: #0f172a;
   line-height: 1.2;
   padding-bottom: 5px;
-  margin-bottom: 2px;
-  border-bottom: 1px dashed #e7e5e4;
+  margin-bottom: 1px;
+  border-bottom: 1px dashed #d6d3d1;
 }
 .cb-b__total--empty {
   color: #d6d3d1;
@@ -1862,40 +1862,41 @@ function toggleBuckets() {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 10px;
-  font-size: 0.72rem;
-  line-height: 1.35;
+  gap: 8px;
+  font-size: 0.78rem;
+  line-height: 1.3;
+  padding: 2px 7px;
+  border-radius: 999px;
 }
 .cb-b__k {
-  color: #a8a29e;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 .cb-b__k::before {
   content: "";
   display: inline-block;
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   margin-right: 5px;
   border-radius: 99px;
-  vertical-align: 0.05em;
+  vertical-align: 0.08em;
   background: currentColor;
 }
 .cb-b__v {
-  font-weight: 700;
+  font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
-.cb-b__row--cash .cb-b__k,
-.cb-b__row--cash .cb-b__v {
-  color: #2563eb;
+.cb-b__row--cash {
+  background: #d1fae5;
+  color: #065f46;
 }
-.cb-b__row--xfer .cb-b__k,
-.cb-b__row--xfer .cb-b__v {
-  color: #0f766e;
+.cb-b__row--xfer {
+  background: #dbeafe;
+  color: #1e3a8a;
 }
-.cb-b__row--gov .cb-b__k,
-.cb-b__row--gov .cb-b__v {
-  color: #7c3aed;
+.cb-b__row--gov {
+  background: #ede9fe;
+  color: #6b21a8;
 }
 .cb-sheet-table tfoot .cb-branch-cell {
   border-left: 1px solid #fed7aa;
@@ -1904,18 +1905,18 @@ function toggleBuckets() {
   border-bottom-color: #fdba74;
 }
 .cb-xfer {
-  color: #0f766e;
+  color: #1e3a8a;
   font-weight: 600;
 }
 .cb-bill-n {
   margin-left: 2px;
-  font-size: 0.72em;
+  font-size: 0.78em;
   font-weight: 700;
-  color: #0f766e;
-  opacity: 0.85;
+  color: inherit;
+  opacity: 0.72;
 }
 .cb-gov {
-  color: #7c3aed;
+  color: #6b21a8;
   font-weight: 600;
 }
 .cb-sheet-table td {

@@ -78,6 +78,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         deleted_at TIMESTAMPTZ
       );
       ALTER TABLE customers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ;
+      ALTER TABLE customers ADD COLUMN IF NOT EXISTS line_user_id TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS customers_line_user_id_uidx
+        ON customers (line_user_id)
+        WHERE line_user_id IS NOT NULL;
       UPDATE customers SET created_at = COALESCE(created_at, updated_at, NOW()) WHERE created_at IS NULL;
       ALTER TABLE customers ALTER COLUMN created_at SET DEFAULT NOW();
       ALTER TABLE customers ALTER COLUMN created_at SET NOT NULL;

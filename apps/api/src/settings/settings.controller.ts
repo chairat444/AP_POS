@@ -23,6 +23,7 @@ import {
   type UpdateCustomerAdsDto,
   type UpdateDisplayDto,
   type UpdateKeybindingsDto,
+  type UpdateLineSignupDto,
   type UpdatePointsDto,
   type UpdatePricingDto,
 } from "./settings.types";
@@ -83,6 +84,30 @@ export class SettingsController {
   @Post("points")
   updatePoints(@Body() body: UpdatePointsDto) {
     return this.settings.updatePoints(body);
+  }
+
+  @Get("line-signup")
+  async lineSignup() {
+    const config = await this.settings.getLineSignup();
+    const offer = await this.settings.publicLineOffer();
+    return {
+      ...config,
+      active: offer.active,
+      headlinePreview: offer.headline,
+      joinUrl: this.settings.lineJoinUrl(),
+    };
+  }
+
+  @Post("line-signup")
+  async updateLineSignup(@Body() body: UpdateLineSignupDto) {
+    const config = await this.settings.updateLineSignup(body);
+    const offer = await this.settings.publicLineOffer();
+    return {
+      ...config,
+      active: offer.active,
+      headlinePreview: offer.headline,
+      joinUrl: this.settings.lineJoinUrl(),
+    };
   }
 
   @Get("display")
