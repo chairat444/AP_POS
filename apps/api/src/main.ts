@@ -1,6 +1,5 @@
 import { NestFactory } from "@nestjs/core";
 import { NestExpressApplication } from "@nestjs/platform-express";
-import { json, urlencoded, type Request, type Response, type NextFunction } from "express";
 import { join } from "node:path";
 import { readFileSync, existsSync } from "node:fs";
 import { unwrapWafJsonBody } from "@ap-pos/shared";
@@ -25,9 +24,9 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bodyParser: false,
   });
-  app.use(json({ limit: "8mb" }));
-  app.use(urlencoded({ extended: true, limit: "8mb" }));
-  app.use((req: Request, _res: Response, next: NextFunction) => {
+  app.useBodyParser("json", { limit: "8mb" });
+  app.useBodyParser("urlencoded", { extended: true, limit: "8mb" });
+  app.use((req: { body?: unknown }, _res: unknown, next: () => void) => {
     if (req.body && typeof req.body === "object") {
       req.body = unwrapWafJsonBody(req.body);
     }
