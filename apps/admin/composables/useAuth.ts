@@ -1,3 +1,5 @@
+import { maybeWrapWafRequestBody } from "@ap-pos/shared";
+
 type AuthUser = {
   id: string;
   code: string;
@@ -47,7 +49,10 @@ export function useAuth() {
       `${base}/auth/login`,
       {
         method: "POST",
-        body: { code, password },
+        body: maybeWrapWafRequestBody({ code, password }) as Record<
+          string,
+          unknown
+        >,
       },
     );
     persist(data.token, data.user);

@@ -9,4 +9,5 @@ export * from "./commission";
 export * from "./pricing";
 export * from "./purchase";
 export * from "./promptpay";
+export * from "./waf-body";
 

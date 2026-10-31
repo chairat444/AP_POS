@@ -160,9 +160,10 @@ const activeQuery = computed(() => {
 
 const filteredSuggestions = computed(() => {
   const q = activeQuery.value.trim().toLowerCase();
-  const list = descOptions.value;
-  if (!q) return list.slice(0, 12);
-  return list.filter((d) => d.toLowerCase().includes(q)).slice(0, 12);
+  if (!q) return [];
+  return descOptions.value
+    .filter((d) => d.toLowerCase().includes(q))
+    .slice(0, 12);
 });
 
 function baht(n: number) {
@@ -221,6 +222,66 @@ function branchMonthTransferBills(branchId: string) {
   );
 }
 
+function branchDayTotal(row: DaySummary, branchId: string) {
+  const p = branchSaleParts(row, branchId);
+  return p.amount || p.cash + p.transfer + p.government;
+}
+
+type BranchLine = {
+  key: string;
+  label: string;
+  amount: number;
+  bills?: number;
+};
+
+function branchLinesFromParts(p: {
+  cash: number;
+  transfer: number;
+  government: number;
+  transferBills: number;
+}): BranchLine[] {
+  const lines: BranchLine[] = [];
+  if (p.cash) lines.push({ key: "cash", label: "สด", amount: p.cash });
+  if (p.transfer) {
+    lines.push({
+      key: "xfer",
+      label: "โอน",
+      amount: p.transfer,
+      bills: p.transferBills || undefined,
+    });
+  }
+  if (p.government) lines.push({ key: "gov", label: "รัฐ", amount: p.government });
+  return lines;
+}
+
+function branchDayLines(row: DaySummary, branchId: string) {
+  return branchLinesFromParts(branchSaleParts(row, branchId));
+}
+
+function branchMonthLines(branchId: string) {
+  return branchLinesFromParts({
+    cash: branchMonthTotal(branchId, "cash"),
+    transfer: branchMonthTotal(branchId, "transfer"),
+    government: branchMonthTotal(branchId, "government"),
+    transferBills: branchMonthTransferBills(branchId),
+  });
+}
+
+function branchMonthAmount(branchId: string) {
+  if (!report.value) return 0;
+  return report.value.days.reduce(
+    (s, d) => s + branchDayTotal(d, branchId),
+    0,
+  );
+}
+
+function shortBranch(name: string) {
+  if (/หลุมดิน/.test(name)) return "หลุมดิน";
+  if (/เจ็ดเสมียน/.test(name)) return "เจ็ดเสมียน";
+  if (/บ้านฆ้อง|ฆ้อง/.test(name)) return "บ้านฆ้อง";
+  return name;
+}
+
 function daySales(row: DaySummary) {
   return row.sales ?? row.salesByBranch.reduce((s, b) => s + b.amount, 0);
 }
@@ -264,6 +325,35 @@ function flash(msg: string) {
 function parseAmount(raw: string) {
   const n = Number(String(raw).replace(/,/g, "").trim());
   return Number.isFinite(n) ? n : NaN;
+}
+
+function sanitizeAmountInput(raw: string) {
+  let t = String(raw ?? "").replace(/[^\d.,]/g, "").replace(/,/g, ".");
+  const dot = t.indexOf(".");
+  if (dot >= 0) {
+    t = t.slice(0, dot + 1) + t.slice(dot + 1).replace(/\./g, "");
+  }
+  return t;
+}
+
+function onAmountTyped(which: "draft" | "edit") {
+  if (which === "draft") draft.amount = sanitizeAmountInput(draft.amount);
+  else edit.amount = sanitizeAmountInput(edit.amount);
+}
+
+function isAmountNavKey(e: KeyboardEvent) {
+  if (e.metaKey || e.ctrlKey || e.altKey) return true;
+  return (
+    e.key === "Backspace" ||
+    e.key === "Delete" ||
+    e.key === "Tab" ||
+    e.key === "Enter" ||
+    e.key === "Escape" ||
+    e.key === "ArrowLeft" ||
+    e.key === "ArrowRight" ||
+    e.key === "Home" ||
+    e.key === "End"
+  );
 }
 
 function expenseLines(detail: DayDetail | undefined) {
@@ -586,9 +676,19 @@ async function loadDescriptions() {
 }
 
 function openSuggest(which: "draft" | "edit") {
+  const q =
+    which === "draft" ? draft.description.trim() : edit.description.trim();
+  if (!q) {
+    closeSuggest();
+    return;
+  }
   suggestFor.value = which;
   suggestOpen.value = true;
   suggestIndex.value = filteredSuggestions.value.length ? 0 : -1;
+}
+
+function onDescTyped(which: "draft" | "edit") {
+  openSuggest(which);
 }
 
 function closeSuggest() {
@@ -649,16 +749,22 @@ function onDraftDescKey(e: KeyboardEvent, day: string) {
     resetDraft();
     return;
   }
-  openSuggest("draft");
 }
 
 function onDraftAmtKey(e: KeyboardEvent, day: string) {
   if (e.key === "Enter") {
     e.preventDefault();
     void addDraft(day);
-  } else if (e.key === "Escape") {
+    return;
+  }
+  if (e.key === "Escape") {
     resetDraft();
     focusDraft(day);
+    return;
+  }
+  if (isAmountNavKey(e)) return;
+  if (!/^\d$/.test(e.key) && e.key !== "." && e.key !== ",") {
+    e.preventDefault();
   }
 }
 
@@ -702,7 +808,6 @@ function onEditDescKey(e: KeyboardEvent, rowId: string, day: string) {
     cancelEdit();
     return;
   }
-  openSuggest("edit");
 }
 
 function startEdit(row: Entry) {
@@ -713,7 +818,6 @@ function startEdit(row: Entry) {
   edit.direction = row.direction;
   edit.kind = row.kind;
   focusEl(`cb-edit-desc-${row.id}`);
-  openSuggest("edit");
 }
 
 function cancelEdit() {
@@ -763,8 +867,15 @@ function onEditAmtKey(e: KeyboardEvent, day: string) {
   if (e.key === "Enter") {
     e.preventDefault();
     void saveEdit(day);
-  } else if (e.key === "Escape") {
+    return;
+  }
+  if (e.key === "Escape") {
     cancelEdit();
+    return;
+  }
+  if (isAmountNavKey(e)) return;
+  if (!/^\d$/.test(e.key) && e.key !== "." && e.key !== ",") {
+    e.preventDefault();
   }
 }
 
@@ -1036,28 +1147,20 @@ function toggleBuckets() {
         <table class="cb-sheet-table">
           <thead>
             <tr>
-              <th class="cb-col-date" rowspan="2">วันที่</th>
+              <th class="cb-col-date">วันที่</th>
               <th
                 v-for="b in branchCols"
                 :key="b.id"
                 class="cb-num cb-branch-head"
-                colspan="3"
               >
-                {{ b.name }}
+                {{ shortBranch(b.name) }}
               </th>
-              <th class="cb-num" rowspan="2">ยอดขาย</th>
-              <th class="cb-num" rowspan="2">จ่าย</th>
-              <th class="cb-num" rowspan="2">สุทธิ</th>
-              <th class="cb-num" rowspan="2" title="สะสมจากต้นเดือน · วันล่าสุด = สุทธิเดือน">
+              <th class="cb-num">ยอดขาย</th>
+              <th class="cb-num">จ่าย</th>
+              <th class="cb-num">สุทธิ</th>
+              <th class="cb-num" title="สะสมจากต้นเดือน · วันล่าสุด = สุทธิเดือน">
                 สุทธิสะสม
               </th>
-            </tr>
-            <tr>
-              <template v-for="b in branchCols" :key="`${b.id}-sub`">
-                <th class="cb-num cb-sub">เงินสด</th>
-                <th class="cb-num cb-sub">เงินโอน</th>
-                <th class="cb-num cb-sub">สวัสดิการ</th>
-              </template>
             </tr>
           </thead>
           <tbody>
@@ -1073,33 +1176,32 @@ function toggleBuckets() {
                   }}</span>
                   {{ fmtDay(row.day) }}
                 </td>
-                <template v-for="b in branchCols" :key="b.id">
-                  <td class="cb-num cb-sale">
-                    {{
-                      branchSaleParts(row, b.id).cash
-                        ? baht(branchSaleParts(row, b.id).cash)
-                        : "—"
-                    }}
-                  </td>
-                  <td class="cb-num cb-xfer">
-                    <template v-if="branchSaleParts(row, b.id).transfer">
-                      {{ baht(branchSaleParts(row, b.id).transfer) }}
-                      <span
-                        v-if="branchSaleParts(row, b.id).transferBills"
-                        class="cb-bill-n"
-                        >({{ branchSaleParts(row, b.id).transferBills }})</span
-                      >
-                    </template>
-                    <template v-else>—</template>
-                  </td>
-                  <td class="cb-num cb-gov">
-                    {{
-                      branchSaleParts(row, b.id).government
-                        ? baht(branchSaleParts(row, b.id).government)
-                        : "—"
-                    }}
-                  </td>
-                </template>
+                <td
+                  v-for="b in branchCols"
+                  :key="b.id"
+                  class="cb-num cb-branch-cell"
+                >
+                  <div class="cb-b">
+                    <div
+                      class="cb-b__total"
+                      :class="{ 'cb-b__total--empty': !branchDayTotal(row, b.id) }"
+                    >
+                      {{ branchDayTotal(row, b.id) ? baht(branchDayTotal(row, b.id)) : "—" }}
+                    </div>
+                    <div
+                      v-for="line in branchDayLines(row, b.id)"
+                      :key="line.key"
+                      class="cb-b__row"
+                      :class="`cb-b__row--${line.key}`"
+                    >
+                      <span class="cb-b__k">{{ line.label }}</span>
+                      <span class="cb-b__v">
+                        {{ baht(line.amount) }}
+                        <span v-if="line.bills" class="cb-bill-n">({{ line.bills }})</span>
+                      </span>
+                    </div>
+                  </div>
+                </td>
                 <td class="cb-num cb-sale cb-strong">
                   {{ baht(daySales(row)) }}
                   <span
@@ -1128,7 +1230,7 @@ function toggleBuckets() {
               </tr>
 
               <tr v-if="expandedDay === row.day" class="cb-detail-row">
-                <td :colspan="4 + branchCols.length * 3">
+                <td :colspan="5 + branchCols.length">
                   <div v-if="dayLoading === row.day" class="cb-detail-loading">
                     กำลังโหลด…
                   </div>
@@ -1174,9 +1276,10 @@ function toggleBuckets() {
                                     :id="`cb-edit-desc-${e.id}`"
                                     v-model="edit.description"
                                     class="cb-cell"
+                                    lang="th"
+                                    inputmode="text"
                                     autocomplete="off"
-                                    @focus="openSuggest('edit')"
-                                    @input="openSuggest('edit')"
+                                    @input="onDescTyped('edit')"
                                     @blur="closeSuggest()"
                                     @keydown="onEditDescKey($event, e.id, row.day)"
                                   />
@@ -1207,7 +1310,11 @@ function toggleBuckets() {
                                   :id="`cb-edit-amt-${e.id}`"
                                   v-model="edit.amount"
                                   class="cb-cell cb-cell--amt cb-cell--in"
+                                  lang="en"
                                   inputmode="decimal"
+                                  pattern="[0-9]*"
+                                  autocomplete="off"
+                                  @input="onAmountTyped('edit')"
                                   @keydown="onEditAmtKey($event, row.day)"
                                 />
                               </td>
@@ -1285,9 +1392,10 @@ function toggleBuckets() {
                                     :id="`cb-edit-desc-${e.id}`"
                                     v-model="edit.description"
                                     class="cb-cell"
+                                    lang="th"
+                                    inputmode="text"
                                     autocomplete="off"
-                                    @focus="openSuggest('edit')"
-                                    @input="openSuggest('edit')"
+                                    @input="onDescTyped('edit')"
                                     @blur="closeSuggest()"
                                     @keydown="onEditDescKey($event, e.id, row.day)"
                                   />
@@ -1318,7 +1426,11 @@ function toggleBuckets() {
                                   :id="`cb-edit-amt-${e.id}`"
                                   v-model="edit.amount"
                                   class="cb-cell cb-cell--amt"
+                                  lang="en"
                                   inputmode="decimal"
+                                  pattern="[0-9]*"
+                                  autocomplete="off"
+                                  @input="onAmountTyped('edit')"
                                   @keydown="onEditAmtKey($event, row.day)"
                                 />
                               </td>
@@ -1410,10 +1522,11 @@ function toggleBuckets() {
                                       ? 'เช่น ยืมจากเจ้าของ (ปอ)'
                                       : 'พิมพ์รายการ…'
                                   "
+                                  lang="th"
+                                  inputmode="text"
                                   autocomplete="off"
                                   :disabled="saving"
-                                  @focus="openSuggest('draft')"
-                                  @input="openSuggest('draft')"
+                                  @input="onDescTyped('draft')"
                                   @blur="closeSuggest()"
                                   @keydown="onDraftDescKey($event, row.day)"
                                 />
@@ -1445,8 +1558,12 @@ function toggleBuckets() {
                               class="cb-cell cb-cell--amt"
                               :class="{ 'cb-cell--in': draft.direction === 'in' }"
                               placeholder="0"
+                              lang="en"
                               inputmode="decimal"
+                              pattern="[0-9]*"
+                              autocomplete="off"
                               :disabled="saving"
+                              @input="onAmountTyped('draft')"
                               @keydown="onDraftAmtKey($event, row.day)"
                             />
                           </td>
@@ -1487,20 +1604,27 @@ function toggleBuckets() {
           <tfoot v-if="report">
             <tr>
               <th>รวมเดือน</th>
-              <template v-for="b in branchCols" :key="`${b.id}-foot`">
-                <th class="cb-num">{{ baht(branchMonthTotal(b.id, "cash")) }}</th>
-                <th class="cb-num">
-                  {{ baht(branchMonthTotal(b.id, "transfer")) }}
-                  <span
-                    v-if="branchMonthTransferBills(b.id)"
-                    class="cb-bill-n"
-                    >({{ branchMonthTransferBills(b.id) }})</span
+              <th
+                v-for="b in branchCols"
+                :key="`${b.id}-foot`"
+                class="cb-num cb-branch-cell"
+              >
+                <div class="cb-b">
+                  <div class="cb-b__total">{{ baht(branchMonthAmount(b.id)) }}</div>
+                  <div
+                    v-for="line in branchMonthLines(b.id)"
+                    :key="line.key"
+                    class="cb-b__row"
+                    :class="`cb-b__row--${line.key}`"
                   >
-                </th>
-                <th class="cb-num">
-                  {{ baht(branchMonthTotal(b.id, "government")) }}
-                </th>
-              </template>
+                    <span class="cb-b__k">{{ line.label }}</span>
+                    <span class="cb-b__v">
+                      {{ baht(line.amount) }}
+                      <span v-if="line.bills" class="cb-bill-n">({{ line.bills }})</span>
+                    </span>
+                  </div>
+                </div>
+              </th>
               <th class="cb-num">{{ baht(monthSales()) }}</th>
               <th class="cb-num">{{ baht(report.summary.expense) }}</th>
               <th class="cb-num">{{ baht(report.summary.net) }}</th>
@@ -1707,16 +1831,77 @@ function toggleBuckets() {
   text-align: center;
   border-left: 1px solid #fed7aa;
 }
-.cb-sheet-table th.cb-sub {
-  font-size: 0.72rem;
+.cb-branch-cell {
+  vertical-align: top;
+  border-left: 1px solid #f5f5f4;
+  min-width: 8.25rem;
+}
+.cb-b {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.cb-b__total {
+  font-size: 1rem;
+  font-weight: 800;
+  color: #1d4ed8;
+  line-height: 1.2;
+  padding-bottom: 5px;
+  margin-bottom: 2px;
+  border-bottom: 1px dashed #e7e5e4;
+}
+.cb-b__total--empty {
+  color: #d6d3d1;
   font-weight: 600;
-  color: #c2410c;
-  padding-top: 4px;
-  padding-bottom: 8px;
+  border-bottom-color: transparent;
+  padding-bottom: 0;
+  margin-bottom: 0;
+}
+.cb-b__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.72rem;
+  line-height: 1.35;
+}
+.cb-b__k {
+  color: #a8a29e;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.cb-b__k::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 5px;
+  border-radius: 99px;
+  vertical-align: 0.05em;
+  background: currentColor;
+}
+.cb-b__v {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.cb-b__row--cash .cb-b__k,
+.cb-b__row--cash .cb-b__v {
+  color: #2563eb;
+}
+.cb-b__row--xfer .cb-b__k,
+.cb-b__row--xfer .cb-b__v {
+  color: #0f766e;
+}
+.cb-b__row--gov .cb-b__k,
+.cb-b__row--gov .cb-b__v {
+  color: #7c3aed;
+}
+.cb-sheet-table tfoot .cb-branch-cell {
   border-left: 1px solid #fed7aa;
 }
-.cb-sheet-table th.cb-sub + th.cb-sub {
-  border-left: none;
+.cb-sheet-table tfoot .cb-b__total {
+  border-bottom-color: #fdba74;
 }
 .cb-xfer {
   color: #0f766e;

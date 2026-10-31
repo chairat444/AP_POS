@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { maybeWrapWafRequestBody } from "@ap-pos/shared";
+
 definePageMeta({ layout: false });
 
 useHead({
@@ -212,7 +214,10 @@ async function submitJoin() {
       points: number;
     }>(`${apiBase.value}/members/kiosk/register`, {
       method: "POST",
-      body: { name: n, phone: phone.value },
+      body: maybeWrapWafRequestBody({ name: n, phone: phone.value }) as Record<
+        string,
+        unknown
+      >,
       ...kioskOpts(),
     });
     member.value = {

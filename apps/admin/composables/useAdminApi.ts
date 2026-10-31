@@ -1,3 +1,5 @@
+import { maybeWrapWafRequestBody } from "@ap-pos/shared";
+
 export function useAdminApi() {
   const config = useRuntimeConfig();
   const { token, logout } = useAuth();
@@ -16,7 +18,11 @@ export function useAdminApi() {
     try {
       return await $fetch<T>(`${base}${path}`, {
         method: (opts.method as "GET") ?? "GET",
-        body: opts.body as BodyInit | Record<string, unknown> | null | undefined,
+        body: maybeWrapWafRequestBody(opts.body) as
+          | BodyInit
+          | Record<string, unknown>
+          | null
+          | undefined,
         headers: headers(),
       });
     } catch (e: unknown) {

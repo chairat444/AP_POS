@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { maybeWrapWafRequestBody } from "@ap-pos/shared";
+
 definePageMeta({ layout: false });
 
 useHead({
@@ -231,7 +233,7 @@ function headers(): Record<string, string> {
 async function api<T>(path: string, opts: { method?: string; body?: unknown } = {}) {
   return await $fetch<T>(`${apiBase.value}${path}`, {
     method: (opts.method as "GET") ?? "GET",
-    body: opts.body as Record<string, unknown> | undefined,
+    body: maybeWrapWafRequestBody(opts.body) as Record<string, unknown> | undefined,
     headers: headers(),
     timeout: 60_000,
   });

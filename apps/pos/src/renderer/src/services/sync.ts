@@ -1,4 +1,4 @@
-import type { CartLine } from "@ap-pos/shared";
+import { maybeWrapWafRequestBody, type CartLine } from "@ap-pos/shared";
 import { ref } from "vue";
 import type { Member } from "../data/demo-members";
 import { PLACEHOLDER_IMAGE, type QuickProduct } from "../data/demo-products";
@@ -66,7 +66,8 @@ export async function loadPosEnvMode() {
     }
     envMode.value = null;
   } catch {
-    envMode.value = null;
+    // ฐานในเครื่องพัง/อ่านไม่ได้ — อย่าเด้งไปหน้าเลือกโหมด
+    envMode.value = "prod";
   }
 }
 
@@ -689,7 +690,7 @@ async function postJson<T>(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(maybeWrapWafRequestBody(body)),
     },
     timeoutMs,
   );
