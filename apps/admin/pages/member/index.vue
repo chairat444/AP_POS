@@ -509,10 +509,6 @@ onBeforeUnmount(clearIdle);
 
       <p v-if="showLineBonus" class="mk__line-bonus">
         {{ lineOffer.headline }}
-        <small>ของขวัญสำหรับสมาชิกใหม่ที่สมัครจากไลน์</small>
-      </p>
-      <p v-else-if="lineBound" class="mk__line-bonus">
-        เปิดจากไลน์แล้ว · สมาชิกอยู่แล้วใส่เบอร์ครั้งแรก ครั้งหน้าจะขึ้นแต้มเอง
       </p>
 
       <div class="mk__perk">
@@ -539,9 +535,7 @@ onBeforeUnmount(clearIdle);
         <button type="button" class="mk__tile mk__tile--check" @click="goCheck">
           <span class="mk__tile-kicker">มีบัตรแล้ว</span>
           <strong>เช็คแต้ม</strong>
-          <span class="mk__tile-hint">{{
-            lineBound ? "ใส่เบอร์ครั้งแรก ครั้งหน้าไม่ต้องใส่" : "ใส่เบอร์โทร"
-          }}</span>
+          <span class="mk__tile-hint">ใส่เบอร์โทร</span>
         </button>
         <button type="button" class="mk__tile mk__tile--join" @click="goJoin">
           <span class="mk__tile-kicker">ยังไม่เป็นสมาชิก</span>
@@ -559,13 +553,7 @@ onBeforeUnmount(clearIdle);
     <section v-else-if="step === 'check'" class="mk__panel">
       <button type="button" class="mk__back" @click="resetHome">← กลับ</button>
       <h2 class="mk__title">เช็คแต้ม</h2>
-      <p class="mk__lead">
-        {{
-          lineIdToken && !checkOtherOnly
-            ? "ใส่เบอร์ที่ใช้ที่ร้าน · ผูกกับไลน์นี้ครั้งเดียว"
-            : "ใส่เบอร์โทรที่ใช้สมัคร"
-        }}
-      </p>
+      <p class="mk__lead">ใส่เบอร์โทร</p>
 
       <div class="mk__phone" :class="{ 'is-ready': phone.length >= 9 }">
         {{ phoneDisplay || "0xx-xxx-xxxx" }}
@@ -602,11 +590,8 @@ onBeforeUnmount(clearIdle);
       class="mk__panel mk__result"
     >
       <p v-if="error" class="mk__note">{{ error }}</p>
-      <p v-else-if="member.linked" class="mk__note">
-        ผูกไลน์แล้ว · ครั้งหน้าเปิดจากไลน์จะเห็นแต้มเลย
-      </p>
-      <p v-else-if="lineBound && member.lineLinked" class="mk__note">
-        เปิดจากไลน์ · บอกเบอร์ {{ phoneDisplay }} ที่ร้าน
+      <p v-else-if="fromLine || lineBound" class="mk__note">
+        บอกเบอร์ {{ phoneDisplay }}
       </p>
       <p class="mk__hello">สวัสดีคุณ</p>
       <h2 class="mk__name">{{ member.name }}</h2>
@@ -743,9 +728,7 @@ onBeforeUnmount(clearIdle);
           <li>1 แต้มใช้แทนเงินสด 1 บาท</li>
           <li>แต้มไม่มีวันหมดอายุ</li>
         </ul>
-        <p class="mk__success-phone">
-          บอกเบอร์ <strong>{{ phoneDisplay }}</strong> ที่ร้านเพื่อสะสมแต้ม
-        </p>
+        <p class="mk__success-phone">บอกเบอร์ {{ phoneDisplay }}</p>
       </div>
 
       <button
