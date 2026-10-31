@@ -1,8 +1,10 @@
+import { hasAdminMenu, menuKeyForAdminPath } from "@ap-pos/shared";
+
 export default defineNuxtRouteMiddleware(async (to) => {
   // Auth state lives in localStorage — only enforce on the client.
   if (import.meta.server) return;
 
-  const { loadFromStorage, ready, token, fetchMe, isLoggedIn } = useAuth();
+  const { loadFromStorage, ready, token, fetchMe, isLoggedIn, user } = useAuth();
 
   if (!ready.value) loadFromStorage();
 
@@ -24,5 +26,15 @@ export default defineNuxtRouteMiddleware(async (to) => {
 
   if (isLogin && token.value) {
     return navigateTo("/");
+  }
+
+  if (!isLogin && user.value) {
+    const key = menuKeyForAdminPath(to.path);
+    if (key === "staff" && user.value.role !== "admin") {
+      return navigateTo("/");
+    }
+    if (key && key !== "staff" && !hasAdminMenu(user.value.menus, key)) {
+      return navigateTo("/");
+    }
   }
 });

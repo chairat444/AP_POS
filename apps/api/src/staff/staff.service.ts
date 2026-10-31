@@ -4,15 +4,25 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { pg } from "@ap-pos/db";
 import { DatabaseService } from "../db/database.service";
 import { AuthService } from "../auth/auth.service";
+import { parseAdminMenus, resolveAdminMenus } from "@ap-pos/shared";
 import type { StaffRecord, StaffRole, UpsertStaffDto } from "./staff.types";
 
 function now() {
   return new Date();
+}
+
+function normalizeStaffCode(raw: string) {
+  return raw.trim().replace(/\s+/g, "");
+}
+
+function isUniqueViolation(e: unknown) {
+  const msg = e instanceof Error ? e.message : String(e);
+  return /unique|duplicate key|23505/i.test(msg);
 }
 
 function num(v: string | number | null | undefined, fallback: number) {
@@ -29,6 +39,7 @@ function toRecord(row: typeof pg.staff.$inferSelect): StaffRecord {
     pin: row.pin,
     role: row.role as StaffRole,
     canLoginAdmin: Boolean(row.canLoginAdmin),
+    adminMenus: resolveAdminMenus(row.role, row.adminMenus),
     active: Boolean(row.active),
     hasPassword: Boolean(row.passwordHash),
     commissionEnabled: Boolean(row.commissionEnabled),
@@ -38,6 +49,15 @@ function toRecord(row: typeof pg.staff.$inferSelect): StaffRecord {
     dailyWage: num(row.dailyWage, 0),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+function serializeAdminMenus(role: string, menus: unknown, canLoginAdmin: boolean) {
+  if (role === "admin") return JSON.stringify(["*"]);
+  if (!canLoginAdmin) return null;
+  if (menus == null) return JSON.stringify(["*"]);
+  const list = parseAdminMenus(menus);
+  if (list.includes("*")) return JSON.stringify(["*"]);
+  return JSON.stringify(list);
 }
 
 function normalizeCommission(dto: Partial<UpsertStaffDto>) {
@@ -108,6 +128,27 @@ export class StaffService implements OnModuleInit {
     return { staff: rows.map(toRecord) };
   }
 
+  private async assertCodeAvailable(code: string, excludeId?: string) {
+    if (code.length < 2 || code.length > 32) {
+      throw new BadRequestException("รหัสต้องยาว 2–32 ตัว");
+    }
+    const rows = await this.database.db
+      .select({
+        id: pg.staff.id,
+        code: pg.staff.code,
+        deletedAt: pg.staff.deletedAt,
+      })
+      .from(pg.staff)
+      .where(sql`lower(${pg.staff.code}) = ${code.toLowerCase()}`)
+      .limit(8);
+    const taken = rows.find((r) => r.id !== excludeId);
+    if (!taken) return;
+    if (taken.deletedAt) {
+      throw new BadRequestException("รหัสนี้เคยใช้แล้ว เลือกอันอื่น");
+    }
+    throw new BadRequestException("รหัสนี้มีอยู่แล้ว");
+  }
+
   async nextCode() {
     const rows = await this.database.db
       .select({ code: pg.staff.code })
@@ -134,7 +175,11 @@ export class StaffService implements OnModuleInit {
 
   async create(dto: UpsertStaffDto) {
     if (!dto.name?.trim()) throw new BadRequestException("กรุณาระบุชื่อ");
-    const code = dto.code?.trim() || (await this.nextCode()).code;
+    const code = normalizeStaffCode(dto.code ?? "") || (await this.nextCode()).code;
+    if (code.toLowerCase() === "admin") {
+      throw new BadRequestException("รหัส admin สงวนไว้สำหรับผู้ดูแลหลัก");
+    }
+    await this.assertCodeAvailable(code);
     const canLoginAdmin = Boolean(dto.canLoginAdmin);
     if (canLoginAdmin && !dto.password?.trim()) {
       throw new BadRequestException("บัญชี Admin ต้องตั้งรหัสผ่าน");
@@ -142,23 +187,35 @@ export class StaffService implements OnModuleInit {
     const commission = normalizeCommission(dto);
     const dailyWage = Math.max(0, num(dto.dailyWage, 0));
     const id = `staff-${randomUUID().slice(0, 8)}`;
-    await this.database.db.insert(pg.staff).values({
-      id,
-      code,
-      name: dto.name.trim(),
-      pin: (dto.pin ?? "0000").replace(/\D/g, "").slice(0, 6) || "0000",
-      passwordHash: dto.password?.trim()
-        ? this.auth.hashPassword(dto.password.trim())
-        : null,
-      role: dto.role ?? "cashier",
-      canLoginAdmin: canLoginAdmin ? 1 : 0,
-      active: dto.active === false ? 0 : 1,
-      ...commission,
-      monthlyWage: "0",
-      dailyWage: String(dailyWage),
-      updatedAt: now(),
-      deletedAt: null,
-    });
+    try {
+      await this.database.db.insert(pg.staff).values({
+        id,
+        code,
+        name: dto.name.trim(),
+        pin: (dto.pin ?? "0000").replace(/\D/g, "").slice(0, 6) || "0000",
+        passwordHash: dto.password?.trim()
+          ? this.auth.hashPassword(dto.password.trim())
+          : null,
+        role: dto.role ?? "cashier",
+        canLoginAdmin: canLoginAdmin ? 1 : 0,
+        adminMenus: serializeAdminMenus(
+          dto.role ?? "cashier",
+          dto.adminMenus,
+          canLoginAdmin,
+        ),
+        active: dto.active === false ? 0 : 1,
+        ...commission,
+        monthlyWage: "0",
+        dailyWage: String(dailyWage),
+        updatedAt: now(),
+        deletedAt: null,
+      });
+    } catch (e) {
+      if (isUniqueViolation(e)) {
+        throw new BadRequestException("รหัสนี้มีอยู่แล้ว");
+      }
+      throw e;
+    }
     return this.get(id);
   }
 
@@ -186,8 +243,23 @@ export class StaffService implements OnModuleInit {
           : dto.commissionPerStep,
     });
 
+    let nextCode = current.code;
+    if (dto.code != null) {
+      nextCode = normalizeStaffCode(dto.code);
+      if (!nextCode) throw new BadRequestException("กรอกรหัสพนักงาน");
+      if (current.code === "admin" && nextCode.toLowerCase() !== "admin") {
+        throw new BadRequestException("ห้ามเปลี่ยนรหัสบัญชี admin หลัก");
+      }
+      if (nextCode.toLowerCase() === "admin" && current.code !== "admin") {
+        throw new BadRequestException("รหัส admin สงวนไว้สำหรับผู้ดูแลหลัก");
+      }
+      if (nextCode.toLowerCase() !== current.code.toLowerCase()) {
+        await this.assertCodeAvailable(nextCode, id);
+      }
+    }
+
     const patch: Partial<typeof pg.staff.$inferInsert> = {
-      code: dto.code?.trim() ?? current.code,
+      code: nextCode,
       name: dto.name?.trim() ?? current.name,
       pin:
         dto.pin == null
@@ -195,6 +267,11 @@ export class StaffService implements OnModuleInit {
           : dto.pin.replace(/\D/g, "").slice(0, 6) || current.pin,
       role: dto.role ?? current.role,
       canLoginAdmin: canLoginAdmin ? 1 : 0,
+      adminMenus: serializeAdminMenus(
+        dto.role ?? current.role,
+        dto.adminMenus ?? current.adminMenus,
+        canLoginAdmin,
+      ),
       active: dto.active == null ? (current.active ? 1 : 0) : dto.active ? 1 : 0,
       ...commission,
       dailyWage: String(
@@ -221,7 +298,14 @@ export class StaffService implements OnModuleInit {
       throw new BadRequestException("บัญชี Admin ต้องมีรหัสผ่าน");
     }
 
-    await this.database.db.update(pg.staff).set(patch).where(eq(pg.staff.id, id));
+    try {
+      await this.database.db.update(pg.staff).set(patch).where(eq(pg.staff.id, id));
+    } catch (e) {
+      if (isUniqueViolation(e)) {
+        throw new BadRequestException("รหัสนี้มีอยู่แล้ว");
+      }
+      throw e;
+    }
     return this.get(id);
   }
 

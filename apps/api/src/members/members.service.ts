@@ -140,9 +140,40 @@ export class MembersService implements OnModuleInit {
     return rows[0] ? toRecord(rows[0]) : null;
   }
 
-  /** หน้า kiosk ลูกค้า — ค้นด้วยเบอร์เท่านั้น · ไม่คืนรายชื่อทั้งร้าน */
-  async lookupByPhone(phoneRaw: string) {
-    const phone = normalizePhone(phoneRaw);
+  private toKioskHit(member: MemberRecord, linked = false) {
+    return {
+      found: true as const,
+      code: member.code,
+      name: member.name,
+      phone: member.phone,
+      points: member.points,
+      lineLinked: Boolean(member.lineLinked) || linked,
+      linked,
+    };
+  }
+
+  /**
+   * หน้า kiosk ลูกค้า — ค้นด้วยเบอร์ และ/หรือ LINE id_token
+   * bind=true เฉพาะตอนเปิดจากไลน์แล้วพิมพ์เบอร์ (ผูกครั้งแรก)
+   * ไม่คืนรายชื่อทั้งร้าน · ไม่ให้เปลี่ยนเบอร์
+   */
+  async lookupForKiosk(input: {
+    phone?: string;
+    idToken?: string;
+    bind: boolean;
+  }) {
+    const lineUserId = input.idToken
+      ? await verifyLineIdToken(input.idToken)
+      : null;
+    const phone = normalizePhone(input.phone);
+
+    if (!phone) {
+      if (!lineUserId) return { found: false as const };
+      const member = await this.findActiveByLineUserId(lineUserId);
+      if (!member) return { found: false as const };
+      return this.toKioskHit(member);
+    }
+
     if (phone.length < 9) {
       throw new BadRequestException("กรอกเบอร์โทรให้ครบ");
     }
@@ -153,12 +184,38 @@ export class MembersService implements OnModuleInit {
     if (!member) {
       return { found: false as const };
     }
-    return {
-      found: true as const,
-      code: member.code,
-      name: member.name,
-      points: member.points,
-    };
+
+    let linked = false;
+    if (input.bind && lineUserId) {
+      const byLine = await this.findActiveByLineUserId(lineUserId);
+      if (byLine && byLine.id !== member.id) {
+        throw new BadRequestException("ไลน์นี้ผูกกับสมาชิกอื่นแล้ว");
+      }
+      if (member.lineLinked && !byLine) {
+        throw new BadRequestException(
+          "เบอร์นี้ผูกไลน์อื่นแล้ว · บอกพนักงานที่ร้าน",
+        );
+      }
+      if (!member.lineLinked) {
+        await this.linkLineUser(member.id, lineUserId);
+        const confirmed = await this.findActiveByLineUserId(lineUserId);
+        if (!confirmed || confirmed.id !== member.id) {
+          throw new BadRequestException(
+            "เบอร์นี้ผูกไลน์อื่นแล้ว · บอกพนักงานที่ร้าน",
+          );
+        }
+        linked = true;
+      }
+    }
+
+    const fresh =
+      linked ? ((await this.findActiveByPhone(phone)) ?? member) : member;
+    return this.toKioskHit(fresh, linked);
+  }
+
+  /** หน้า kiosk ลูกค้า — ค้นด้วยเบอร์เท่านั้น ไม่ผูกไลน์ */
+  lookupByPhone(phoneRaw: string) {
+    return this.lookupForKiosk({ phone: phoneRaw, bind: false });
   }
 
   /** POS ค้นสมาชิกด้วยเบอร์ตอนออนไลน์ — คืนข้อมูลเต็มเพื่อใส่แคชเครื่อง */

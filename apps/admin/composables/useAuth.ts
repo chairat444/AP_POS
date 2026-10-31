@@ -5,6 +5,7 @@ type AuthUser = {
   code: string;
   name: string;
   role: string;
+  menus?: string[];
 };
 
 const TOKEN_KEY = "ap-pos-admin-token";
@@ -65,14 +66,28 @@ export function useAuth() {
       return null;
     }
     try {
-      const me = await $fetch<AuthUser>(`${base}/auth/me`, {
-        headers: { Authorization: `Bearer ${token.value}` },
-      });
-      user.value = me;
-      if (import.meta.client) {
-        localStorage.setItem(USER_KEY, JSON.stringify(me));
+      const me = await $fetch<AuthUser & { token?: string }>(
+        `${base}/auth/me`,
+        {
+          headers: { Authorization: `Bearer ${token.value}` },
+        },
+      );
+      const nextUser: AuthUser = {
+        id: me.id,
+        code: me.code,
+        name: me.name,
+        role: me.role,
+        menus: me.menus,
+      };
+      if (me.token) {
+        token.value = me.token;
+        if (import.meta.client) localStorage.setItem(TOKEN_KEY, me.token);
       }
-      return me;
+      user.value = nextUser;
+      if (import.meta.client) {
+        localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
+      }
+      return nextUser;
     } catch {
       clear();
       return null;

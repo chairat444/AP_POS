@@ -77,6 +77,8 @@ export const staff = pgTable("staff", {
   passwordHash: text("password_hash"),
   role: text("role").notNull().default("cashier"),
   canLoginAdmin: integer("can_login_admin").notNull().default(0),
+  /** JSON string[] ของเมนูแอดมิน · admin = ทุกเมนู */
+  adminMenus: text("admin_menus"),
   active: integer("active").notNull().default(1),
   /** ค่าคอมรายวันตามยอดขาย */
   commissionEnabled: integer("commission_enabled").notNull().default(0),

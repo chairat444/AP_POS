@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { hasAdminMenu } from "@ap-pos/shared";
+
 type BranchPoint = {
   branchId: string;
   branchName: string;
@@ -130,6 +132,10 @@ const PAY_COLORS: Record<string, string> = {
 };
 
 const { get } = useAdminApi();
+const { user } = useAuth();
+function canMenu(key: string) {
+  return hasAdminMenu(user.value?.menus, key);
+}
 const pending = ref(false);
 const error = ref("");
 const summary = ref<Summary | null>(null);
@@ -1351,18 +1357,36 @@ onMounted(load);
           class="ui-page-head__actions"
           style="padding: 1.15rem 1.25rem 1.25rem"
         >
-          <NuxtLink to="/reports" class="ui-btn ui-btn--primary"
+          <NuxtLink
+            v-if="canMenu('reports')"
+            to="/reports"
+            class="ui-btn ui-btn--primary"
             >สรุปยอดขาย</NuxtLink
           >
-          <NuxtLink to="/sales" class="ui-btn ui-btn--ghost">บิลขาย</NuxtLink>
-          <NuxtLink to="/cash-book" class="ui-btn ui-btn--ghost"
+          <NuxtLink v-if="canMenu('sales')" to="/sales" class="ui-btn ui-btn--ghost"
+            >บิลขาย</NuxtLink
+          >
+          <NuxtLink
+            v-if="canMenu('cash-book')"
+            to="/cash-book"
+            class="ui-btn ui-btn--ghost"
             >สมุดเงินสด</NuxtLink
           >
-          <NuxtLink to="/shifts" class="ui-btn ui-btn--ghost">รอบกะ</NuxtLink>
-          <NuxtLink to="/products" class="ui-btn ui-btn--ghost"
+          <NuxtLink v-if="canMenu('shifts')" to="/shifts" class="ui-btn ui-btn--ghost"
+            >รอบกะ</NuxtLink
+          >
+          <NuxtLink
+            v-if="canMenu('products')"
+            to="/products"
+            class="ui-btn ui-btn--ghost"
             >สินค้า</NuxtLink
           >
-          <NuxtLink to="/members" class="ui-btn ui-btn--ghost">สมาชิก</NuxtLink>
+          <NuxtLink
+            v-if="canMenu('members')"
+            to="/members"
+            class="ui-btn ui-btn--ghost"
+            >สมาชิก</NuxtLink
+          >
         </div>
       </div>
     </template>

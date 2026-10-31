@@ -1,6 +1,5 @@
 import {
   Controller,
-  ForbiddenException,
   Get,
   Post,
   Req,
@@ -16,9 +15,6 @@ export class BackupController {
   private assertCanBackup(req: AuthedRequest) {
     const user = req.user;
     if (!user?.sub) throw new UnauthorizedException("กรุณาเข้าสู่ระบบ");
-    if (user.role !== "admin" && user.role !== "manager") {
-      throw new ForbiddenException("เฉพาะแอดมิน/ผู้จัดการที่สำรองได้");
-    }
     return user;
   }
 

@@ -109,6 +109,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ALTER TABLE staff ADD COLUMN IF NOT EXISTS commission_per_step NUMERIC(12,2) NOT NULL DEFAULT 100;
       ALTER TABLE staff ADD COLUMN IF NOT EXISTS monthly_wage NUMERIC(12,2) NOT NULL DEFAULT 0;
       ALTER TABLE staff ADD COLUMN IF NOT EXISTS daily_wage NUMERIC(12,2) NOT NULL DEFAULT 0;
+      ALTER TABLE staff ADD COLUMN IF NOT EXISTS admin_menus TEXT;
       CREATE TABLE IF NOT EXISTS staff_day_wages (
         id TEXT PRIMARY KEY,
         staff_id TEXT NOT NULL,

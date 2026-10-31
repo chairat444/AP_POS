@@ -1,7 +1,25 @@
 <script setup lang="ts">
+import { hasAdminMenu } from "@ap-pos/shared";
+
+type NavItem = {
+  to: string;
+  label: string;
+  icon: string;
+  exact?: boolean;
+  menu?: string;
+  adminOnly?: boolean;
+};
+
+type NavGroup = {
+  id: string;
+  label: string;
+  icon: string;
+  items: NavItem[];
+};
+
 const route = useRoute();
 const config = useRuntimeConfig();
-const { user, logout } = useAuth();
+const { user, logout, token, fetchMe } = useAuth();
 const { get, assetUrl } = useAdminApi();
 const appName = computed(() => String(config.public.appName || "AP POS Admin"));
 const appShort = computed(() => String(config.public.appShortName || "AP"));
@@ -50,26 +68,19 @@ function toggleSidebar() {
   persistCollapsed();
 }
 
+function canSeeItem(item: NavItem) {
+  if (item.adminOnly) return user.value?.role === "admin";
+  if (!item.menu) return true;
+  return hasAdminMenu(user.value?.menus, item.menu);
+}
+
 onMounted(() => {
   void loadBranding();
+  if (token.value) void fetchMe();
 });
 watch(() => route.path, (p) => {
   if (p.startsWith("/settings")) void loadBranding();
 });
-
-type NavItem = {
-  to: string;
-  label: string;
-  icon: string;
-  exact?: boolean;
-};
-
-type NavGroup = {
-  id: string;
-  label: string;
-  icon: string;
-  items: NavItem[];
-};
 
 const dashboard: NavItem = {
   to: "/",
@@ -84,10 +95,10 @@ const groups: NavGroup[] = [
     label: "สินค้า",
     icon: "box",
     items: [
-      { to: "/products", label: "รายการสินค้า", icon: "box" },
-      { to: "/products/quick", label: "สินค้าด่วน", icon: "zap" },
-      { to: "/units", label: "หน่วยสินค้า", icon: "ruler" },
-      { to: "/promos", label: "โปรโมชัน", icon: "tag" },
+      { to: "/products", label: "รายการสินค้า", icon: "box", menu: "products" },
+      { to: "/products/quick", label: "สินค้าด่วน", icon: "zap", menu: "products.quick" },
+      { to: "/units", label: "หน่วยสินค้า", icon: "ruler", menu: "units" },
+      { to: "/promos", label: "โปรโมชัน", icon: "tag", menu: "promos" },
     ],
   },
   {
@@ -95,8 +106,8 @@ const groups: NavGroup[] = [
     label: "ขาย",
     icon: "receipt",
     items: [
-      { to: "/sales", label: "บิลขาย", icon: "receipt" },
-      { to: "/shifts", label: "รอบกะ / เงินสด", icon: "shift" },
+      { to: "/sales", label: "บิลขาย", icon: "receipt", menu: "sales" },
+      { to: "/shifts", label: "รอบกะ / เงินสด", icon: "shift", menu: "shifts" },
     ],
   },
   {
@@ -104,10 +115,10 @@ const groups: NavGroup[] = [
     label: "รายงาน",
     icon: "chart",
     items: [
-      { to: "/reports", label: "สรุปยอดขาย", icon: "chart" },
-      { to: "/reports/profit", label: "กำไร", icon: "chart" },
-      { to: "/reports/cashflow", label: "รายรับ–รายจ่าย", icon: "coin" },
-      { to: "/reports/commission", label: "ค่าแรงและค่าคอม", icon: "coin" },
+      { to: "/reports", label: "สรุปยอดขาย", icon: "chart", menu: "reports" },
+      { to: "/reports/profit", label: "กำไร", icon: "chart", menu: "reports.profit" },
+      { to: "/reports/cashflow", label: "รายรับ–รายจ่าย", icon: "coin", menu: "reports.cashflow" },
+      { to: "/reports/commission", label: "ค่าแรงและค่าคอม", icon: "coin", menu: "reports.commission" },
     ],
   },
   {
@@ -115,11 +126,11 @@ const groups: NavGroup[] = [
     label: "บัญชี / จัดซื้อ",
     icon: "coin",
     items: [
-      { to: "/cash-book", label: "สมุดรายวัน", icon: "coin" },
-      { to: "/expenses", label: "ค่าใช้จ่ายหน้าร้าน", icon: "coin" },
-      { to: "/expenses/categories", label: "ประเภทค่าใช้จ่ายหน้าร้าน", icon: "tag" },
-      { to: "/purchases", label: "แผงสรุปซื้อของ", icon: "box" },
-      { to: "/purchases/catalog", label: "รายการซื้อของ", icon: "box" },
+      { to: "/cash-book", label: "สมุดรายวัน", icon: "coin", menu: "cash-book" },
+      { to: "/expenses", label: "ค่าใช้จ่ายหน้าร้าน", icon: "coin", menu: "expenses" },
+      { to: "/expenses/categories", label: "ประเภทค่าใช้จ่ายหน้าร้าน", icon: "tag", menu: "expenses.categories" },
+      { to: "/purchases", label: "แผงสรุปซื้อของ", icon: "box", menu: "purchases" },
+      { to: "/purchases/catalog", label: "รายการซื้อของ", icon: "box", menu: "purchases.catalog" },
     ],
   },
   {
@@ -127,8 +138,8 @@ const groups: NavGroup[] = [
     label: "สมาชิก",
     icon: "user",
     items: [
-      { to: "/members", label: "รายชื่อสมาชิก", icon: "user" },
-      { to: "/members/points", label: "ประวัติแต้ม", icon: "coin" },
+      { to: "/members", label: "รายชื่อสมาชิก", icon: "user", menu: "members" },
+      { to: "/members/points", label: "ประวัติแต้ม", icon: "coin", menu: "members.points" },
     ],
   },
   {
@@ -136,9 +147,9 @@ const groups: NavGroup[] = [
     label: "องค์กร",
     icon: "users",
     items: [
-      { to: "/branches", label: "สาขา", icon: "store" },
-      { to: "/terminals", label: "เครื่อง POS", icon: "terminal" },
-      { to: "/staff", label: "พนักงาน", icon: "badge" },
+      { to: "/branches", label: "สาขา", icon: "store", menu: "branches" },
+      { to: "/terminals", label: "เครื่อง POS", icon: "terminal", menu: "terminals" },
+      { to: "/staff", label: "พนักงาน", icon: "badge", adminOnly: true },
     ],
   },
   {
@@ -146,18 +157,24 @@ const groups: NavGroup[] = [
     label: "ตั้งค่า",
     icon: "settings",
     items: [
-      { to: "/settings/branding", label: "โลโก้ร้าน", icon: "store" },
-      { to: "/settings/points", label: "ตั้งค่าแต้ม", icon: "coin" },
-      { to: "/settings/display", label: "ตั้งค่าจอ", icon: "terminal" },
-      { to: "/settings/keybindings", label: "คีย์ลัด POS", icon: "terminal" },
-      { to: "/settings/backup", label: "สำรอง DB", icon: "settings" },
+      { to: "/settings/branding", label: "โลโก้ร้าน", icon: "store", menu: "settings.branding" },
+      { to: "/settings/points", label: "ตั้งค่าแต้ม", icon: "coin", menu: "settings.points" },
+      { to: "/settings/display", label: "ตั้งค่าจอ", icon: "terminal", menu: "settings.display" },
+      { to: "/settings/keybindings", label: "คีย์ลัด POS", icon: "terminal", menu: "settings.keybindings" },
+      { to: "/settings/backup", label: "สำรอง DB", icon: "settings", menu: "settings.backup" },
     ],
   },
 ];
 
+const visibleGroups = computed(() =>
+  groups
+    .map((g) => ({ ...g, items: g.items.filter(canSeeItem) }))
+    .filter((g) => g.items.length > 0),
+);
+
 const flatItems = computed(() => [
   dashboard,
-  ...groups.flatMap((g) => g.items),
+  ...visibleGroups.value.flatMap((g) => g.items),
 ]);
 
 const openGroups = ref<Record<string, boolean>>(
@@ -201,22 +218,22 @@ function toggleGroup(id: string) {
     collapsed.value = false;
     persistCollapsed();
     openGroups.value = Object.fromEntries(
-      groups.map((g) => [g.id, g.id === id]),
+      visibleGroups.value.map((g) => [g.id, g.id === id]),
     );
     return;
   }
   const nextOpen = !openGroups.value[id];
   openGroups.value = Object.fromEntries(
-    groups.map((g) => [g.id, nextOpen && g.id === id]),
+    visibleGroups.value.map((g) => [g.id, nextOpen && g.id === id]),
   );
 }
 
 watch(
   () => route.path,
   () => {
-    const activeId = groups.find((g) => isGroupActive(g))?.id ?? null;
+    const activeId = visibleGroups.value.find((g) => isGroupActive(g))?.id ?? null;
     openGroups.value = Object.fromEntries(
-      groups.map((g) => [g.id, g.id === activeId]),
+      visibleGroups.value.map((g) => [g.id, g.id === activeId]),
     );
   },
   { immediate: true },
@@ -272,7 +289,7 @@ async function onLogout() {
           </NuxtLink>
 
           <div
-            v-for="group in groups"
+            v-for="group in visibleGroups"
             :key="group.id"
             class="ui-nav-group"
             :class="{ 'is-open': openGroups[group.id] }"

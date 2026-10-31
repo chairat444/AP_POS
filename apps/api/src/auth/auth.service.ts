@@ -1,15 +1,50 @@
 import {
+  HttpException,
+  HttpStatus,
   Injectable,
   OnModuleInit,
   UnauthorizedException,
 } from "@nestjs/common";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { pg } from "@ap-pos/db";
 import { DatabaseService } from "../db/database.service";
+import { resolveAdminMenus } from "@ap-pos/shared";
 import { hashPassword, signToken, verifyPassword } from "./auth.crypto";
 
 /** จำกัดลอง PIN ผิด — key = ip|pin */
 const pinFails = new Map<string, { count: number; until: number }>();
+/** จำกัดเดารหัส Admin — key = ip / รหัสพนักงาน */
+const loginFails = new Map<string, { count: number; until: number }>();
+/** hash ปลอมให้ใช้เวลาใกล้เคียงตอนบัญชีไม่มีจริง */
+const DUMMY_PASSWORD_HASH = hashPassword("not-a-real-admin-password");
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_IP_LIMIT = 20;
+const LOGIN_CODE_LIMIT = 8;
+const LOGIN_FAIL_MSG = "รหัสหรือรหัสผ่านไม่ถูกต้อง";
+const LOGIN_LOCK_MSG = "ลองผิดหลายครั้ง · รอสักครู่แล้วลองใหม่";
+
+function assertNotLocked(key: string, limit: number) {
+  const nowMs = Date.now();
+  const fail = loginFails.get(key);
+  if (fail && fail.until > nowMs && fail.count >= limit) {
+    throw new HttpException(LOGIN_LOCK_MSG, HttpStatus.TOO_MANY_REQUESTS);
+  }
+  if (fail && fail.until <= nowMs) loginFails.delete(key);
+}
+
+function recordFail(key: string) {
+  const nowMs = Date.now();
+  const prev = loginFails.get(key);
+  if (!prev || nowMs >= prev.until) {
+    loginFails.set(key, { count: 1, until: nowMs + LOGIN_WINDOW_MS });
+    return;
+  }
+  prev.count += 1;
+}
+
+function clearFails(...keys: string[]) {
+  for (const key of keys) loginFails.delete(key);
+}
 
 @Injectable()
 export class AuthService implements OnModuleInit {
@@ -19,28 +54,44 @@ export class AuthService implements OnModuleInit {
     // seed ทำใน StaffService — รอให้ตารางพร้อม
   }
 
-  async login(code: string, password: string) {
+  async login(code: string, password: string, clientKey = "anon") {
     const raw = code.trim();
+    const ipKey = `admin-ip:${clientKey || "anon"}`;
+    const codeKey = `admin-code:${raw.toLowerCase() || "-"}`;
+    assertNotLocked(ipKey, LOGIN_IP_LIMIT);
+    assertNotLocked(codeKey, LOGIN_CODE_LIMIT);
+
     const rows = await this.database.db
       .select()
       .from(pg.staff)
-      .where(and(eq(pg.staff.code, raw), isNull(pg.staff.deletedAt)))
+      .where(
+        and(
+          sql`lower(${pg.staff.code}) = ${raw.toLowerCase()}`,
+          isNull(pg.staff.deletedAt),
+        ),
+      )
       .limit(1);
     const user = rows[0];
-    if (!user || !user.active) {
-      throw new UnauthorizedException("รหัสหรือรหัสผ่านไม่ถูกต้อง");
+    const allowed = Boolean(
+      user?.active && user.canLoginAdmin && user.passwordHash,
+    );
+    const ok = verifyPassword(
+      password,
+      allowed && user?.passwordHash ? user.passwordHash : DUMMY_PASSWORD_HASH,
+    );
+    if (!user || !allowed || !ok) {
+      recordFail(ipKey);
+      recordFail(codeKey);
+      throw new UnauthorizedException(LOGIN_FAIL_MSG);
     }
-    if (!user.canLoginAdmin) {
-      throw new UnauthorizedException("บัญชีนี้ไม่มีสิทธิ์เข้า Admin");
-    }
-    if (!verifyPassword(password, user.passwordHash)) {
-      throw new UnauthorizedException("รหัสหรือรหัสผ่านไม่ถูกต้อง");
-    }
+    clearFails(ipKey, codeKey);
+    const menus = resolveAdminMenus(user.role, user.adminMenus);
     const token = signToken({
       sub: user.id,
       code: user.code,
       name: user.name,
       role: user.role,
+      menus,
       scope: "admin",
     });
     return {
@@ -50,6 +101,7 @@ export class AuthService implements OnModuleInit {
         code: user.code,
         name: user.name,
         role: user.role,
+        menus,
       },
     };
   }
@@ -121,11 +173,22 @@ export class AuthService implements OnModuleInit {
     if (!user || !user.active || !user.canLoginAdmin) {
       throw new UnauthorizedException("เซสชันหมดอายุ");
     }
+    const menus = resolveAdminMenus(user.role, user.adminMenus);
+    const token = signToken({
+      sub: user.id,
+      code: user.code,
+      name: user.name,
+      role: user.role,
+      menus,
+      scope: "admin",
+    });
     return {
       id: user.id,
       code: user.code,
       name: user.name,
       role: user.role,
+      menus,
+      token,
     };
   }
 

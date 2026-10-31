@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { paginateItems } from "~/utils/pagination";
 import {
+  ADMIN_MENU_GROUPS,
+  ALL_ADMIN_MENU_KEYS,
   calcDailyCommission,
   formatCommissionRule,
   type CommissionConfig,
@@ -13,6 +15,7 @@ type Staff = {
   pin: string;
   role: "admin" | "manager" | "cashier";
   canLoginAdmin: boolean;
+  adminMenus?: string[];
   active: boolean;
   hasPassword: boolean;
   commissionEnabled: boolean;
@@ -29,6 +32,7 @@ type StaffForm = {
   password: string;
   role: "admin" | "manager" | "cashier";
   canLoginAdmin: boolean;
+  adminMenus: string[];
   active: boolean;
   dailyWage: string;
   commissionEnabled: boolean;
@@ -44,6 +48,7 @@ const emptyForm = (): StaffForm => ({
   password: "",
   role: "cashier",
   canLoginAdmin: false,
+  adminMenus: [...ALL_ADMIN_MENU_KEYS],
   active: true,
   dailyWage: "0",
   commissionEnabled: false,
@@ -68,6 +73,8 @@ const rows = ref<Staff[]>([]);
 const modalOpen = ref(false);
 const editingId = ref<string | null>(null);
 const form = ref<StaffForm>(emptyForm());
+const showPassword = ref(false);
+const codeLocked = ref(false);
 
 const commissionPreview = computed(() => {
   const config: CommissionConfig = {
@@ -121,6 +128,13 @@ function baht(n: number) {
   });
 }
 
+function menusLabel(row: Staff) {
+  if (!row.canLoginAdmin) return "-";
+  if (row.role === "admin" || row.adminMenus?.includes("*")) return "ทุกเมนู";
+  const n = (row.adminMenus ?? []).length;
+  return n ? `${n} เมนู` : "แดชบอร์ด";
+}
+
 function commissionLabel(row: Staff) {
   if (!row.commissionEnabled) return "-";
   return formatCommissionRule({
@@ -153,6 +167,8 @@ async function openCreate() {
   } catch {
     // ignore
   }
+  showPassword.value = false;
+  codeLocked.value = false;
   modalOpen.value = true;
 }
 
@@ -165,6 +181,10 @@ function openEdit(row: Staff) {
     password: "",
     role: row.role,
     canLoginAdmin: row.canLoginAdmin,
+    adminMenus:
+      row.role === "admin" || row.adminMenus?.includes("*")
+        ? [...ALL_ADMIN_MENU_KEYS]
+        : [...(row.adminMenus ?? [])],
     active: row.active,
     dailyWage: String(row.dailyWage ?? 0),
     commissionEnabled: Boolean(row.commissionEnabled),
@@ -172,12 +192,91 @@ function openEdit(row: Staff) {
     commissionStepSales: String(row.commissionStepSales ?? 1000),
     commissionPerStep: String(row.commissionPerStep ?? 100),
   };
+  showPassword.value = false;
+  codeLocked.value = row.code === "admin";
   modalOpen.value = true;
 }
 
 function closeModal() {
   modalOpen.value = false;
+  showPassword.value = false;
+  codeLocked.value = false;
 }
+
+const PASSWORD_UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+const PASSWORD_LOWER = "abcdefghijkmnopqrstuvwxyz";
+const PASSWORD_DIGIT = "23456789";
+const PASSWORD_SYMBOL = "!@#$%^&*?";
+const PASSWORD_ALL =
+  PASSWORD_UPPER + PASSWORD_LOWER + PASSWORD_DIGIT + PASSWORD_SYMBOL;
+
+function pickChar(alphabet: string, n: number) {
+  return alphabet[n % alphabet.length] ?? alphabet[0] ?? "x";
+}
+
+function generateStrongPassword(length = 16) {
+  const buf = new Uint32Array(length * 2);
+  crypto.getRandomValues(buf);
+  const chars = [
+    pickChar(PASSWORD_UPPER, buf[0] ?? 0),
+    pickChar(PASSWORD_LOWER, buf[1] ?? 1),
+    pickChar(PASSWORD_DIGIT, buf[2] ?? 2),
+    pickChar(PASSWORD_SYMBOL, buf[3] ?? 3),
+  ];
+  for (let i = 4; i < length; i++) {
+    chars.push(pickChar(PASSWORD_ALL, buf[i] ?? i));
+  }
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = (buf[length + i] ?? i) % (i + 1);
+    const a = chars[i];
+    const b = chars[j];
+    if (a == null || b == null) continue;
+    chars[i] = b;
+    chars[j] = a;
+  }
+  return chars.join("");
+}
+
+function fillStrongPassword() {
+  form.value.password = generateStrongPassword();
+  form.value.canLoginAdmin = true;
+  showPassword.value = true;
+}
+
+function hasMenu(key: string) {
+  return form.value.adminMenus.includes(key);
+}
+
+function toggleMenu(key: string, on: boolean) {
+  if (on) {
+    if (!form.value.adminMenus.includes(key)) form.value.adminMenus.push(key);
+    return;
+  }
+  form.value.adminMenus = form.value.adminMenus.filter((k) => k !== key);
+}
+
+function groupAllChecked(id: string) {
+  const items = ADMIN_MENU_GROUPS.find((g) => g.id === id)?.items ?? [];
+  return items.length > 0 && items.every((i) => hasMenu(i.key));
+}
+
+function toggleMenuGroup(id: string, on: boolean) {
+  const items = ADMIN_MENU_GROUPS.find((g) => g.id === id)?.items ?? [];
+  for (const i of items) toggleMenu(i.key, on);
+}
+
+function toggleAllMenus(on: boolean) {
+  form.value.adminMenus = on ? [...ALL_ADMIN_MENU_KEYS] : [];
+}
+
+watch(
+  () => form.value.canLoginAdmin,
+  (on) => {
+    if (on && !form.value.adminMenus.length) {
+      form.value.adminMenus = [...ALL_ADMIN_MENU_KEYS];
+    }
+  },
+);
 
 async function save() {
   if (!form.value.name.trim()) {
@@ -197,6 +296,7 @@ async function save() {
       pin: form.value.pin,
       role: form.value.role,
       canLoginAdmin: form.value.canLoginAdmin,
+      adminMenus: form.value.adminMenus,
       active: form.value.active,
       dailyWage: Number(form.value.dailyWage) || 0,
       commissionEnabled: form.value.commissionEnabled,
@@ -303,6 +403,7 @@ onMounted(load);
               <th>ค่าแรง/วัน</th>
               <th>ค่าคอม</th>
               <th>Admin</th>
+              <th>เมนู</th>
               <th>สถานะ</th>
               <th class="ui-table__actions">จัดการ</th>
             </tr>
@@ -316,6 +417,7 @@ onMounted(load);
               <td>{{ baht(row.dailyWage ?? 0) }}</td>
               <td class="ui-staff-comm">{{ commissionLabel(row) }}</td>
               <td>{{ row.canLoginAdmin ? "ได้" : "-" }}</td>
+              <td>{{ menusLabel(row) }}</td>
               <td>{{ row.active ? "ใช้งาน" : "ปิด" }}</td>
               <td class="ui-table__actions">
                 <button type="button" class="ui-btn ui-btn--ghost" @click="openEdit(row)">
@@ -346,14 +448,25 @@ onMounted(load);
         <div class="ui-modal__body">
           <div class="ui-form-grid">
             <label class="ui-field">
-              <span>รหัส (ออโต้)</span>
+              <span>รหัสเข้าสู่ระบบ</span>
               <input
                 v-model="form.code"
                 class="ui-input"
                 type="text"
-                readonly
-                title="ออกเลขอัตโนมัติ"
+                maxlength="32"
+                :readonly="codeLocked"
+                :title="codeLocked ? 'บัญชี admin หลักเปลี่ยนรหัสไม่ได้' : 'ใช้เข้า Admin'"
+                placeholder="เช่น ploy"
+                autocapitalize="off"
+                spellcheck="false"
               />
+              <p class="ui-field-hint">
+                {{
+                  codeLocked
+                    ? "บัญชีผู้ดูแลหลักใช้รหัส admin"
+                    : "ใช้ล็อกอินหลังบ้าน · เปลี่ยนจาก 02 เป็นชื่อได้ เช่น ploy · ว่างตอนเพิ่มใหม่จะออกเลขให้"
+                }}
+              </p>
             </label>
             <label class="ui-field">
               <span>ชื่อ *</span>
@@ -390,7 +503,59 @@ onMounted(load);
                 รหัสผ่าน Admin
                 {{ editingId ? "(ว่าง = ไม่เปลี่ยน)" : "" }}
               </span>
-              <input v-model="form.password" class="ui-input" type="password" />
+              <div class="ui-staff-password">
+                <div class="ui-password-field">
+                  <input
+                    v-model="form.password"
+                    class="ui-input"
+                    :type="showPassword ? 'text' : 'password'"
+                    autocomplete="new-password"
+                    spellcheck="false"
+                  />
+                  <button
+                    class="ui-password-field__toggle"
+                    type="button"
+                    :title="showPassword ? 'ซ่อนรหัสผ่าน' : 'ดูรหัสผ่าน'"
+                    :aria-label="showPassword ? 'ซ่อนรหัสผ่าน' : 'ดูรหัสผ่าน'"
+                    @click="showPassword = !showPassword"
+                  >
+                    <svg
+                      v-if="!showPassword"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                      <circle cx="12" cy="12" r="3" />
+                    </svg>
+                    <svg
+                      v-else
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M3 3l18 18" />
+                      <path d="M10.6 10.6A3 3 0 0 0 12 15a3 3 0 0 0 2.4-4.4" />
+                      <path d="M9.9 5.1A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.2 3.9" />
+                      <path d="M6.1 6.1C3.8 7.8 2 12 2 12s3.5 7 10 7a10.4 10.4 0 0 0 4.2-.9" />
+                    </svg>
+                  </button>
+                </div>
+                <button
+                  class="ui-btn ui-btn--ghost"
+                  type="button"
+                  title="สุ่มรหัสผ่านแข็งแรง 16 ตัว"
+                  @click="fillStrongPassword"
+                >
+                  สุ่มรหัส
+                </button>
+              </div>
             </label>
             <label class="ui-field ui-field--check">
               <input v-model="form.canLoginAdmin" type="checkbox" />
@@ -400,6 +565,54 @@ onMounted(load);
               <input v-model="form.active" type="checkbox" />
               <span>เปิดใช้งาน</span>
             </label>
+          </div>
+
+          <div
+            v-if="form.canLoginAdmin"
+            class="ui-staff-menus"
+          >
+            <div class="ui-staff-menus__head">
+              <strong>เมนูที่เข้าได้ใน Admin</strong>
+              <label v-if="form.role !== 'admin'" class="ui-staff-menus__all">
+                <input
+                  type="checkbox"
+                  :checked="form.adminMenus.length === ALL_ADMIN_MENU_KEYS.length"
+                  @change="toggleAllMenus(($event.target as HTMLInputElement).checked)"
+                />
+                เลือกทั้งหมด
+              </label>
+            </div>
+            <p v-if="form.role === 'admin'" class="ui-field-hint">
+              ผู้ดูแลเข้าได้ทุกเมนู รวมหน้าพนักงาน
+            </p>
+            <div v-else class="ui-staff-menus__grid">
+              <section
+                v-for="group in ADMIN_MENU_GROUPS"
+                :key="group.id"
+                class="ui-staff-menus__group"
+              >
+                <label class="ui-staff-menus__group-head">
+                  <input
+                    type="checkbox"
+                    :checked="groupAllChecked(group.id)"
+                    @change="toggleMenuGroup(group.id, ($event.target as HTMLInputElement).checked)"
+                  />
+                  {{ group.label }}
+                </label>
+                <label
+                  v-for="item in group.items"
+                  :key="item.key"
+                  class="ui-staff-menus__item"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="hasMenu(item.key)"
+                    @change="toggleMenu(item.key, ($event.target as HTMLInputElement).checked)"
+                  />
+                  {{ item.label }}
+                </label>
+              </section>
+            </div>
           </div>
 
           <div class="ui-staff-comm-box">
@@ -479,6 +692,62 @@ onMounted(load);
   font-size: 0.82rem;
   color: #475569;
   line-height: 1.35;
+}
+.ui-staff-password {
+  display: flex;
+  align-items: stretch;
+  gap: 0.45rem;
+}
+.ui-staff-password .ui-password-field {
+  flex: 1;
+  min-width: 0;
+}
+.ui-staff-password .ui-btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.ui-staff-password .ui-password-field__toggle svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke-width: 1.5;
+}
+.ui-staff-menus {
+  margin-top: 1.1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e2e8f0;
+  display: grid;
+  gap: 0.75rem;
+}
+.ui-staff-menus__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+.ui-staff-menus__all,
+.ui-staff-menus__group-head,
+.ui-staff-menus__item {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.88rem;
+}
+.ui-staff-menus__group-head {
+  font-weight: 700;
+  margin-bottom: 0.25rem;
+}
+.ui-staff-menus__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.85rem;
+}
+.ui-staff-menus__group {
+  display: grid;
+  gap: 0.28rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.75rem;
+  background: #f8fafc;
 }
 .ui-staff-comm-box {
   margin-top: 1.1rem;

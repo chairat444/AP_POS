@@ -10,6 +10,8 @@ export type AuthTokenPayload = {
   code: string;
   name: string;
   role: string;
+  /** เมนูแอดมิน · ไม่มีค่า = โทเคนเก่า (ถือว่าเข้าได้ทั้งหมด) */
+  menus?: string[];
   /** ไม่มีค่า = โทเคน admin เก่า (ถือเป็น admin) */
   scope?: AuthTokenScope;
   exp: number;

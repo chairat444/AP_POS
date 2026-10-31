@@ -23,8 +23,9 @@ const logoSrc = computed(() => {
   return `${apiBase.value}${brandLogo.value.startsWith("/") ? "" : "/"}${brandLogo.value}`;
 });
 
-const code = ref("admin");
-const password = ref("admin123");
+const code = ref("");
+const password = ref("");
+const showPassword = ref(false);
 const pending = ref(false);
 const error = ref("");
 
@@ -74,19 +75,65 @@ onMounted(loadBranding);
       </div>
       <form class="ui-login__form" @submit.prevent="onSubmit">
         <h2>เข้าสู่ระบบ</h2>
-        <p class="ui-login__hint">ใช้รหัสพนักงาน + รหัสผ่าน (บัญชีเริ่มต้น admin / admin123)</p>
+        <p class="ui-login__hint">ใช้รหัสพนักงานกับรหัสผ่านที่ได้รับจากผู้ดูแล</p>
         <label class="ui-field">
           <span>รหัสพนักงาน</span>
-          <input v-model="code" class="ui-input" type="text" autocomplete="username" />
+          <input
+            v-model="code"
+            class="ui-input"
+            type="text"
+            name="username"
+            autocomplete="username"
+            autocapitalize="off"
+            spellcheck="false"
+          />
         </label>
         <label class="ui-field">
           <span>รหัสผ่าน</span>
-          <input
-            v-model="password"
-            class="ui-input"
-            type="password"
-            autocomplete="current-password"
-          />
+          <div class="ui-password-field">
+            <input
+              v-model="password"
+              class="ui-input"
+              :type="showPassword ? 'text' : 'password'"
+              name="password"
+              autocomplete="current-password"
+              spellcheck="false"
+            />
+            <button
+              class="ui-password-field__toggle"
+              type="button"
+              :title="showPassword ? 'ซ่อนรหัสผ่าน' : 'ดูรหัสผ่าน'"
+              :aria-label="showPassword ? 'ซ่อนรหัสผ่าน' : 'ดูรหัสผ่าน'"
+              @click="showPassword = !showPassword"
+            >
+              <svg
+                v-if="!showPassword"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              <svg
+                v-else
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M3 3l18 18" />
+                <path d="M10.6 10.6A3 3 0 0 0 12 15a3 3 0 0 0 2.4-4.4" />
+                <path d="M9.9 5.1A10.8 10.8 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.2 3.9" />
+                <path d="M6.1 6.1C3.8 7.8 2 12 2 12s3.5 7 10 7a10.4 10.4 0 0 0 4.2-.9" />
+              </svg>
+            </button>
+          </div>
         </label>
         <p v-if="error" class="ui-login__error">{{ error }}</p>
         <button type="submit" class="ui-btn ui-btn--primary ui-login__submit" :disabled="pending">
@@ -108,5 +155,10 @@ onMounted(loadBranding);
   display: block;
   background: transparent;
   padding: 0.25rem;
+}
+.ui-login .ui-password-field__toggle svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  stroke-width: 1.5;
 }
 </style>

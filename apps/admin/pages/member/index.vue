@@ -25,6 +25,19 @@ type MemberView = {
   code: string;
   name: string;
   points: number;
+  phone?: string;
+  lineLinked?: boolean;
+  linked?: boolean;
+};
+
+type KioskHit = {
+  found: boolean;
+  code?: string;
+  name?: string;
+  phone?: string;
+  points?: number;
+  lineLinked?: boolean;
+  linked?: boolean;
 };
 
 const config = useRuntimeConfig();
@@ -48,6 +61,8 @@ const ready = ref(false);
 const fromLine = ref(false);
 const lineIdToken = ref("");
 const lineBound = ref(false);
+/** เช็คเบอร์อื่นจากผลลัพธ์ — ดูอย่างเดียว ไม่ผูกไลน์ */
+const checkOtherOnly = ref(false);
 const lineOffer = ref({ active: false, points: 0, headline: "" });
 
 const hasAccess = computed(() => Boolean(accessKey.value));
@@ -96,6 +111,7 @@ function clearIdle() {
 }
 
 function armIdle() {
+  if (fromLine.value || lineBound.value) return;
   clearIdle();
   idleTimer = setTimeout(() => resetHome(), IDLE_MS);
 }
@@ -108,12 +124,50 @@ function resetHome() {
   error.value = "";
   member.value = null;
   pending.value = false;
+  checkOtherOnly.value = false;
 }
 
-function goCheck() {
+function applyHit(data: KioskHit) {
+  member.value = {
+    code: data.code || "",
+    name: data.name || "",
+    points: Number(data.points) || 0,
+    phone: data.phone,
+    lineLinked: Boolean(data.lineLinked),
+    linked: Boolean(data.linked),
+  };
+  const p = String(data.phone ?? "").replace(/\D/g, "").slice(0, 10);
+  if (p) phone.value = p;
+}
+
+async function goCheck() {
   phone.value = "";
   error.value = "";
   member.value = null;
+  checkOtherOnly.value = false;
+  if (lineIdToken.value) {
+    pending.value = true;
+    try {
+      const data = await apiLookupLine();
+      if (data.found) {
+        applyHit(data);
+        step.value = "check-result";
+        return;
+      }
+    } catch {
+      /* ใส่เบอร์เอง */
+    } finally {
+      pending.value = false;
+    }
+  }
+  step.value = "check";
+}
+
+function goCheckOther() {
+  phone.value = "";
+  error.value = "";
+  member.value = null;
+  checkOtherOnly.value = true;
   step.value = "check";
 }
 
@@ -122,6 +176,7 @@ function goJoin(keepPhone = false) {
   name.value = "";
   error.value = "";
   member.value = null;
+  checkOtherOnly.value = false;
   step.value = "join";
   void nextTick(() => {
     nameInput.value?.focus();
@@ -166,14 +221,20 @@ function onPad(key: string) {
   phone.value += key;
 }
 
-async function apiLookup() {
-  return await $fetch<{
-    found: boolean;
-    code?: string;
-    name?: string;
-    points?: number;
-  }>(`${apiBase.value}/members/kiosk/lookup`, {
+async function apiLookupPhone() {
+  return await $fetch<KioskHit>(`${apiBase.value}/members/kiosk/lookup`, {
     query: { phone: phone.value },
+    ...kioskOpts(),
+  });
+}
+
+async function apiLookupLine(phoneOverride?: string) {
+  return await $fetch<KioskHit>(`${apiBase.value}/members/kiosk/lookup`, {
+    method: "POST",
+    body: maybeWrapWafRequestBody({
+      idToken: lineIdToken.value || undefined,
+      phone: phoneOverride ?? (phone.value || undefined),
+    }) as Record<string, unknown>,
     ...kioskOpts(),
   });
 }
@@ -186,17 +247,16 @@ async function submitCheck() {
   pending.value = true;
   error.value = "";
   try {
-    const data = await apiLookup();
+    const data =
+      lineIdToken.value && !checkOtherOnly.value
+        ? await apiLookupLine()
+        : await apiLookupPhone();
     if (!data.found) {
       step.value = "not-found";
       armIdle();
       return;
     }
-    member.value = {
-      code: data.code || "",
-      name: data.name || "",
-      points: Number(data.points) || 0,
-    };
+    applyHit(data);
     step.value = "check-result";
     armIdle();
   } catch (e: unknown) {
@@ -245,13 +305,11 @@ async function submitJoin() {
     // เบอร์ซ้ำ → ดึงแต้มให้เลย
     if (/มีสมาชิกแล้ว/.test(msg)) {
       try {
-        const data = await apiLookup();
+        const data = lineIdToken.value
+          ? await apiLookupLine()
+          : await apiLookupPhone();
         if (data.found) {
-          member.value = {
-            code: data.code || "",
-            name: data.name || "",
-            points: Number(data.points) || 0,
-          };
+          applyHit(data);
           error.value = "เบอร์นี้เป็นสมาชิกแล้ว";
           step.value = "check-result";
           armIdle();
@@ -398,14 +456,28 @@ async function loadLineOffer() {
   }
 }
 
+async function tryAutoLineCheck() {
+  if (!hasAccess.value || !lineIdToken.value) return;
+  try {
+    const data = await apiLookupLine();
+    if (data.found) {
+      applyHit(data);
+      step.value = "check-result";
+    }
+  } catch {
+    /* ยังไม่ผูก — อยู่หน้าแรก */
+  }
+}
+
 onMounted(async () => {
   resolveAccessKey();
   resolveLineSource();
   await initLiff();
-  ready.value = true;
   if (hasAccess.value) {
     await Promise.all([loadBranding(), loadLineOffer()]);
+    await tryAutoLineCheck();
   }
+  ready.value = true;
 });
 onBeforeUnmount(clearIdle);
 </script>
@@ -440,7 +512,7 @@ onBeforeUnmount(clearIdle);
         <small>ของขวัญสำหรับสมาชิกใหม่ที่สมัครจากไลน์</small>
       </p>
       <p v-else-if="lineBound" class="mk__line-bonus">
-        เปิดจากไลน์แล้ว · สมัครแล้วจะผูกบัญชีนี้
+        เปิดจากไลน์แล้ว · สมาชิกอยู่แล้วใส่เบอร์ครั้งแรก ครั้งหน้าจะขึ้นแต้มเอง
       </p>
 
       <div class="mk__perk">
@@ -467,7 +539,9 @@ onBeforeUnmount(clearIdle);
         <button type="button" class="mk__tile mk__tile--check" @click="goCheck">
           <span class="mk__tile-kicker">มีบัตรแล้ว</span>
           <strong>เช็คแต้ม</strong>
-          <span class="mk__tile-hint">ใส่เบอร์โทร</span>
+          <span class="mk__tile-hint">{{
+            lineBound ? "ใส่เบอร์ครั้งแรก ครั้งหน้าไม่ต้องใส่" : "ใส่เบอร์โทร"
+          }}</span>
         </button>
         <button type="button" class="mk__tile mk__tile--join" @click="goJoin">
           <span class="mk__tile-kicker">ยังไม่เป็นสมาชิก</span>
@@ -485,7 +559,13 @@ onBeforeUnmount(clearIdle);
     <section v-else-if="step === 'check'" class="mk__panel">
       <button type="button" class="mk__back" @click="resetHome">← กลับ</button>
       <h2 class="mk__title">เช็คแต้ม</h2>
-      <p class="mk__lead">ใส่เบอร์โทรที่ใช้สมัคร</p>
+      <p class="mk__lead">
+        {{
+          lineIdToken && !checkOtherOnly
+            ? "ใส่เบอร์ที่ใช้ที่ร้าน · ผูกกับไลน์นี้ครั้งเดียว"
+            : "ใส่เบอร์โทรที่ใช้สมัคร"
+        }}
+      </p>
 
       <div class="mk__phone" :class="{ 'is-ready': phone.length >= 9 }">
         {{ phoneDisplay || "0xx-xxx-xxxx" }}
@@ -522,6 +602,12 @@ onBeforeUnmount(clearIdle);
       class="mk__panel mk__result"
     >
       <p v-if="error" class="mk__note">{{ error }}</p>
+      <p v-else-if="member.linked" class="mk__note">
+        ผูกไลน์แล้ว · ครั้งหน้าเปิดจากไลน์จะเห็นแต้มเลย
+      </p>
+      <p v-else-if="lineBound && member.lineLinked" class="mk__note">
+        เปิดจากไลน์ · บอกเบอร์ {{ phoneDisplay }} ที่ร้าน
+      </p>
       <p class="mk__hello">สวัสดีคุณ</p>
       <h2 class="mk__name">{{ member.name }}</h2>
       <p class="mk__code">รหัส {{ member.code }}</p>
@@ -535,11 +621,11 @@ onBeforeUnmount(clearIdle);
         <button type="button" class="mk__primary" @click="resetHome">
           เสร็จสิ้น
         </button>
-        <button type="button" class="mk__ghost" @click="goCheck">
+        <button type="button" class="mk__ghost" @click="goCheckOther">
           เช็คเบอร์อื่น
         </button>
       </div>
-      <p class="mk__idle">จะกลับหน้าแรกอัตโนมัติ</p>
+      <p v-if="!(fromLine || lineBound)" class="mk__idle">จะกลับหน้าแรกอัตโนมัติ</p>
     </section>
 
     <!-- ไม่พบ -->

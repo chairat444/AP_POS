@@ -7,6 +7,8 @@ export type StaffRecord = {
   pin: string;
   role: StaffRole;
   canLoginAdmin: boolean;
+  /** เมนูที่เข้าได้ · ["*"] = ทุกเมนู */
+  adminMenus: string[];
   active: boolean;
   hasPassword: boolean;
   commissionEnabled: boolean;
@@ -25,6 +27,7 @@ export type UpsertStaffDto = {
   password?: string;
   role?: StaffRole;
   canLoginAdmin?: boolean;
+  adminMenus?: string[];
   active?: boolean;
   commissionEnabled?: boolean;
   commissionStartSales?: number;
