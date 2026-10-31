@@ -501,16 +501,10 @@ onBeforeUnmount(clearIdle);
 
     <!-- หน้าแรก -->
     <section v-else-if="ready && step === 'home'" class="mk__panel mk__home">
-      <header class="mk__brand">
+      <article class="mk__pass">
         <img class="mk__logo" :src="logoSrc" alt="" width="96" height="96" />
         <h1>{{ brandName }}</h1>
-        <p>สมาชิก · สะสมแต้ม</p>
-      </header>
-
-      <div class="mk__card">
-        <p v-if="showLineBonus" class="mk__line-bonus">
-          {{ lineOffer.headline }}
-        </p>
+        <p class="mk__pass-tag">สมาชิก · สะสมแต้ม</p>
         <ul class="mk__perk-list">
           <li>
             <strong>100 บาท</strong>
@@ -520,12 +514,9 @@ onBeforeUnmount(clearIdle);
             <strong>1 แต้ม</strong>
             <span>= 1 บาท</span>
           </li>
-          <li>
-            <strong>ไม่หมดอายุ</strong>
-            <span>ใช้ได้เรื่อยไป</span>
-          </li>
         </ul>
-      </div>
+        <p class="mk__perk-note">สะสมและใช้ได้ทุกสาขา ไม่หมดอายุ</p>
+      </article>
 
       <div class="mk__actions">
         <button type="button" class="mk__tile mk__tile--check" @click="goCheck">
@@ -535,7 +526,9 @@ onBeforeUnmount(clearIdle);
         <button type="button" class="mk__tile mk__tile--join" @click="goJoin">
           <strong>สมัครสมาชิก</strong>
           <span class="mk__tile-hint">{{
-            showLineBonus ? `รับ ${lineOffer.points} แต้ม` : "สมัครฟรี"
+            showLineBonus
+              ? `รับฟรี ${lineOffer.points} แต้ม`
+              : "สมัครฟรี"
           }}</span>
         </button>
       </div>
@@ -714,11 +707,11 @@ onBeforeUnmount(clearIdle);
         <p class="mk__success-card-title">พร้อมสะสมแต้มแล้ว</p>
         <ul class="mk__success-list">
           <li v-if="fromLine && member.points > 0">
-            สมัครผ่านไลน์ รับ {{ formatPoints(member.points) }} แต้ม
+            สมัครผ่านไลน์ ได้ {{ formatPoints(member.points) }} แต้ม
           </li>
           <li>ซื้อครบ 100 บาท ได้ 1 แต้ม</li>
           <li>1 แต้มใช้แทนเงินสด 1 บาท</li>
-          <li>แต้มไม่มีวันหมดอายุ</li>
+          <li>สะสมและใช้ได้ทุกสาขา ไม่หมดอายุ</li>
         </ul>
         <p class="mk__success-phone">บอกเบอร์ {{ phoneDisplay }}</p>
       </div>
@@ -799,7 +792,7 @@ onBeforeUnmount(clearIdle);
   flex: 1 1 auto;
   min-height: 0;
   height: auto;
-  gap: 0.75rem;
+  gap: 0.9rem;
   justify-content: center;
 }
 @keyframes mk-in {
@@ -816,65 +809,67 @@ onBeforeUnmount(clearIdle);
   text-align: center;
   padding: 1.25rem 0 0.5rem;
 }
-.mk__home .mk__brand {
-  padding: 0.2rem 0 0;
-}
-.mk__home .mk__logo {
-  width: 4.35rem;
-  height: 4.35rem;
-  padding: 0.18rem;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow:
-    0 0 0 3px #fff,
-    0 0 0 5px #efc2c2,
-    0 12px 26px #c6282828;
-}
-.mk__home .mk__brand h1 {
-  margin: 0.55rem 0 0.08rem;
-  font-size: clamp(1.55rem, 6.2vw, 1.95rem);
-}
-.mk__home .mk__brand p {
-  font-size: 0.92rem;
-  letter-spacing: 0.04em;
-}
-.mk__home .mk__card {
+.mk__pass {
   position: relative;
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 0.65rem;
+  align-items: center;
+  gap: 0;
   min-height: 0;
-  margin-top: 0.15rem;
-  padding: 1.05rem 0.75rem 1rem;
-  overflow: hidden;
-  border-radius: 1.35rem;
-  background: linear-gradient(180deg, #ffffff 0%, #fffaf7 100%);
-  border: 1px solid #f0d6d2;
+  margin-top: 1.7rem;
+  padding: 2.55rem 1rem 1.15rem;
+  overflow: visible;
+  border-radius: 1.55rem;
+  background:
+    linear-gradient(180deg, #fff 0%, #fffaf8 42%, #fff3ee 100%);
+  border: 1px solid #f0d4ce;
   box-shadow:
     0 1px 0 #fff inset,
-    0 16px 36px #c6282812;
+    0 18px 40px #c6282818;
 }
-.mk__home .mk__card::before {
+.mk__pass::before {
   content: "";
   position: absolute;
   top: 0;
-  right: 0;
-  left: 0;
-  height: 4px;
-  background: linear-gradient(90deg, #c62828 0%, #e8a598 50%, #c62828 100%);
+  right: 1.15rem;
+  left: 1.15rem;
+  height: 5px;
+  border-radius: 0 0 8px 8px;
+  background: linear-gradient(90deg, #c62828 0%, #e7a194 50%, #c62828 100%);
 }
-.mk__home .mk__line-bonus {
-  margin: 0.15rem 0.15rem 0;
-  padding: 0.48rem 0.75rem;
-  border: 0;
-  border-radius: 999px;
-  background: linear-gradient(180deg, #fff6d8 0%, #fde7a8 100%);
-  color: #7a4e00;
+.mk__home .mk__logo {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 4.7rem;
+  height: 4.7rem;
+  padding: 0.2rem;
+  border-radius: 50%;
+  background: #fff;
+  transform: translate(-50%, -52%);
+  box-shadow:
+    0 0 0 4px #fff,
+    0 0 0 6px #efc2c2,
+    0 10px 22px #c6282830;
+}
+.mk__pass h1 {
+  margin: 0.15rem 0 0.12rem;
+  font-family: "IBM Plex Sans Thai", system-ui, sans-serif;
+  font-size: clamp(1.55rem, 6.2vw, 1.95rem);
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: var(--mk-red-deep);
+  line-height: 1.15;
+  text-align: center;
+}
+.mk__pass-tag {
+  margin: 0 0 0.85rem;
+  color: #8a6262;
   font-size: 0.9rem;
-  font-weight: 750;
-  box-shadow: 0 1px 0 #fff6 inset;
+  font-weight: 550;
+  letter-spacing: 0.06em;
+  text-align: center;
 }
 .mk__logo {
   width: 5.5rem;
@@ -939,8 +934,21 @@ onBeforeUnmount(clearIdle);
   gap: 0.55rem;
 }
 .mk__home .mk__perk-list {
-  grid-template-columns: 1fr 1fr 1fr;
+  width: 100%;
+  grid-template-columns: 1fr 1fr;
   gap: 0;
+  padding: 0.15rem 0 0.7rem;
+}
+.mk__perk-note {
+  width: 100%;
+  margin: 0;
+  padding-top: 0.7rem;
+  border-top: 1px dashed #efd0cc;
+  text-align: center;
+  font-size: 0.86rem;
+  font-weight: 650;
+  line-height: 1.4;
+  color: #7a5555;
 }
 .mk__perk-list li {
   display: grid;
@@ -993,8 +1001,8 @@ onBeforeUnmount(clearIdle);
 }
 .mk__home .mk__actions {
   grid-template-columns: 1fr;
-  gap: 0.55rem;
-  margin-top: 0.15rem;
+  gap: 0.5rem;
+  margin-top: 0.05rem;
   padding-bottom: 0;
 }
 .mk__tile {
@@ -1014,14 +1022,14 @@ onBeforeUnmount(clearIdle);
     box-shadow 0.15s ease;
 }
 .mk__home .mk__tile {
-  flex-direction: row;
+  flex-direction: column;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  min-height: 3.7rem;
-  padding: 0.75rem 1rem 0.75rem 1.1rem;
-  border-radius: 1.1rem;
-  text-align: left;
+  justify-content: center;
+  gap: 0.08rem;
+  min-height: 3.55rem;
+  padding: 0.65rem 1rem 0.7rem;
+  border-radius: 1.15rem;
+  text-align: center;
 }
 .mk__tile:active {
   transform: scale(0.985);
@@ -1037,17 +1045,21 @@ onBeforeUnmount(clearIdle);
   box-shadow: 0 12px 28px #c6282840;
 }
 .mk__home .mk__tile--check {
+  min-height: 3.25rem;
   background: #fff;
   border-color: #f0c8c4;
-  box-shadow: 0 8px 20px #c6282810;
+  box-shadow: 0 6px 16px #c628280c;
 }
 .mk__home .mk__tile--join {
-  background: linear-gradient(165deg, #d32f2f 0%, var(--mk-red-deep) 100%);
-  box-shadow: 0 12px 26px #c6282845;
+  min-height: 4.35rem;
+  background: linear-gradient(165deg, #e53935 0%, var(--mk-red-deep) 100%);
+  box-shadow: 0 14px 28px #c6282848;
 }
 .mk__home .mk__tile--join .mk__tile-hint {
-  color: #ffe8e8;
-  opacity: 0.92;
+  color: #ffe7b0;
+  opacity: 1;
+  font-size: 0.98rem;
+  font-weight: 750;
 }
 .mk__tile-kicker {
   font-size: 0.88rem;
@@ -1060,21 +1072,15 @@ onBeforeUnmount(clearIdle);
   line-height: 1.15;
 }
 .mk__home .mk__tile strong {
-  font-size: 1.18rem;
+  font-size: 1.12rem;
+}
+.mk__home .mk__tile--join strong {
+  font-size: 1.32rem;
 }
 .mk__home .mk__tile-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.15rem;
   font-size: 0.82rem;
   font-weight: 650;
-  opacity: 0.78;
-}
-.mk__home .mk__tile-hint::after {
-  content: "›";
-  font-size: 1.15rem;
-  line-height: 1;
-  opacity: 0.7;
+  opacity: 0.82;
 }
 .mk__tile-hint {
   font-size: 0.95rem;
