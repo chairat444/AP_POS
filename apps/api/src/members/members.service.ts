@@ -4,7 +4,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { and, asc, desc, eq, gt, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -408,6 +408,10 @@ export class MembersService implements OnModuleInit {
         `เบอร์โทรนี้มีสมาชิกแล้ว: ${dup.name} (${dup.code})`,
       );
     }
+    const lineUserId = dto.lineUserId?.trim() || null;
+    if (lineUserId) {
+      await this.releaseDeletedLineUser(lineUserId);
+    }
     const ts = now();
     // รหัสออกที่เซิร์ฟเวอร์เสมอ — กันโค้ดค้างในฟอร์มชน unique แล้วต้องรีเฟรช
     let createdId = "";
@@ -421,7 +425,7 @@ export class MembersService implements OnModuleInit {
           name,
           phone,
           points,
-          lineUserId: dto.lineUserId || null,
+          lineUserId,
           createdAt: ts,
           updatedAt: ts,
           deletedAt: null,
@@ -430,6 +434,11 @@ export class MembersService implements OnModuleInit {
         break;
       } catch (e) {
         if (attempt < 5 && isUniqueViolation(e)) continue;
+        if (isUniqueViolation(e)) {
+          throw new BadRequestException(
+            "เบอร์หรือไลน์นี้เคยสมัครไว้ ถ้าลบไปแล้วลองสมัครอีกครั้ง",
+          );
+        }
         throw e;
       }
     }
@@ -481,11 +490,23 @@ export class MembersService implements OnModuleInit {
     return this.get(id);
   }
 
+  private async releaseDeletedLineUser(lineUserId: string) {
+    await this.database.db
+      .update(pg.customers)
+      .set({ lineUserId: null, updatedAt: now() })
+      .where(
+        and(
+          eq(pg.customers.lineUserId, lineUserId),
+          isNotNull(pg.customers.deletedAt),
+        ),
+      );
+  }
+
   async remove(id: string) {
     const current = await this.get(id);
     await this.database.db
       .update(pg.customers)
-      .set({ deletedAt: now(), updatedAt: now() })
+      .set({ deletedAt: now(), updatedAt: now(), lineUserId: null })
       .where(eq(pg.customers.id, id));
     return current;
   }
