@@ -4,7 +4,7 @@ import {
   NotFoundException,
   OnModuleInit,
 } from "@nestjs/common";
-import { and, asc, desc, eq, gt, isNotNull, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -307,6 +307,47 @@ export class MembersService implements OnModuleInit {
       }
       throw e;
     }
+  }
+
+  async stats() {
+    const today = new Date().toLocaleDateString("en-CA", {
+      timeZone: "Asia/Bangkok",
+    });
+    const monthStart = new Date(`${today.slice(0, 7)}-01T00:00:00.000+07:00`);
+    const ago30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const [totals] = await this.database.db
+      .select({
+        count: sql<number>`count(*)::int`,
+        pointsTotal: sql<number>`coalesce(sum(${pg.customers.points}), 0)::int`,
+        lineLinked: sql<number>`count(*) filter (where ${pg.customers.lineUserId} is not null)::int`,
+        withPoints: sql<number>`count(*) filter (where ${pg.customers.points} > 0)::int`,
+        joinedThisMonth: sql<number>`count(*) filter (where ${pg.customers.createdAt} >= ${monthStart})::int`,
+      })
+      .from(pg.customers)
+      .where(isNull(pg.customers.deletedAt));
+    const [used] = await this.database.db
+      .select({
+        c: sql<number>`count(distinct ${pg.pointLedger.customerId})::int`,
+      })
+      .from(pg.pointLedger)
+      .innerJoin(
+        pg.customers,
+        eq(pg.customers.id, pg.pointLedger.customerId),
+      )
+      .where(
+        and(
+          isNull(pg.customers.deletedAt),
+          gte(pg.pointLedger.createdAt, ago30),
+        ),
+      );
+    return {
+      count: Number(totals?.count ?? 0),
+      pointsTotal: Number(totals?.pointsTotal ?? 0),
+      lineLinked: Number(totals?.lineLinked ?? 0),
+      withPoints: Number(totals?.withPoints ?? 0),
+      joinedThisMonth: Number(totals?.joinedThisMonth ?? 0),
+      usedLast30Days: Number(used?.c ?? 0),
+    };
   }
 
   async list() {

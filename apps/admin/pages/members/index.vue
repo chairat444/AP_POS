@@ -153,6 +153,36 @@ function sortMark(key: SortKey) {
   return sortDir.value === "asc" ? " ↑" : " ↓";
 }
 
+const memberStats = computed(() => {
+  const all = rows.value;
+  const count = all.length;
+  const pointsTotal = all.reduce((s, m) => s + (Number(m.points) || 0), 0);
+  const lineLinked = all.filter((m) => m.lineLinked).length;
+  const withPoints = all.filter((m) => (Number(m.points) || 0) > 0).length;
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Bangkok",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+  const monthStart = Date.parse(`${today.slice(0, 7)}-01T00:00:00+07:00`);
+  const ago30 = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const joinedThisMonth = all.filter((m) => ts(m.createdAt) >= monthStart).length;
+  const usedLast30Days = all.filter((m) => ts(m.lastUsedAt) >= ago30).length;
+  return {
+    count,
+    pointsTotal,
+    lineLinked,
+    withPoints,
+    joinedThisMonth,
+    usedLast30Days,
+  };
+});
+
+function nTh(n: number) {
+  return n.toLocaleString("th-TH");
+}
+
 const sortLabel = computed(() => {
   const labels: Record<SortKey, string> = {
     points: "แต้ม",
@@ -382,6 +412,51 @@ onMounted(load);
     </div>
 
     <div v-if="error && !modalOpen" class="ui-empty">{{ error }}</div>
+
+    <div class="ui-stat-grid ui-members__stats">
+      <article class="ui-stat">
+        <p class="ui-stat__label">สมาชิกทั้งหมด</p>
+        <p class="ui-stat__value">{{ nTh(memberStats.count) }}</p>
+        <p class="ui-stat__hint">รายการที่ยังไม่ลบ</p>
+      </article>
+      <article class="ui-stat">
+        <p class="ui-stat__label">แต้มคงเหลือทั้งหมด</p>
+        <p class="ui-stat__value">{{ nTh(memberStats.pointsTotal) }}</p>
+        <p class="ui-stat__hint">
+          ยังไม่ได้ใช้ · เฉลี่ย
+          {{
+            memberStats.count
+              ? nTh(Math.round(memberStats.pointsTotal / memberStats.count))
+              : 0
+          }}
+          แต้ม/คน
+        </p>
+      </article>
+      <article class="ui-stat">
+        <p class="ui-stat__label">ผูกไลน์แล้ว</p>
+        <p class="ui-stat__value">{{ nTh(memberStats.lineLinked) }}</p>
+        <p class="ui-stat__hint">
+          {{
+            memberStats.count
+              ? Math.round((memberStats.lineLinked / memberStats.count) * 100)
+              : 0
+          }}%
+          ของสมาชิก
+        </p>
+      </article>
+      <article class="ui-stat">
+        <p class="ui-stat__label">คนที่มีแต้มคงเหลือ</p>
+        <p class="ui-stat__value">{{ nTh(memberStats.withPoints) }}</p>
+        <p class="ui-stat__hint">จำนวนคน · คงเหลือมากกว่า 0</p>
+      </article>
+      <article class="ui-stat">
+        <p class="ui-stat__label">สมัครเดือนนี้</p>
+        <p class="ui-stat__value">{{ nTh(memberStats.joinedThisMonth) }}</p>
+        <p class="ui-stat__hint">
+          ใช้ 30 วันล่าสุด {{ nTh(memberStats.usedLast30Days) }} คน
+        </p>
+      </article>
+    </div>
 
     <div class="ui-card">
       <div class="ui-card__toolbar">
@@ -627,6 +702,21 @@ onMounted(load);
   margin: 0.75rem 0 0;
   color: #b91c1c;
   font-size: 0.88rem;
+}
+
+.ui-members__stats {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin-bottom: 1rem;
+}
+@media (max-width: 1100px) {
+  .ui-members__stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 720px) {
+  .ui-members__stats {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 .ui-members__when {

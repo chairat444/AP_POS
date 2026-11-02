@@ -30,7 +30,7 @@ const form = reactive({
   bahtPerRedeemPoint: "1",
 });
 const lineForm = reactive({
-  enabled: true,
+  enabled: false,
   bonusPoints: "10",
   startDate: "",
   endDate: "",
@@ -61,7 +61,11 @@ const previewLine = computed(() => {
   const n = Number(lineForm.bonusPoints);
   const pts = Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
   const t = lineForm.headline.trim() || "สมัครผ่านไลน์วันนี้รับ {n} แต้ม";
-  return t.includes("{n}") ? t.split("{n}").join(String(pts)) : t;
+  const text = t.includes("{n}") ? t.split("{n}").join(String(pts)) : t;
+  if (!lineForm.enabled || pts <= 0) {
+    return `${text} · ปิดอยู่ — สมัครใหม่ได้ 0 แต้ม`;
+  }
+  return text;
 });
 
 const previewFriend = computed(() => {
@@ -89,7 +93,7 @@ async function load() {
     ]);
     form.bahtPerPoint = String(data.points?.bahtPerPoint ?? 100);
     form.bahtPerRedeemPoint = String(data.points?.bahtPerRedeemPoint ?? 1);
-    lineForm.enabled = line.enabled !== false;
+    lineForm.enabled = Boolean(line.enabled);
     lineForm.bonusPoints = String(line.bonusPoints ?? 10);
     lineForm.startDate = line.startDate || "";
     lineForm.endDate = line.endDate || "";
@@ -295,7 +299,7 @@ onMounted(load);
           <template v-if="lineForm.enabled">
             · ตอนนี้{{ lineActive ? "กำลังให้แต้ม" : "ยังไม่ถึงช่วงแคมเปญ" }}
           </template>
-          <template v-else> · ปิดอยู่</template>
+          · กดบันทึกด้านล่างถึงจะมีผล
         </p>
         <p class="ui-field-hint">
           ใส่ลิงก์ LIFF นี้ในเมนูลัด / ข้อความต้อนรับของ LINE OA

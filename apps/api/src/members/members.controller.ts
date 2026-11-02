@@ -26,6 +26,11 @@ export class MembersController {
     return this.members.nextMemberCode();
   }
 
+  @Get("stats")
+  stats() {
+    return this.members.stats();
+  }
+
   /** ค้นหาสมาชิกสำหรับหน้าประวัติแต้ม — ต้องอยู่ก่อน :id */
   @Get("points-history/search")
   searchPointsHistory(@Query("q") q = "") {

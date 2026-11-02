@@ -30,7 +30,7 @@ export type LineSignupConfig = {
 };
 
 export const DEFAULT_LINE_SIGNUP_CONFIG: LineSignupConfig = {
-  enabled: true,
+  enabled: false,
   bonusPoints: 10,
   startDate: "",
   endDate: "",

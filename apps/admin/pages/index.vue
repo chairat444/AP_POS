@@ -35,6 +35,15 @@ type WeekdayPoint = {
   byBranch?: BranchPoint[];
 };
 
+type MemberStats = {
+  count: number;
+  pointsTotal: number;
+  lineLinked: number;
+  withPoints: number;
+  joinedThisMonth: number;
+  usedLast30Days: number;
+};
+
 type Summary = {
   today: { billCount: number; grossTotal: number };
   yesterday?: { billCount: number; grossTotal: number };
@@ -139,6 +148,7 @@ function canMenu(key: string) {
 const pending = ref(false);
 const error = ref("");
 const summary = ref<Summary | null>(null);
+const memberStats = ref<MemberStats | null>(null);
 const freshRange = ref<"today" | "week">("today");
 
 const freshPack = computed(() => {
@@ -486,7 +496,14 @@ async function load() {
   pending.value = true;
   error.value = "";
   try {
-    summary.value = await get<Summary>("/sales/summary");
+    const [data, members] = await Promise.all([
+      get<Summary>("/sales/summary"),
+      canMenu("members")
+        ? get<MemberStats>("/members/stats").catch(() => null)
+        : Promise.resolve(null),
+    ]);
+    summary.value = data;
+    memberStats.value = members;
   } catch (e) {
     error.value =
       e instanceof Error
@@ -579,6 +596,69 @@ onMounted(load);
             {{ summary.all.billCount.toLocaleString("th-TH") }} บิล
           </p>
         </div>
+      </div>
+
+      <div
+        v-if="canMenu('members') && memberStats"
+        class="ui-dash__kpi-strip ui-dash__kpi-strip--members"
+      >
+        <NuxtLink to="/members" class="ui-dash__kpi ui-dash__kpi--link">
+          <p class="ui-dash__kpi-label">สมาชิกทั้งหมด</p>
+          <p class="ui-dash__kpi-value">
+            {{ memberStats.count.toLocaleString("th-TH") }}
+          </p>
+          <p class="ui-dash__kpi-hint">คน</p>
+        </NuxtLink>
+        <NuxtLink to="/members" class="ui-dash__kpi ui-dash__kpi--link">
+          <p class="ui-dash__kpi-label">แต้มคงเหลือทั้งหมด</p>
+          <p class="ui-dash__kpi-value">
+            {{ memberStats.pointsTotal.toLocaleString("th-TH") }}
+          </p>
+          <p class="ui-dash__kpi-hint">
+            ยังไม่ได้ใช้ · เฉลี่ย
+            {{
+              memberStats.count
+                ? Math.round(
+                    memberStats.pointsTotal / memberStats.count,
+                  ).toLocaleString("th-TH")
+                : 0
+            }}
+            แต้ม/คน
+          </p>
+        </NuxtLink>
+        <NuxtLink to="/members" class="ui-dash__kpi ui-dash__kpi--link">
+          <p class="ui-dash__kpi-label">ผูกไลน์แล้ว</p>
+          <p class="ui-dash__kpi-value">
+            {{ memberStats.lineLinked.toLocaleString("th-TH") }}
+          </p>
+          <p class="ui-dash__kpi-hint">
+            {{
+              memberStats.count
+                ? Math.round(
+                    (memberStats.lineLinked / memberStats.count) * 100,
+                  )
+                : 0
+            }}%
+            ของสมาชิก
+          </p>
+        </NuxtLink>
+        <NuxtLink to="/members" class="ui-dash__kpi ui-dash__kpi--link">
+          <p class="ui-dash__kpi-label">คนที่มีแต้มคงเหลือ</p>
+          <p class="ui-dash__kpi-value">
+            {{ memberStats.withPoints.toLocaleString("th-TH") }}
+          </p>
+          <p class="ui-dash__kpi-hint">จำนวนคน · คงเหลือมากกว่า 0</p>
+        </NuxtLink>
+        <NuxtLink to="/members" class="ui-dash__kpi ui-dash__kpi--link">
+          <p class="ui-dash__kpi-label">สมัครเดือนนี้</p>
+          <p class="ui-dash__kpi-value">
+            {{ memberStats.joinedThisMonth.toLocaleString("th-TH") }}
+          </p>
+          <p class="ui-dash__kpi-hint">
+            ใช้ 30 วันล่าสุด
+            {{ memberStats.usedLast30Days.toLocaleString("th-TH") }} คน
+          </p>
+        </NuxtLink>
       </div>
 
       <div class="ui-dash__grid" style="margin-top: 1.15rem">
@@ -1395,6 +1475,19 @@ onMounted(load);
 </template>
 
 <style scoped>
+.ui-dash__kpi--link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+.ui-dash__kpi--link:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+.ui-dash__kpi-strip--members {
+  margin-top: 0.15rem;
+}
+
 .ui-dash__panel--wide {
   grid-column: 1 / -1;
 }
