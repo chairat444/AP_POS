@@ -94,6 +94,7 @@ export class SettingsController {
       ...config,
       active: offer.active,
       headlinePreview: offer.headline,
+      friendHeadlinePreview: offer.friendBoost.headline,
       joinUrl: this.settings.lineJoinUrl(),
     };
   }
@@ -106,6 +107,7 @@ export class SettingsController {
       ...config,
       active: offer.active,
       headlinePreview: offer.headline,
+      friendHeadlinePreview: offer.friendBoost.headline,
       joinUrl: this.settings.lineJoinUrl(),
     };
   }

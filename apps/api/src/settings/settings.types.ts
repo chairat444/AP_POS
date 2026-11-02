@@ -1,11 +1,14 @@
 export type PointsConfig = {
   bahtPerPoint: number;
   bahtPerRedeemPoint: number;
+  /** 1 = ไม่คูณ · 2+ = คูณแต้มเมื่อเป็นเพื่อน LINE OA */
+  lineFriendMultiplier: number;
 };
 
 export const DEFAULT_POINTS_CONFIG: PointsConfig = {
   bahtPerPoint: 100,
   bahtPerRedeemPoint: 1,
+  lineFriendMultiplier: 1,
 };
 
 /** แต้มของขวัญตอนสมัครผ่านลิงก์ LINE OA (`/member?k=…&src=line`) */
@@ -18,6 +21,12 @@ export type LineSignupConfig = {
   endDate: string;
   /** ใช้ {n} แทนจำนวนแต้ม */
   headline: string;
+  /** เป็นเพื่อน LINE OA แล้วได้แต้มคูณตอนซื้อที่ร้าน */
+  friendBoostEnabled: boolean;
+  /** คูณกี่เท่า · อย่างน้อย 2 */
+  friendMultiplier: number;
+  /** ใช้ {n} แทนตัวคูณ */
+  friendHeadline: string;
 };
 
 export const DEFAULT_LINE_SIGNUP_CONFIG: LineSignupConfig = {
@@ -26,6 +35,9 @@ export const DEFAULT_LINE_SIGNUP_CONFIG: LineSignupConfig = {
   startDate: "",
   endDate: "",
   headline: "สมัครผ่านไลน์วันนี้รับ {n} แต้ม",
+  friendBoostEnabled: true,
+  friendMultiplier: 2,
+  friendHeadline: "รับแต้มคูณ {n} ในบิลถัดไป",
 };
 
 export type UpdateLineSignupDto = {
@@ -34,6 +46,9 @@ export type UpdateLineSignupDto = {
   startDate?: string;
   endDate?: string;
   headline?: string;
+  friendBoostEnabled?: boolean;
+  friendMultiplier?: number;
+  friendHeadline?: string;
 };
 
 export type DisplayConfig = {

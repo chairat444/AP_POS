@@ -64,6 +64,12 @@ function formatLineHeadline(template: string, points: number): string {
   return t;
 }
 
+function clampFriendMultiplier(raw: unknown): number {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n)) return DEFAULT_LINE_SIGNUP_CONFIG.friendMultiplier;
+  return Math.min(10, Math.max(2, n));
+}
+
 function now() {
   return new Date();
 }
@@ -210,12 +216,18 @@ export class SettingsService implements OnModuleInit {
   }
 
   async getPoints(): Promise<PointsConfig> {
+    const line = await this.getLineSignup();
+    const lineFriendMultiplier = line.friendBoostEnabled
+      ? line.friendMultiplier
+      : 1;
     const rows = await this.database.db
       .select()
       .from(pg.appSettings)
       .where(eq(pg.appSettings.key, POINTS_KEY))
       .limit(1);
-    if (!rows[0]) return { ...DEFAULT_POINTS_CONFIG };
+    if (!rows[0]) {
+      return { ...DEFAULT_POINTS_CONFIG, lineFriendMultiplier };
+    }
     try {
       const parsed = JSON.parse(rows[0].value) as Partial<PointsConfig>;
       return {
@@ -227,9 +239,10 @@ export class SettingsService implements OnModuleInit {
           Number(parsed.bahtPerRedeemPoint) > 0
             ? Number(parsed.bahtPerRedeemPoint)
             : DEFAULT_POINTS_CONFIG.bahtPerRedeemPoint,
+        lineFriendMultiplier,
       };
     } catch {
-      return { ...DEFAULT_POINTS_CONFIG };
+      return { ...DEFAULT_POINTS_CONFIG, lineFriendMultiplier };
     }
   }
 
@@ -244,6 +257,7 @@ export class SettingsService implements OnModuleInit {
       const parsed = JSON.parse(rows[0].value) as Partial<LineSignupConfig>;
       const bonus = Math.floor(Number(parsed.bonusPoints));
       const headline = String(parsed.headline ?? "").trim();
+      const friendHeadline = String(parsed.friendHeadline ?? "").trim();
       return {
         enabled:
           parsed.enabled == null
@@ -256,6 +270,15 @@ export class SettingsService implements OnModuleInit {
         startDate: sanitizeYmd(parsed.startDate),
         endDate: sanitizeYmd(parsed.endDate),
         headline: headline || DEFAULT_LINE_SIGNUP_CONFIG.headline,
+        friendBoostEnabled:
+          parsed.friendBoostEnabled == null
+            ? DEFAULT_LINE_SIGNUP_CONFIG.friendBoostEnabled
+            : Boolean(parsed.friendBoostEnabled),
+        friendMultiplier: clampFriendMultiplier(
+          parsed.friendMultiplier ?? DEFAULT_LINE_SIGNUP_CONFIG.friendMultiplier,
+        ),
+        friendHeadline:
+          friendHeadline || DEFAULT_LINE_SIGNUP_CONFIG.friendHeadline,
       };
     } catch {
       return { ...DEFAULT_LINE_SIGNUP_CONFIG };
@@ -275,10 +298,19 @@ export class SettingsService implements OnModuleInit {
   async publicLineOffer() {
     const c = await this.getLineSignup();
     const points = await this.activeLineSignupBonus();
+    const friendActive = Boolean(c.friendBoostEnabled) && c.friendMultiplier >= 2;
     return {
       active: points > 0,
       points,
       headline: formatLineHeadline(c.headline, points || c.bonusPoints),
+      friendBoost: {
+        active: friendActive,
+        multiplier: friendActive ? c.friendMultiplier : 1,
+        headline: formatLineHeadline(
+          c.friendHeadline,
+          friendActive ? c.friendMultiplier : c.friendMultiplier,
+        ),
+      },
     };
   }
 
@@ -596,6 +628,7 @@ export class SettingsService implements OnModuleInit {
         dto.bahtPerRedeemPoint == null
           ? current.bahtPerRedeemPoint
           : Number(dto.bahtPerRedeemPoint),
+      lineFriendMultiplier: current.lineFriendMultiplier,
     };
     if (!Number.isFinite(next.bahtPerPoint) || next.bahtPerPoint <= 0) {
       throw new BadRequestException("ยอดบาทต่อแต้มต้องมากกว่า 0");
@@ -629,12 +662,35 @@ export class SettingsService implements OnModuleInit {
     const headline = String(
       dto.headline === undefined ? current.headline : dto.headline,
     ).trim();
+    const friendHeadline = String(
+      dto.friendHeadline === undefined
+        ? current.friendHeadline
+        : dto.friendHeadline,
+    ).trim();
+    if (
+      dto.friendMultiplier != null &&
+      (!Number.isFinite(Number(dto.friendMultiplier)) ||
+        Number(dto.friendMultiplier) < 2 ||
+        Number(dto.friendMultiplier) > 10)
+    ) {
+      throw new BadRequestException("ตัวคูณแต้มไลน์ต้องเป็น 2–10");
+    }
     const next: LineSignupConfig = {
       enabled: dto.enabled == null ? current.enabled : Boolean(dto.enabled),
       bonusPoints: bonus,
       startDate,
       endDate,
       headline: headline.slice(0, 80) || DEFAULT_LINE_SIGNUP_CONFIG.headline,
+      friendBoostEnabled:
+        dto.friendBoostEnabled == null
+          ? current.friendBoostEnabled
+          : Boolean(dto.friendBoostEnabled),
+      friendMultiplier:
+        dto.friendMultiplier == null
+          ? current.friendMultiplier
+          : clampFriendMultiplier(dto.friendMultiplier),
+      friendHeadline:
+        friendHeadline.slice(0, 80) || DEFAULT_LINE_SIGNUP_CONFIG.friendHeadline,
     };
     await this.upsert(LINE_SIGNUP_KEY, JSON.stringify(next));
     return next;

@@ -2,6 +2,7 @@
 type PointsConfig = {
   bahtPerPoint: number;
   bahtPerRedeemPoint: number;
+  lineFriendMultiplier?: number;
 };
 
 type LineSignup = {
@@ -10,6 +11,9 @@ type LineSignup = {
   startDate: string;
   endDate: string;
   headline: string;
+  friendBoostEnabled?: boolean;
+  friendMultiplier?: number;
+  friendHeadline?: string;
   active?: boolean;
   headlinePreview?: string;
   joinUrl?: string | null;
@@ -31,6 +35,9 @@ const lineForm = reactive({
   startDate: "",
   endDate: "",
   headline: "สมัครผ่านไลน์วันนี้รับ {n} แต้ม",
+  friendBoostEnabled: true,
+  friendMultiplier: "2",
+  friendHeadline: "รับแต้มคูณ {n} ในบิลถัดไป",
 });
 const joinUrl = ref("");
 const lineActive = ref(false);
@@ -57,6 +64,20 @@ const previewLine = computed(() => {
   return t.includes("{n}") ? t.split("{n}").join(String(pts)) : t;
 });
 
+const previewFriend = computed(() => {
+  const baht = Number(form.bahtPerPoint);
+  const rate = Number.isFinite(baht) && baht > 0 ? baht : 100;
+  const n = Math.floor(Number(lineForm.friendMultiplier));
+  const mult = Number.isFinite(n) && n >= 2 ? Math.min(10, n) : 2;
+  const t =
+    lineForm.friendHeadline.trim() || "รับแต้มคูณ {n} ในบิลถัดไป";
+  const title = t.includes("{n}") ? t.split("{n}").join(String(mult)) : t;
+  if (!lineForm.friendBoostEnabled) {
+    return `${title} · ปิดอยู่ — ได้แต้มเท่าสมาชิกทั่วไป`;
+  }
+  return `${title} · ซื้อครบ ${rate.toLocaleString("th-TH")} บาท ได้ ${mult} แต้ม`;
+});
+
 async function load() {
   pending.value = true;
   error.value = "";
@@ -74,6 +95,10 @@ async function load() {
     lineForm.endDate = line.endDate || "";
     lineForm.headline =
       line.headline || "สมัครผ่านไลน์วันนี้รับ {n} แต้ม";
+    lineForm.friendBoostEnabled = line.friendBoostEnabled !== false;
+    lineForm.friendMultiplier = String(line.friendMultiplier ?? 2);
+    lineForm.friendHeadline =
+      line.friendHeadline || "รับแต้มคูณ {n} ในบิลถัดไป";
     joinUrl.value = line.joinUrl || "";
     lineActive.value = Boolean(line.active);
   } catch (e) {
@@ -98,8 +123,11 @@ async function save() {
       startDate: lineForm.startDate,
       endDate: lineForm.endDate,
       headline: lineForm.headline,
+      friendBoostEnabled: lineForm.friendBoostEnabled,
+      friendMultiplier: Number(lineForm.friendMultiplier),
+      friendHeadline: lineForm.friendHeadline,
     });
-    ok.value = "บันทึกแล้ว — POS จะได้รับอัตราแต้มตอน sync · แคมเปญไลน์ใช้ทันที";
+    ok.value = "บันทึกแล้ว — POS จะได้รับอัตราแต้มตอน sync · แต้มคูณไลน์ใช้ทันที";
     await load();
   } catch (e: unknown) {
     const msg =
@@ -133,7 +161,7 @@ onMounted(load);
     <div class="ui-page-head">
       <div>
         <h1 class="ui-page-title">ตั้งค่าแต้ม</h1>
-        <p class="ui-page-sub">อัตราได้แต้ม / ใช้แต้มทั้งระบบ · sync ไป POS</p>
+        <p class="ui-page-sub">อัตราได้แต้ม / ใช้แต้มทั้งระบบ · เพื่อนไลน์คูณแต้ม · sync ไป POS</p>
       </div>
       <div class="ui-page-head__actions">
         <button type="button" class="ui-btn ui-btn--ghost" :disabled="pending" @click="load">
@@ -187,12 +215,49 @@ onMounted(load);
 
     <div class="ui-card ui-points-card" style="max-width: 40rem">
       <div class="ui-card__toolbar">
-        <span class="ui-toolbar-meta ui-toolbar-meta--alone">สมัครผ่าน LINE OA</span>
+        <span class="ui-toolbar-meta ui-toolbar-meta--alone">เพื่อน LINE OA · คูณแต้ม</span>
+      </div>
+      <div style="padding: 1.15rem 1.25rem 1.35rem">
+        <label class="ui-check" style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem">
+          <input v-model="lineForm.friendBoostEnabled" type="checkbox" />
+          <span>เป็นเพื่อนไลน์แล้ว ได้แต้มคูณตอนซื้อที่ร้าน</span>
+        </label>
+        <label class="ui-field">
+          <span>คูณกี่เท่า</span>
+          <input
+            v-model="lineForm.friendMultiplier"
+            class="ui-input"
+            type="number"
+            min="2"
+            max="10"
+            step="1"
+          />
+        </label>
+        <label class="ui-field">
+          <span>ข้อความบนหน้าสมาชิก · ใช้ {"{n}"} แทนตัวคูณ</span>
+          <input
+            v-model="lineForm.friendHeadline"
+            class="ui-input"
+            type="text"
+            maxlength="80"
+            placeholder="รับแต้มคูณ {n} ในบิลถัดไป"
+          />
+        </label>
+        <p class="ui-field-hint">{{ previewFriend }}</p>
+        <p class="ui-field-hint">
+          ใช้กับสมาชิกที่ผูก LINE OA แล้วเท่านั้น · ลูกค้าทั่วไปได้แต้มตามอัตราด้านบน
+        </p>
+      </div>
+    </div>
+
+    <div class="ui-card ui-points-card" style="max-width: 40rem">
+      <div class="ui-card__toolbar">
+        <span class="ui-toolbar-meta ui-toolbar-meta--alone">สมัครผ่าน LINE OA · แต้มของขวัญ</span>
       </div>
       <div style="padding: 1.15rem 1.25rem 1.35rem">
         <label class="ui-check" style="display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem">
           <input v-model="lineForm.enabled" type="checkbox" />
-          <span>ให้แต้มของขวัญตอนสมัครจากลิงก์ไลน์</span>
+          <span>ให้แต้มของขวัญตอนสมัครจากลิงก์ไลน์ (ครั้งเดียว)</span>
         </label>
         <label class="ui-field">
           <span>ได้กี่แต้ม</span>
@@ -252,6 +317,7 @@ onMounted(load);
     <div class="ui-points-preview" style="max-width: 40rem">
       <div>{{ previewEarn }}</div>
       <div>{{ previewRedeem }}</div>
+      <div>{{ previewFriend }}</div>
       <div>{{ previewLine }}</div>
     </div>
 

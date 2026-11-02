@@ -61,9 +61,18 @@ const ready = ref(false);
 const fromLine = ref(false);
 const lineIdToken = ref("");
 const lineBound = ref(false);
+/** ไลน์นี้ผูกสมาชิกแล้วในรอบนี้ — หน้าแรกไม่โชว์ผูกไลน์/สมัครใหม่ */
+const lineAccountLinked = ref(false);
 /** เช็คเบอร์อื่นจากผลลัพธ์ — ดูอย่างเดียว ไม่ผูกไลน์ */
 const checkOtherOnly = ref(false);
-const lineOffer = ref({ active: false, points: 0, headline: "" });
+const lineOffer = ref({
+  active: false,
+  points: 0,
+  headline: "",
+  friendActive: false,
+  friendMultiplier: 2,
+  friendHeadline: "",
+});
 
 const hasAccess = computed(() => Boolean(accessKey.value));
 const showLineBonus = computed(
@@ -71,6 +80,40 @@ const showLineBonus = computed(
     fromLine.value &&
     lineOffer.value.active &&
     lineOffer.value.points > 0,
+);
+const showLineFriendBoost = computed(
+  () =>
+    fromLine.value &&
+    lineOffer.value.friendActive &&
+    lineOffer.value.friendMultiplier >= 2,
+);
+const checkHint = computed(() => {
+  if (!fromLine.value) return "ใส่เบอร์โทร";
+  if (showLineFriendBoost.value) {
+    const n = lineOffer.value.friendMultiplier;
+    const perk = n === 2 ? "คูณสอง" : `คูณ ${n}`;
+    return `ผูกไลน์ · รับแต้ม${perk}ในบิลถัดไป`;
+  }
+  return "ผูกไลน์ด้วยเบอร์";
+});
+const joinHint = computed(() => {
+  if (showLineFriendBoost.value) {
+    const n = lineOffer.value.friendMultiplier;
+    const perk = n === 2 ? "คูณสอง" : `คูณ ${n}`;
+    return `สมัครฟรี · แต้ม${perk}ในบิลถัดไป`;
+  }
+  if (showLineBonus.value) {
+    return `สมัครฟรี · รับ ${lineOffer.value.points} แต้ม`;
+  }
+  return "สมัครฟรี";
+});
+const friendPerkLabel = computed(() => {
+  const n = lineOffer.value.friendMultiplier;
+  return n === 2 ? "คูณสอง" : `คูณ ${n}`;
+});
+/** เปิดจากไลน์แล้วใส่เบอร์เพื่อผูกครั้งแรก ไม่ใช่แค่ดูแต้ม */
+const linkingFromLine = computed(
+  () => fromLine.value && !checkOtherOnly.value,
 );
 
 function kioskOpts() {
@@ -118,13 +161,17 @@ function armIdle() {
 
 function resetHome() {
   clearIdle();
+  error.value = "";
+  pending.value = false;
+  checkOtherOnly.value = false;
+  if (fromLine.value && lineAccountLinked.value) {
+    void goCheck();
+    return;
+  }
   step.value = "home";
   phone.value = "";
   name.value = "";
-  error.value = "";
   member.value = null;
-  pending.value = false;
-  checkOtherOnly.value = false;
 }
 
 function applyHit(data: KioskHit) {
@@ -138,6 +185,9 @@ function applyHit(data: KioskHit) {
   };
   const p = String(data.phone ?? "").replace(/\D/g, "").slice(0, 10);
   if (p) phone.value = p;
+  if (Boolean(data.lineLinked) || Boolean(data.linked)) {
+    lineAccountLinked.value = true;
+  }
 }
 
 async function goCheck() {
@@ -297,7 +347,9 @@ async function submitJoin() {
       code: data.code,
       name: data.name,
       points: Number(data.points) || 0,
+      lineLinked: Boolean(lineIdToken.value),
     };
+    if (lineIdToken.value) lineAccountLinked.value = true;
     step.value = "join-done";
     armIdle();
   } catch (e: unknown) {
@@ -372,19 +424,15 @@ function resolveLineSource() {
   const q = String(route.query.src ?? route.query.from ?? "")
     .trim()
     .toLowerCase();
-  if (q === "line" || q === "oa" || q === "liff") {
-    try {
-      sessionStorage.setItem("member-kiosk-src", "line");
-    } catch {
-      /* private mode */
-    }
-    fromLine.value = true;
-    return;
-  }
+  const fromQuery = q === "line" || q === "oa" || q === "liff";
+  const inLineApp =
+    typeof navigator !== "undefined" && /Line\//i.test(navigator.userAgent);
+  fromLine.value = fromQuery || inLineApp;
   try {
-    fromLine.value = sessionStorage.getItem("member-kiosk-src") === "line";
+    if (fromLine.value) sessionStorage.setItem("member-kiosk-src", "line");
+    else sessionStorage.removeItem("member-kiosk-src");
   } catch {
-    fromLine.value = false;
+    /* private mode */
   }
 }
 
@@ -400,6 +448,7 @@ type LineLiff = {
 async function initLiff() {
   const liffId = String(config.public.lineLiffId || "").trim();
   if (!liffId || typeof window === "undefined") return;
+  if (!fromLine.value) return;
   try {
     const w = window as Window & { liff?: LineLiff };
     if (!w.liff) {
@@ -413,11 +462,12 @@ async function initLiff() {
     }
     const liff = (window as Window & { liff: LineLiff }).liff;
     await liff.init({ liffId });
+    if (!liff.isInClient() && !fromLine.value) return;
     if (!liff.isLoggedIn()) {
       if (liff.isInClient()) liff.login();
       return;
     }
-    fromLine.value = true;
+    if (liff.isInClient()) fromLine.value = true;
     lineBound.value = true;
     lineIdToken.value = liff.getIDToken?.() || "";
     try {
@@ -440,19 +490,37 @@ async function loadLineOffer() {
       active?: boolean;
       points?: number;
       headline?: string;
+      friendBoost?: {
+        active?: boolean;
+        multiplier?: number;
+        headline?: string;
+      };
     }>(`${apiBase.value}/members/kiosk/offer`, {
       query: { k: accessKey.value },
       ...kioskOpts(),
       timeout: 15_000,
     });
     const points = Math.max(0, Math.floor(Number(data.points) || 0));
+    const friendMult = Math.floor(Number(data.friendBoost?.multiplier) || 0);
+    const friendActive =
+      Boolean(data.friendBoost?.active) && friendMult >= 2;
     lineOffer.value = {
       active: Boolean(data.active) && points > 0,
       points,
       headline: String(data.headline ?? "").trim(),
+      friendActive,
+      friendMultiplier: friendActive ? Math.min(10, friendMult) : 2,
+      friendHeadline: String(data.friendBoost?.headline ?? "").trim(),
     };
   } catch {
-    lineOffer.value = { active: false, points: 0, headline: "" };
+    lineOffer.value = {
+      active: false,
+      points: 0,
+      headline: "",
+      friendActive: false,
+      friendMultiplier: 2,
+      friendHeadline: "",
+    };
   }
 }
 
@@ -508,7 +576,11 @@ onBeforeUnmount(clearIdle);
         <ul class="mk__perk-list">
           <li>
             <strong>100 บาท</strong>
-            <span>ได้ 1 แต้ม</span>
+            <span>{{
+              showLineFriendBoost
+                ? `ได้ ${lineOffer.friendMultiplier} แต้ม`
+                : "ได้ 1 แต้ม"
+            }}</span>
           </li>
           <li>
             <strong>1 แต้ม</strong>
@@ -519,26 +591,32 @@ onBeforeUnmount(clearIdle);
       </article>
 
       <div class="mk__actions">
-        <button type="button" class="mk__tile mk__tile--check" @click="goCheck">
-          <strong>เช็คแต้ม</strong>
-          <span class="mk__tile-hint">ใส่เบอร์โทร</span>
-        </button>
-        <button type="button" class="mk__tile mk__tile--join" @click="goJoin">
-          <strong>สมัครสมาชิก</strong>
-          <span class="mk__tile-hint">{{
-            showLineBonus
-              ? `รับฟรี ${lineOffer.points} แต้ม`
-              : "สมัครฟรี"
-          }}</span>
-        </button>
+        <template v-if="fromLine && lineAccountLinked">
+          <button type="button" class="mk__tile mk__tile--join" @click="goCheck">
+            <strong>เช็คแต้ม</strong>
+            <span class="mk__tile-hint">ดูแต้มของฉัน</span>
+          </button>
+        </template>
+        <template v-else>
+          <button type="button" class="mk__tile mk__tile--check" @click="goCheck">
+            <strong>{{ fromLine ? "มีสมาชิกแล้ว" : "เช็คแต้ม" }}</strong>
+            <span class="mk__tile-hint">{{ checkHint }}</span>
+          </button>
+          <button type="button" class="mk__tile mk__tile--join" @click="goJoin">
+            <strong>{{ fromLine ? "สมัครใหม่" : "สมัครสมาชิก" }}</strong>
+            <span class="mk__tile-hint">{{ joinHint }}</span>
+          </button>
+        </template>
       </div>
     </section>
 
     <!-- เช็คแต้ม · ใส่เบอร์ -->
     <section v-else-if="step === 'check'" class="mk__panel">
       <button type="button" class="mk__back" @click="resetHome">← กลับ</button>
-      <h2 class="mk__title">เช็คแต้ม</h2>
-      <p class="mk__lead">ใส่เบอร์โทร</p>
+      <h2 class="mk__title">{{ linkingFromLine ? "ผูกไลน์" : "เช็คแต้ม" }}</h2>
+      <p class="mk__lead">
+        {{ linkingFromLine ? "ใส่เบอร์ที่ใช้ที่ร้าน" : "ใส่เบอร์โทร" }}
+      </p>
 
       <div class="mk__phone" :class="{ 'is-ready': phone.length >= 9 }">
         {{ phoneDisplay || "0xx-xxx-xxxx" }}
@@ -565,7 +643,15 @@ onBeforeUnmount(clearIdle);
         :disabled="pending || phone.length < 9"
         @click="submitCheck"
       >
-        {{ pending ? "กำลังค้นหา..." : "ดูแต้ม" }}
+        {{
+          pending
+            ? linkingFromLine
+              ? "กำลังผูกไลน์..."
+              : "กำลังค้นหา..."
+            : linkingFromLine
+              ? "ผูกไลน์"
+              : "ดูแต้ม"
+        }}
       </button>
     </section>
 
@@ -575,11 +661,24 @@ onBeforeUnmount(clearIdle);
       class="mk__panel mk__result"
     >
       <p v-if="error" class="mk__note">{{ error }}</p>
-      <p v-else-if="fromLine || lineBound" class="mk__note">
-        บอกเบอร์ {{ phoneDisplay }}
+      <p
+        v-else-if="member.linked"
+        class="mk__line-bonus mk__line-bonus--got"
+      >
+        ผูกไลน์แล้ว
+        <template v-if="showLineFriendBoost">
+          · รับแต้ม{{ friendPerkLabel }}ในบิลถัดไป
+        </template>
+      </p>
+      <p
+        v-else-if="showLineFriendBoost && member.lineLinked"
+        class="mk__line-bonus"
+      >
+        {{ lineOffer.friendHeadline || `รับแต้ม${friendPerkLabel}ในบิลถัดไป` }}
       </p>
       <p class="mk__hello">สวัสดีคุณ</p>
       <h2 class="mk__name">{{ member.name }}</h2>
+      <p v-if="phoneDisplay" class="mk__code">เบอร์ {{ phoneDisplay }}</p>
       <p class="mk__code">รหัส {{ member.code }}</p>
 
       <div class="mk__points">
@@ -587,7 +686,10 @@ onBeforeUnmount(clearIdle);
         <strong>{{ formatPoints(member.points) }}</strong>
       </div>
 
-      <div class="mk__result-actions">
+      <div
+        v-if="!(fromLine && (member.lineLinked || lineAccountLinked))"
+        class="mk__result-actions"
+      >
         <button type="button" class="mk__primary" @click="resetHome">
           เสร็จสิ้น
         </button>
@@ -620,8 +722,19 @@ onBeforeUnmount(clearIdle);
       <button type="button" class="mk__back" @click="resetHome">← กลับ</button>
       <p class="mk__shop">{{ brandName }}</p>
       <h2 class="mk__title">สมัครสมาชิก</h2>
+      <p v-if="showLineFriendBoost" class="mk__line-bonus">
+        {{ lineOffer.friendHeadline || `รับแต้ม${friendPerkLabel}ในบิลถัดไป` }}
+      </p>
       <p v-if="showLineBonus" class="mk__line-bonus">{{ lineOffer.headline }}</p>
       <p class="mk__lead">กรอกชื่อกับเบอร์โทร · กดถัดไปเพื่อไปช่องถัดไป</p>
+      <button
+        v-if="fromLine"
+        type="button"
+        class="mk__switch"
+        @click="goCheck"
+      >
+        มีสมาชิกแล้ว · ผูกไลน์ด้วยเบอร์
+      </button>
 
       <label class="mk__field">
         <span>1. ชื่อของคุณ</span>
@@ -706,6 +819,9 @@ onBeforeUnmount(clearIdle);
       <div class="mk__success-card">
         <p class="mk__success-card-title">พร้อมสะสมแต้มแล้ว</p>
         <ul class="mk__success-list">
+          <li v-if="showLineFriendBoost">
+            เป็นเพื่อนไลน์ รับแต้ม{{ friendPerkLabel }}ในบิลถัดไป
+          </li>
           <li v-if="fromLine && member.points > 0">
             สมัครผ่านไลน์ ได้ {{ formatPoints(member.points) }} แต้ม
           </li>
@@ -1078,8 +1194,10 @@ onBeforeUnmount(clearIdle);
   font-size: 1.32rem;
 }
 .mk__home .mk__tile-hint {
+  max-width: 18.5rem;
   font-size: 0.82rem;
   font-weight: 650;
+  line-height: 1.25;
   opacity: 0.82;
 }
 .mk__tile-hint {
@@ -1141,6 +1259,20 @@ onBeforeUnmount(clearIdle);
 }
 .mk__join .mk__lead {
   font-size: 0.95rem;
+}
+.mk__switch {
+  align-self: flex-start;
+  margin: -0.15rem 0 0.15rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--mk-red-deep);
+  font-size: 0.95rem;
+  font-weight: 700;
+  font-family: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+  touch-action: manipulation;
 }
 .mk__join .mk__primary,
 .mk__join .mk__primary--join {
