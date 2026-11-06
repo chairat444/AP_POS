@@ -123,6 +123,7 @@ const suggestFor = ref<"draft" | "edit" | null>(null);
 
 const BUCKETS_OPEN_KEY = "ap-pos-cashbook-buckets-open";
 const bucketsOpen = ref(false);
+const checkOpen = ref(false);
 
 /** สุทธิสะสมจากต้นเดือน → วันนั้น (แถววันล่าสุด = สุทธิเดือน) */
 const dayRunningNet = computed(() => {
@@ -1002,7 +1003,7 @@ function toggleBuckets() {
           </span>
         </div>
         <div class="cb-kpi cb-kpi--out">
-          <span class="cb-kpi__label">จ่าย</span>
+          <span class="cb-kpi__label">รายจ่าย</span>
           <strong>{{ baht(report.summary.expense) }}</strong>
         </div>
         <div
@@ -1011,9 +1012,24 @@ function toggleBuckets() {
         >
           <span class="cb-kpi__label">สุทธิ</span>
           <strong>{{ baht(report.summary.net) }}</strong>
-          <span class="cb-kpi__sub">ขาย+ยืม − จ่าย</span>
+          <span class="cb-kpi__sub">ขาย+ยืม − รายจ่าย</span>
         </div>
-        <div class="cb-kpi cb-kpi--check">
+        <button
+          v-if="!checkOpen"
+          type="button"
+          class="cb-check-toggle"
+          @click="checkOpen = true"
+        >
+          เช็คเงิน
+        </button>
+        <div v-else class="cb-kpi cb-kpi--check">
+          <button
+            type="button"
+            class="cb-check-hide"
+            @click="checkOpen = false"
+          >
+            ซ่อน
+          </button>
           <span class="cb-kpi__label">เช็คเงิน</span>
           <strong>{{ baht(monthNetPlusRent()) }}</strong>
           <span class="cb-kpi__sub"
@@ -1155,8 +1171,13 @@ function toggleBuckets() {
               >
                 {{ shortBranch(b.name) }}
               </th>
-              <th class="cb-num">ยอดขาย</th>
-              <th class="cb-num">จ่าย</th>
+              <th
+                class="cb-num"
+                title="ตัวเลขหลักคือยอดขาย · ยอดบวกสีเขียวคือเงินยืมหรือรับอื่น ยังไม่บวกรวม"
+              >
+                รายรับ
+              </th>
+              <th class="cb-num">รายจ่าย</th>
               <th class="cb-num">สุทธิ</th>
               <th class="cb-num" title="สะสมจากต้นเดือน · วันล่าสุด = สุทธิเดือน">
                 สุทธิสะสม
@@ -1625,7 +1646,16 @@ function toggleBuckets() {
                   </div>
                 </div>
               </th>
-              <th class="cb-num">{{ baht(monthSales()) }}</th>
+              <th class="cb-num">
+                {{ baht(monthSales()) }}
+                <span
+                  v-if="monthOtherIncome() > 0"
+                  class="cb-day-loan"
+                  :title="`เงินยืม/เข้าอื่น ${baht(monthOtherIncome())}`"
+                >
+                  +{{ baht(monthOtherIncome()) }}
+                </span>
+              </th>
               <th class="cb-num">{{ baht(report.summary.expense) }}</th>
               <th class="cb-num">{{ baht(report.summary.net) }}</th>
               <th class="cb-num">{{ baht(report.summary.net) }}</th>
@@ -1777,6 +1807,7 @@ function toggleBuckets() {
   color: #15803d;
 }
 .cb-kpi--check {
+  position: relative;
   background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 55%, #fffbeb 100%);
   border: 1px solid #a7f3d0;
 }
@@ -1789,6 +1820,32 @@ function toggleBuckets() {
 }
 .cb-kpi--check .cb-kpi__sub {
   color: #059669;
+}
+.cb-check-toggle,
+.cb-check-hide {
+  border: 0;
+  background: transparent;
+  color: #047857;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.cb-check-toggle {
+  align-self: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: #f5f5f4;
+  color: #78716c;
+}
+.cb-check-toggle:hover,
+.cb-check-hide:hover {
+  color: #047857;
+}
+.cb-check-hide {
+  position: absolute;
+  top: 6px;
+  right: 8px;
 }
 .cb-day-loan {
   display: block;
