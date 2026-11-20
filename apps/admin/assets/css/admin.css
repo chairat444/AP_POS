@@ -4311,6 +4311,24 @@ select.ui-input,
   .ui-dash__kpi-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .ui-dash--charts .ui-dash__kpi-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .ui-dash--charts .ui-page-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ui-dash--charts .ui-page-head__actions {
+    width: 100%;
+  }
+
+  .ui-dash--charts .ui-page-head__actions .ui-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
 }
 
 .ui-dash__grid {

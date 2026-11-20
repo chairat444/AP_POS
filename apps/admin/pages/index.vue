@@ -861,8 +861,11 @@ onMounted(load);
               >7 วันล่าสุด · แยกสาขา</span
             >
           </div>
-          <p class="ui-dash__panel-sub">
+          <p class="ui-dash__panel-sub ui-dash-chart-desktop">
             แต่ละแท่ง = รวมวันนั้น · สี = สาขา · กดแท่งเพื่อดูรายละเอียด
+          </p>
+          <p class="ui-dash__panel-sub ui-dash-chart-mobile">
+            แตะวันเพื่อดูแยกสาขา
           </p>
           <div
             v-if="!(summary.last7Days?.length)"
@@ -872,10 +875,10 @@ onMounted(load);
             ยังไม่มีข้อมูล 7 วัน
           </div>
           <template v-else>
-            <div class="ui-dash-bars ui-dash-bars--hero">
+            <div class="ui-dash-bars ui-dash-bars--hero ui-dash-chart-desktop">
               <button
                 v-for="day in summary.last7Days"
-                :key="day.date"
+                :key="`bar-${day.date}`"
                 type="button"
                 class="ui-dash-bars__col ui-dash-bars__col--btn"
                 :class="{
@@ -909,7 +912,7 @@ onMounted(load);
                 <span class="ui-dash-bars__label">{{ day.label }}</span>
               </button>
             </div>
-            <ul class="ui-dash-legend">
+            <ul class="ui-dash-legend ui-dash-chart-desktop">
               <li v-for="(b, i) in branchLegend" :key="b.id">
                 <span
                   class="ui-dash-legend__dot"
@@ -918,13 +921,69 @@ onMounted(load);
                 <span class="ui-dash-legend__label">{{ b.name }}</span>
               </li>
             </ul>
+            <div class="ui-dash-day-list ui-dash-chart-mobile" role="list">
+              <button
+                v-for="day in summary.last7Days"
+                :key="`list-${day.date}`"
+                type="button"
+                class="ui-dash-day-list__row"
+                :class="{
+                  'is-selected':
+                    weekDayDetail && day.date === weekDayDetail.day.date,
+                  'is-empty': day.grossTotal <= 0,
+                }"
+                role="listitem"
+                @click="selectedDayDate = day.date"
+              >
+                <div class="ui-dash-day-list__head">
+                  <strong>{{ day.label }}</strong>
+                  <span>{{ baht(day.grossTotal) }}</span>
+                </div>
+                <p class="ui-dash-day-list__meta">
+                  {{ day.billCount.toLocaleString("th-TH") }} บิล
+                </p>
+                <div
+                  v-if="day.byBranch?.length"
+                  class="ui-dash-day-list__branches"
+                >
+                  <div
+                    v-for="br in day.byBranch"
+                    :key="br.branchId"
+                    class="ui-dash-day-list__line"
+                  >
+                    <span
+                      class="ui-dash-day-list__dot"
+                      :style="{
+                        background: branchColorById(br.branchId),
+                      }"
+                    />
+                    <span class="ui-dash-day-list__name">{{
+                      br.branchName
+                    }}</span>
+                    <div class="ui-dash-hbar__track">
+                      <div
+                        class="ui-dash-hbar__fill"
+                        :style="{
+                          width: `${(br.grossTotal / weekMax) * 100}%`,
+                          background: branchColorById(br.branchId),
+                        }"
+                      />
+                    </div>
+                    <strong>{{ baht(br.grossTotal) }}</strong>
+                  </div>
+                </div>
+              </button>
+            </div>
             <div v-if="weekDayDetail" class="ui-dash-chart-detail">
               <p class="ui-dash-chart-detail__title">
-                วันที่ {{ weekDayDetail.day.label }} · รวม
-                {{ baht(weekDayDetail.day.grossTotal) }}
-                <span
-                  >·
-                  {{
+                <span class="ui-dash-chart-detail__month"
+                  >วันที่ {{ weekDayDetail.day.label }}</span
+                >
+                <span class="ui-dash-chart-detail__pair"
+                  >รวม {{ baht(weekDayDetail.day.grossTotal) }}</span
+                >
+                <span class="ui-dash-chart-detail__pair"
+                  >{{
                     weekDayDetail.day.billCount.toLocaleString("th-TH")
                   }}
                   บิล</span
@@ -976,9 +1035,16 @@ onMounted(load);
               >วันไหนขายดี · จ–อา</span
             >
           </div>
-          <p class="ui-dash__panel-sub">
+          <p class="ui-dash__panel-sub ui-dash-chart-desktop">
             ยอดเฉลี่ยต่อวัน จาก {{ summary.weekdayRangeDays ?? 56 }} วันล่าสุด ·
             สี = สาขา · กดแท่งเพื่อดูแยกสาขา
+            <template v-if="summary.bestWeekday">
+              · ดีสุดวัน{{ summary.bestWeekday.name }}
+            </template>
+          </p>
+          <p class="ui-dash__panel-sub ui-dash-chart-mobile">
+            เฉลี่ยจาก {{ summary.weekdayRangeDays ?? 56 }} วันล่าสุด ·
+            แตะวันเพื่อดูแยกสาขา
             <template v-if="summary.bestWeekday">
               · ดีสุดวัน{{ summary.bestWeekday.name }}
             </template>
@@ -992,11 +1058,11 @@ onMounted(load);
           </div>
           <template v-else>
             <div
-              class="ui-dash-bars ui-dash-bars--hero ui-dash-bars--weekday"
+              class="ui-dash-bars ui-dash-bars--hero ui-dash-bars--weekday ui-dash-chart-desktop"
             >
               <button
                 v-for="day in summary.byWeekday"
-                :key="day.weekday"
+                :key="`bar-wd-${day.weekday}`"
                 type="button"
                 class="ui-dash-bars__col ui-dash-bars__col--btn"
                 :class="{
@@ -1028,7 +1094,7 @@ onMounted(load);
                 <span class="ui-dash-bars__label">{{ day.label }}</span>
               </button>
             </div>
-            <ul class="ui-dash-legend">
+            <ul class="ui-dash-legend ui-dash-chart-desktop">
               <li v-for="(b, i) in branchLegend" :key="b.id">
                 <span
                   class="ui-dash-legend__dot"
@@ -1037,13 +1103,75 @@ onMounted(load);
                 <span class="ui-dash-legend__label">{{ b.name }}</span>
               </li>
             </ul>
+            <div class="ui-dash-day-list ui-dash-chart-mobile" role="list">
+              <button
+                v-for="day in summary.byWeekday"
+                :key="`list-wd-${day.weekday}`"
+                type="button"
+                class="ui-dash-day-list__row"
+                :class="{
+                  'is-today': day.weekday === todayWeekdayIndex,
+                  'is-selected':
+                    weekdayDetail && day.weekday === weekdayDetail.day.weekday,
+                }"
+                role="listitem"
+                @click="selectedWeekday = day.weekday"
+              >
+                <div class="ui-dash-day-list__head">
+                  <strong>วัน{{ day.name }}</strong>
+                  <span>{{ baht(day.avgGross) }}</span>
+                </div>
+                <p class="ui-dash-day-list__meta">
+                  เฉลี่ยต่อวัน · จาก {{ day.dayCount }} วัน ·
+                  {{ day.billCount.toLocaleString("th-TH") }} บิล
+                </p>
+                <div
+                  v-if="day.byBranch?.length"
+                  class="ui-dash-day-list__branches"
+                >
+                  <div
+                    v-for="br in day.byBranch"
+                    :key="br.branchId"
+                    class="ui-dash-day-list__line"
+                  >
+                    <span
+                      class="ui-dash-day-list__dot"
+                      :style="{
+                        background: branchColorById(br.branchId),
+                      }"
+                    />
+                    <span class="ui-dash-day-list__name">{{
+                      br.branchName
+                    }}</span>
+                    <div class="ui-dash-hbar__track">
+                      <div
+                        class="ui-dash-hbar__fill"
+                        :style="{
+                          width: `${((br.avgGross ?? 0) / weekdayMax) * 100}%`,
+                          background: branchColorById(br.branchId),
+                        }"
+                      />
+                    </div>
+                    <strong>{{ baht(br.avgGross ?? 0) }}</strong>
+                  </div>
+                </div>
+              </button>
+            </div>
             <div v-if="weekdayDetail" class="ui-dash-chart-detail">
               <p class="ui-dash-chart-detail__title">
-                วัน{{ weekdayDetail.day.name }} · เฉลี่ยรวม
-                {{ baht(weekdayDetail.day.avgGross) }}
-                <span
-                  >· จาก {{ weekdayDetail.day.dayCount }} วัน ·
-                  {{ weekdayDetail.day.billCount.toLocaleString("th-TH") }}
+                <span class="ui-dash-chart-detail__month"
+                  >วัน{{ weekdayDetail.day.name }}</span
+                >
+                <span class="ui-dash-chart-detail__pair"
+                  >เฉลี่ย {{ baht(weekdayDetail.day.avgGross) }}</span
+                >
+                <span class="ui-dash-chart-detail__pair"
+                  >จาก {{ weekdayDetail.day.dayCount }} วัน</span
+                >
+                <span class="ui-dash-chart-detail__pair"
+                  >{{
+                    weekdayDetail.day.billCount.toLocaleString("th-TH")
+                  }}
                   บิล</span
                 >
               </p>
@@ -1098,16 +1226,42 @@ onMounted(load);
               {{ summary.yearCompare.prevYear }}</span
             >
           </div>
-          <p class="ui-dash__panel-sub">
-            YTD ปีนี้ {{ baht(summary.yearCompare.ytd.thisYear) }} · ปีก่อน
-            {{ baht(summary.yearCompare.ytd.prevYear) }}
-            <template v-if="ytdDelta"> · {{ ytdDelta.label }}</template>
-            · กดเดือนเพื่อดูแยกสาขา
+          <div class="ui-dash-yoy-summary">
+            <div class="ui-dash-yoy-summary__item">
+              <span class="ui-dash-yoy-summary__label"
+                >YTD {{ summary.yearCompare.thisYear }}</span
+              >
+              <strong>{{ baht(summary.yearCompare.ytd.thisYear) }}</strong>
+            </div>
+            <div class="ui-dash-yoy-summary__item">
+              <span class="ui-dash-yoy-summary__label"
+                >YTD {{ summary.yearCompare.prevYear }}</span
+              >
+              <strong>{{ baht(summary.yearCompare.ytd.prevYear) }}</strong>
+            </div>
+            <div
+              v-if="ytdDelta"
+              class="ui-dash-yoy-summary__item ui-dash-yoy-summary__item--delta"
+              :class="`is-${ytdDelta.tone}`"
+            >
+              <span class="ui-dash-yoy-summary__label">เทียบปีก่อน</span>
+              <strong>{{ ytdDelta.label }}</strong>
+            </div>
+          </div>
+          <p class="ui-dash__panel-sub ui-dash__panel-sub--months-desktop">
+            กดเดือนเพื่อดูแยกสาขา
           </p>
-          <div class="ui-dash-bars ui-dash-bars--hero ui-dash-bars--months">
+          <p class="ui-dash__panel-sub ui-dash__panel-sub--months-mobile">
+            แตะเดือนเพื่อดูแยกสาขา
+          </p>
+
+          <!-- เดสก์ท็อป: แท่งแนวตั้ง -->
+          <div
+            class="ui-dash-bars ui-dash-bars--hero ui-dash-bars--months ui-dash-months-desktop"
+          >
             <button
               v-for="m in monthsCompareVisible"
-              :key="m.month"
+              :key="`bar-${m.month}`"
               type="button"
               class="ui-dash-bars__col ui-dash-bars__col--btn"
               :class="{
@@ -1155,7 +1309,7 @@ onMounted(load);
               >
             </button>
           </div>
-          <ul class="ui-dash-legend">
+          <ul class="ui-dash-legend ui-dash-months-desktop">
             <li>
               <span
                 class="ui-dash-legend__dot"
@@ -1176,13 +1330,86 @@ onMounted(load);
               >
             </li>
           </ul>
+
+          <!-- มือถือ: รายการแนวนอน อ่านง่าย -->
+          <div class="ui-dash-month-list ui-dash-months-mobile" role="list">
+            <button
+              v-for="m in monthsCompareVisible"
+              :key="`list-${m.month}`"
+              type="button"
+              class="ui-dash-month-list__row"
+              :class="{
+                'is-selected':
+                  monthDetail && m.month === monthDetail.month.month,
+              }"
+              role="listitem"
+              @click="selectedMonth = m.month"
+            >
+              <div class="ui-dash-month-list__head">
+                <strong>{{ m.label }}</strong>
+                <span
+                  v-if="m.deltaPct != null && m.thisYear.grossTotal > 0"
+                  class="ui-dash-bars__delta"
+                  :class="{
+                    'is-up': m.deltaPct > 0,
+                    'is-down': m.deltaPct < 0,
+                  }"
+                  >{{ m.deltaPct > 0 ? "+" : "" }}{{ m.deltaPct }}%</span
+                >
+                <span v-else class="ui-dash-month-list__na">—</span>
+              </div>
+              <div class="ui-dash-month-list__line">
+                <span class="ui-dash-month-list__yr">{{
+                  summary.yearCompare.prevYear
+                }}</span>
+                <div class="ui-dash-hbar__track">
+                  <div
+                    class="ui-dash-hbar__fill"
+                    :style="{
+                      width: `${(m.prevYear.grossTotal / monthCompareMax) * 100}%`,
+                      background: '#94a3b8',
+                    }"
+                  />
+                </div>
+                <strong>{{ baht(m.prevYear.grossTotal) }}</strong>
+              </div>
+              <div class="ui-dash-month-list__line">
+                <span class="ui-dash-month-list__yr">{{
+                  summary.yearCompare.thisYear
+                }}</span>
+                <div class="ui-dash-hbar__track">
+                  <div
+                    class="ui-dash-hbar__fill"
+                    :style="{
+                      width: `${(m.thisYear.grossTotal / monthCompareMax) * 100}%`,
+                      background: 'linear-gradient(90deg, #14b8a6, #0f766e)',
+                    }"
+                  />
+                </div>
+                <strong>{{ baht(m.thisYear.grossTotal) }}</strong>
+              </div>
+            </button>
+          </div>
+
           <div v-if="monthDetail" class="ui-dash-chart-detail">
             <p class="ui-dash-chart-detail__title">
-              {{ monthDetail.month.label }} · ปีนี้
-              {{ baht(monthDetail.month.thisYear.grossTotal) }} · ปีก่อน
-              {{ baht(monthDetail.month.prevYear.grossTotal) }}
-              <span v-if="monthDetail.month.deltaPct != null">
-                ·
+              <span class="ui-dash-chart-detail__month">{{
+                monthDetail.month.label
+              }}</span>
+              <span class="ui-dash-chart-detail__pair">
+                ปีนี้ {{ baht(monthDetail.month.thisYear.grossTotal) }}
+              </span>
+              <span class="ui-dash-chart-detail__pair">
+                ปีก่อน {{ baht(monthDetail.month.prevYear.grossTotal) }}
+              </span>
+              <span
+                v-if="monthDetail.month.deltaPct != null"
+                class="ui-dash-bars__delta"
+                :class="{
+                  'is-up': monthDetail.month.deltaPct > 0,
+                  'is-down': monthDetail.month.deltaPct < 0,
+                }"
+              >
                 {{ monthDetail.month.deltaPct > 0 ? "+" : ""
                 }}{{ monthDetail.month.deltaPct }}%</span
               >
@@ -1259,13 +1486,19 @@ onMounted(load);
               >ยอดขายรายปี</span
             >
           </div>
-          <p class="ui-dash__panel-sub">
+          <p class="ui-dash__panel-sub ui-dash-chart-desktop">
             กราฟเส้นตามปี (โซนเวลาไทย) · กดจุดเพื่อดูแยกสาขา
             <template v-if="summary.bestYear">
               · ปีที่ดีสุด {{ summary.bestYear.year }}
             </template>
           </p>
-          <div class="ui-dash-line">
+          <p class="ui-dash__panel-sub ui-dash-chart-mobile">
+            แตะปีเพื่อดูแยกสาขา
+            <template v-if="summary.bestYear">
+              · ปีที่ดีสุด {{ summary.bestYear.year }}
+            </template>
+          </p>
+          <div class="ui-dash-line ui-dash-chart-desktop">
             <svg
               class="ui-dash-line__svg"
               :viewBox="`0 0 ${yearLine.W} ${yearLine.H}`"
@@ -1380,13 +1613,63 @@ onMounted(load);
               </li>
             </ul>
           </div>
+          <div class="ui-dash-day-list ui-dash-chart-mobile" role="list">
+            <button
+              v-for="y in yearsDesc"
+              :key="`year-${y.year}`"
+              type="button"
+              class="ui-dash-day-list__row"
+              :class="{
+                'is-selected': yearDetail && y.year === yearDetail.year.year,
+                'is-best':
+                  summary.bestYear && y.year === summary.bestYear.year,
+                'is-current':
+                  summary.yearCompare &&
+                  y.year === summary.yearCompare.thisYear,
+              }"
+              role="listitem"
+              @click="selectedYear = y.year"
+            >
+              <div class="ui-dash-day-list__head">
+                <strong>ปี {{ y.year }}</strong>
+                <span>{{ baht(y.grossTotal) }}</span>
+              </div>
+              <p class="ui-dash-day-list__meta">
+                {{ y.billCount.toLocaleString("th-TH") }} บิล
+                <template
+                  v-if="summary.bestYear && y.year === summary.bestYear.year"
+                >
+                  · ปีที่ดีสุด
+                </template>
+                <template
+                  v-else-if="
+                    summary.yearCompare &&
+                    y.year === summary.yearCompare.thisYear
+                  "
+                >
+                  · ปีนี้
+                </template>
+              </p>
+              <div class="ui-dash-hbar__track ui-dash-day-list__year-bar">
+                <div
+                  class="ui-dash-hbar__fill"
+                  :style="{
+                    width: `${(y.grossTotal / (yearLine?.max || 1)) * 100}%`,
+                  }"
+                />
+              </div>
+            </button>
+          </div>
           <div v-if="yearDetail" class="ui-dash-chart-detail">
             <p class="ui-dash-chart-detail__title">
-              ปี {{ yearDetail.year.year }} · รวม
-              {{ baht(yearDetail.year.grossTotal) }}
-              <span
-                >·
-                {{ yearDetail.year.billCount.toLocaleString("th-TH") }}
+              <span class="ui-dash-chart-detail__month"
+                >ปี {{ yearDetail.year.year }}</span
+              >
+              <span class="ui-dash-chart-detail__pair"
+                >รวม {{ baht(yearDetail.year.grossTotal) }}</span
+              >
+              <span class="ui-dash-chart-detail__pair"
+                >{{ yearDetail.year.billCount.toLocaleString("th-TH") }}
                 บิล</span
               >
             </p>
@@ -1585,14 +1868,13 @@ onMounted(load);
 
 .ui-dash-chart-detail__title {
   margin: 0 0 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.65rem;
   font-size: 0.88rem;
   font-weight: 700;
   color: #0f172a;
-}
-
-.ui-dash-chart-detail__title span {
-  font-weight: 500;
-  color: #64748b;
 }
 
 .ui-dash-chart-detail__empty {
@@ -1681,7 +1963,9 @@ onMounted(load);
   padding-bottom: 0.85rem;
 }
 
-.ui-dash-bars--months .ui-dash-bars__delta {
+.ui-dash-bars--months .ui-dash-bars__delta,
+.ui-dash-month-list .ui-dash-bars__delta,
+.ui-dash-chart-detail .ui-dash-bars__delta {
   font-size: 0.68rem;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -1690,11 +1974,15 @@ onMounted(load);
   padding-bottom: 0.15rem;
 }
 
-.ui-dash-bars--months .ui-dash-bars__delta.is-up {
+.ui-dash-bars--months .ui-dash-bars__delta.is-up,
+.ui-dash-month-list .ui-dash-bars__delta.is-up,
+.ui-dash-chart-detail .ui-dash-bars__delta.is-up {
   color: #047857;
 }
 
-.ui-dash-bars--months .ui-dash-bars__delta.is-down {
+.ui-dash-bars--months .ui-dash-bars__delta.is-down,
+.ui-dash-month-list .ui-dash-bars__delta.is-down,
+.ui-dash-chart-detail .ui-dash-bars__delta.is-down {
   color: #b91c1c;
 }
 
@@ -1708,6 +1996,414 @@ onMounted(load);
   font-size: 0.68rem;
   white-space: nowrap;
   letter-spacing: -0.01em;
+}
+
+.ui-dash-yoy-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin: 0.65rem 1.25rem 0.15rem;
+}
+
+.ui-dash-yoy-summary__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+  padding: 0.65rem 0.7rem;
+  border-radius: 0.75rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.ui-dash-yoy-summary__label {
+  color: #64748b;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.ui-dash-yoy-summary__item strong {
+  color: #0f172a;
+  font-size: 0.92rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.ui-dash-yoy-summary__item--delta.is-up strong {
+  color: #047857;
+}
+
+.ui-dash-yoy-summary__item--delta.is-down strong {
+  color: #b91c1c;
+}
+
+.ui-dash-yoy-summary__item--delta.is-flat strong {
+  color: #64748b;
+}
+
+.ui-dash__panel-sub--months-mobile,
+.ui-dash-months-mobile,
+.ui-dash-chart-mobile {
+  display: none;
+}
+
+.ui-dash-month-list,
+.ui-dash-day-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.55rem 1rem 1rem;
+}
+
+.ui-dash-month-list__row {
+  appearance: none;
+  width: 100%;
+  margin: 0;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.85rem;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ui-dash-month-list__row.is-selected {
+  border-color: color-mix(in srgb, #0f766e 45%, #e2e8f0);
+  box-shadow: 0 0 0 2px color-mix(in srgb, #0f766e 18%, transparent);
+  background: #f0fdfa;
+}
+
+.ui-dash-month-list__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.1rem;
+}
+
+.ui-dash-month-list__head strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: #0f172a;
+  font-size: 0.95rem;
+}
+
+.ui-dash-month-list__na {
+  color: #cbd5e1;
+  font-size: 0.8rem;
+}
+
+.ui-dash-month-list__line {
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.ui-dash-month-list__yr {
+  font-size: 0.72rem;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-dash-month-list__line strong {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #0f172a;
+}
+
+.ui-dash-day-list__row {
+  appearance: none;
+  width: 100%;
+  margin: 0;
+  padding: 0.8rem 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.85rem;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ui-dash-day-list__row.is-selected {
+  border-color: color-mix(in srgb, #0f766e 45%, #e2e8f0);
+  box-shadow: 0 0 0 2px color-mix(in srgb, #0f766e 18%, transparent);
+  background: #f0fdfa;
+}
+
+.ui-dash-day-list__row.is-best:not(.is-selected) {
+  border-color: #fdba74;
+  background: #fff7ed;
+}
+
+.ui-dash-day-list__row.is-current:not(.is-selected):not(.is-best) {
+  border-color: #99f6e4;
+  background: #f0fdfa;
+}
+
+.ui-dash-day-list__row.is-empty {
+  opacity: 0.72;
+}
+
+.ui-dash-day-list__row.is-today .ui-dash-day-list__head strong {
+  color: #0f766e;
+}
+
+.ui-dash-day-list__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.ui-dash-day-list__head strong {
+  min-width: 0;
+  color: #0f172a;
+  font-size: 0.95rem;
+}
+
+.ui-dash-day-list__head span {
+  flex: 0 0 auto;
+  color: #0f172a;
+  font-size: 0.95rem;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-dash-day-list__meta {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+
+.ui-dash-day-list__branches {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+}
+
+.ui-dash-day-list__line {
+  display: grid;
+  grid-template-columns: 0.55rem minmax(3.5rem, 30%) minmax(0, 1fr) auto;
+  gap: 0.4rem;
+  align-items: center;
+}
+
+.ui-dash-day-list__dot {
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 999px;
+}
+
+.ui-dash-day-list__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+.ui-dash-day-list__line strong {
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #0f172a;
+}
+
+.ui-dash-day-list__year-bar {
+  margin-top: 0.2rem;
+}
+
+.ui-dash-chart-detail__month {
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.ui-dash-chart-detail__pair {
+  font-weight: 500;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 720px) {
+  .ui-dash :deep(.ui-page-head) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .ui-dash :deep(.ui-page-head__actions) {
+    width: 100%;
+  }
+
+  .ui-dash :deep(.ui-page-head__actions .ui-btn) {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .ui-dash :deep(.ui-dash__kpi-strip) {
+    grid-template-columns: 1fr;
+    gap: 0.55rem;
+  }
+
+  .ui-dash :deep(.ui-dash__kpi) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "label value"
+      "hint value"
+      "delta delta";
+    column-gap: 0.75rem;
+    row-gap: 0.15rem;
+    align-items: center;
+    padding: 0.8rem 0.9rem;
+  }
+
+  .ui-dash :deep(.ui-dash__kpi-label) {
+    grid-area: label;
+  }
+
+  .ui-dash :deep(.ui-dash__kpi-value) {
+    grid-area: value;
+    margin: 0;
+    font-size: 1.2rem;
+    text-align: right;
+    justify-self: end;
+  }
+
+  .ui-dash :deep(.ui-dash__kpi-hint) {
+    grid-area: hint;
+    margin: 0;
+  }
+
+  .ui-dash :deep(.ui-dash__kpi-delta) {
+    grid-area: delta;
+  }
+
+  .ui-dash :deep(.ui-card__toolbar) {
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .ui-dash :deep(.ui-toolbar-meta) {
+    line-height: 1.35;
+  }
+
+  .ui-dash :deep(.ui-dash__panel-sub) {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .ui-dash :deep(.ui-dash__panel .ui-dash-hbar),
+  .ui-dash :deep(.ui-dash__panel .ui-dash-split),
+  .ui-dash :deep(.ui-dash__panel > .ui-empty) {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .ui-dash :deep(.ui-dash-split) {
+    gap: 0.85rem;
+  }
+
+  .ui-dash :deep(.ui-dash-legend li) {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    font-size: 0.84rem;
+  }
+
+  .ui-dash :deep(.ui-dash-legend__pct) {
+    display: none;
+  }
+
+  .ui-dash-fresh {
+    padding: 0 1rem 1rem;
+  }
+
+  .ui-dash__seg {
+    width: 100%;
+  }
+
+  .ui-dash__seg-btn {
+    flex: 1 1 0;
+  }
+
+  .ui-dash-months-desktop,
+  .ui-dash__panel-sub--months-desktop,
+  .ui-dash-chart-desktop {
+    display: none !important;
+  }
+
+  .ui-dash-months-mobile,
+  .ui-dash__panel-sub--months-mobile,
+  .ui-dash-chart-mobile {
+    display: block;
+  }
+
+  .ui-dash-month-list.ui-dash-months-mobile,
+  .ui-dash-day-list.ui-dash-chart-mobile {
+    display: flex;
+  }
+
+  .ui-dash-yoy-summary {
+    grid-template-columns: 1fr;
+    margin-left: 1rem;
+    margin-right: 1rem;
+  }
+
+  .ui-dash-yoy-summary__item {
+    flex-direction: row;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .ui-dash-yoy-summary__item strong {
+    font-size: 1rem;
+    text-align: right;
+  }
+
+  .ui-dash-chart-detail {
+    margin-left: 1rem;
+    margin-right: 1rem;
+  }
+
+  .ui-dash-chart-detail .ui-dash-hbar--ranked {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .ui-dash-month-branches__bars {
+    padding-left: 0;
+  }
+
+  .ui-dash-month-branches__line {
+    grid-template-columns: 2.75rem minmax(0, 1fr) auto;
+  }
+
+  .ui-dash-month-branches__line strong {
+    font-size: 0.8rem;
+  }
+
+  .ui-dash-hbar--ranked {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
 }
 
 .ui-dash__panel > .ui-dash-legend {
