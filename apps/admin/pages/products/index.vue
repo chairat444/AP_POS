@@ -702,7 +702,7 @@ onMounted(async () => {
       <div v-if="pending && !rows.length" class="ui-empty">กำลังโหลด...</div>
       <div v-else-if="!pageRows.length" class="ui-empty">ไม่พบข้อมูล</div>
       <div v-else class="ui-table-wrap">
-        <table class="ui-table ui-table--fit ui-products-table">
+        <table class="ui-table ui-table--fit ui-table--cards ui-products-table">
           <thead>
             <tr>
               <th class="ui-table__col-name">ชื่อ</th>
@@ -972,7 +972,12 @@ onMounted(async () => {
   white-space: nowrap;
 }
 .ui-products-table .ui-table__col-name {
-  min-width: 10rem;
+  min-width: 12rem;
+  max-width: 22rem;
+  white-space: normal;
+  line-height: 1.35;
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 .ui-products-table .ui-table__col-barcode {
   width: 8.5rem;
@@ -980,6 +985,140 @@ onMounted(async () => {
   font-variant-numeric: tabular-nums;
   color: #64748b;
   font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 800px) {
+  .ui-products-table tr {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name name status"
+      "cost sell sell"
+      "profit profit suggest"
+      "actions actions actions";
+    gap: 0.3rem 0.55rem;
+    padding: 0.75rem 0.85rem;
+  }
+
+  .ui-products-table td {
+    padding: 0 !important;
+    font-size: 0.88rem;
+  }
+
+  .ui-products-table .ui-table__col-name {
+    grid-area: name;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+
+  .ui-products-table .ui-table__col-name strong {
+    font-size: 0.95rem;
+    line-height: 1.35;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+  }
+
+  .ui-products-table .ui-table__col-status {
+    grid-area: status;
+    width: auto;
+    text-align: right;
+    padding-top: 0.2rem !important;
+  }
+
+  .ui-products-table .ui-products-table__num:nth-child(3) {
+    grid-area: cost;
+    text-align: left !important;
+    color: #64748b;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ui-products-table .ui-products-table__num:nth-child(3)::before {
+    content: "ทุน ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-products-table .ui-products-table__num:nth-child(4) {
+    grid-area: sell;
+    text-align: left !important;
+    color: #0f172a;
+    font-weight: 750;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ui-products-table .ui-products-table__num:nth-child(4)::before {
+    content: "ขาย ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-products-table .ui-products-table__num:nth-child(5) {
+    grid-area: profit;
+    text-align: left !important;
+    font-size: 0.84rem;
+  }
+
+  .ui-products-table .ui-products-table__num:nth-child(5)::before {
+    content: "กำไร ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-products-table .ui-products-table__num:nth-child(5) .ui-field-hint {
+    display: inline;
+    margin: 0 0 0 0.25rem !important;
+  }
+
+  .ui-products-table .ui-products-table__num:nth-child(6) {
+    grid-area: suggest;
+    text-align: right !important;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-products-table .ui-products-table__num:nth-child(6)::before {
+    content: "แนะนำ ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-products-table .ui-table__col-barcode,
+  .ui-products-table .ui-table__col-flag {
+    display: none;
+  }
+
+  .ui-products-table .ui-table__actions {
+    grid-area: actions;
+    display: flex;
+    width: 100%;
+    min-width: 0 !important;
+    gap: 0.4rem;
+    padding-top: 0.45rem !important;
+    margin-top: 0.15rem;
+    border-top: 1px solid #f1f5f9;
+    text-align: left !important;
+  }
+
+  .ui-products-table .ui-table__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    margin: 0;
+    min-height: 2.15rem;
+  }
+
+  .ui-product-modal__layout {
+    grid-template-columns: 1fr;
+  }
+
+  .ui-product-modal__media {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .ui-product-modal__grid {
+    grid-template-columns: 1fr;
+  }
 }
 .ui-status-dot {
   display: inline-block;
@@ -1101,8 +1240,9 @@ onMounted(async () => {
   .ui-product-modal__media-actions .ui-btn {
     width: auto;
   }
+  .ui-product-modal__grid,
   .ui-product-modal__price {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
   }
   .ui-product-modal__suggest {
     grid-column: 1 / -1;

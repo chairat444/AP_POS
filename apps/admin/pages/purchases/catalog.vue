@@ -250,7 +250,7 @@ onMounted(load);
     <div class="ui-card ui-catalog-list">
       <div v-if="pending && !items.length" class="ui-empty">กำลังโหลด...</div>
       <div v-else class="ui-table-wrap ui-catalog-scroll">
-        <table class="ui-table ui-table--fit ui-catalog-table">
+        <table class="ui-table ui-table--fit ui-table--cards ui-catalog-table">
           <colgroup>
             <col class="ui-catalog-col-check" />
             <col class="ui-catalog-col-name" />
@@ -416,7 +416,7 @@ onMounted(load);
 .ui-catalog-list {
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
+  overflow: visible;
   padding: 0;
 }
 .ui-catalog-scroll {
@@ -425,8 +425,9 @@ onMounted(load);
   -webkit-overflow-scrolling: touch;
 }
 .ui-catalog-table {
-  width: 100%;
-  table-layout: fixed;
+  width: max-content;
+  min-width: 100%;
+  table-layout: auto;
 }
 .ui-catalog-col-check {
   width: 2.75rem;
@@ -468,17 +469,19 @@ onMounted(load);
 }
 .ui-catalog-name,
 .ui-catalog-aliases {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
+  min-width: 10rem;
+  max-width: 18rem;
+  white-space: normal;
+  line-height: 1.35;
+  word-break: keep-all;
+  overflow-wrap: break-word;
 }
 .ui-catalog-group {
   white-space: nowrap;
 }
 .ui-catalog-table .ui-table__actions {
-  width: 10.5rem;
-  min-width: 10.5rem;
+  width: auto;
+  min-width: 7.5rem;
   white-space: nowrap;
   overflow: visible;
   text-align: right;
@@ -490,17 +493,106 @@ onMounted(load);
 .ui-table tbody tr.is-selected {
   background: #fef9c3;
 }
-@media (max-width: 720px) {
-  .ui-catalog-col-aliases,
+@media (max-width: 800px) {
+  .ui-catalog-scroll {
+    overflow-x: visible !important;
+  }
+
+  .ui-catalog-table tbody tr {
+    display: grid !important;
+    grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+    grid-template-areas:
+      "check name group"
+      "aliases aliases aliases"
+      "actions actions actions";
+    gap: 0.35rem 0.55rem;
+    padding: 0.75rem 0.8rem;
+    align-items: start;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .ui-catalog-check {
+    grid-area: check;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    padding-top: 0.2rem !important;
+  }
+
+  .ui-catalog-name {
+    grid-area: name;
+    min-width: 0 !important;
+    max-width: none !important;
+    font-weight: 700;
+    font-size: 0.95rem;
+    line-height: 1.4;
+    word-break: keep-all !important;
+    overflow-wrap: break-word !important;
+  }
+
   .ui-catalog-aliases {
-    display: none;
+    grid-area: aliases;
+    font-size: 0.82rem;
+    color: #64748b;
+    min-width: 0 !important;
+    max-width: none !important;
+    line-height: 1.35;
+    word-break: keep-all !important;
   }
-  .ui-catalog-col-actions {
-    width: 6.5rem;
+
+  .ui-catalog-aliases::before {
+    content: "ชื่ออื่น ";
+    font-weight: 600;
+    color: #94a3b8;
   }
+
+  .ui-catalog-group {
+    grid-area: group;
+    text-align: right;
+    font-size: 0.8rem;
+    color: #64748b;
+    white-space: nowrap !important;
+  }
+
   .ui-catalog-table .ui-table__actions {
-    width: 6.5rem;
-    min-width: 6.5rem;
+    grid-area: actions;
+    display: flex !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    gap: 0.4rem;
+    padding-top: 0.5rem !important;
+    border-top: 1px solid #f1f5f9;
+    text-align: left !important;
+  }
+
+  .ui-catalog-table .ui-table__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 2.15rem;
+    margin: 0;
+  }
+
+  .ui-filter-bar {
+    align-items: stretch;
+  }
+
+  .ui-catalog-count {
+    margin-left: 0;
+  }
+
+  .ui-catalog-dock__inner {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ui-catalog-dock__actions {
+    width: 100%;
+  }
+
+  .ui-catalog-dock__actions .ui-btn {
+    flex: 1 1 auto;
+    justify-content: center;
   }
 }
 </style>

@@ -253,7 +253,7 @@ onMounted(load);
       </div>
     </div>
 
-    <div class="ui-stat-grid" style="margin-bottom: 1rem; grid-template-columns: repeat(3, minmax(0, 1fr))">
+    <div class="ui-stat-grid ui-promos-stats">
       <div class="ui-card ui-stat">
         <div class="ui-stat__label">โปรโมทั้งหมด</div>
         <div class="ui-stat__value">{{ rows.length }}</div>
@@ -301,28 +301,28 @@ onMounted(load);
         </span>
       </div>
       <div v-else class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-table--cards">
           <thead>
             <tr>
-              <th>ชื่อโปรโม</th>
-              <th>สินค้า</th>
-              <th>ซื้อ</th>
-              <th>จ่าย</th>
+              <th class="ui-table__col-name">ชื่อโปรโม</th>
+              <th class="ui-table__col-name">สินค้า</th>
+              <th class="ui-promos-deal">เงื่อนไข</th>
               <th>สถานะ</th>
               <th class="ui-table__actions">จัดการ</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="row in pageRows" :key="row.id">
-              <td>
+              <td class="ui-table__col-name">
                 <strong>{{ row.label }}</strong>
               </td>
-              <td>
+              <td class="ui-table__col-name">
                 <strong>{{ row.productCode }}</strong>
                 <div class="ui-muted">{{ productName(row.productCode) }}</div>
               </td>
-              <td>{{ row.buyQty }}</td>
-              <td>{{ baht(row.payAmount) }}</td>
+              <td class="ui-promos-deal">
+                ซื้อ {{ row.buyQty }} · จ่าย {{ baht(row.payAmount) }}
+              </td>
               <td>
                 <span
                   class="ui-badge"
@@ -434,3 +434,83 @@ onMounted(load);
     </div>
   </div>
 </template>
+
+<style scoped>
+.ui-promos-stats {
+  margin-bottom: 1rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 800px) {
+  .ui-promos-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .ui-table--fit tbody tr {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "label status"
+      "product product"
+      "deal deal"
+      "actions actions";
+    gap: 0.3rem 0.55rem;
+    padding: 0.75rem 0.85rem;
+  }
+
+  .ui-table--fit tbody td {
+    padding: 0 !important;
+  }
+
+  .ui-table--fit tbody td:nth-child(1) {
+    grid-area: label;
+    min-width: 0 !important;
+    font-size: 0.95rem;
+    line-height: 1.4;
+    word-break: keep-all !important;
+    overflow-wrap: break-word !important;
+  }
+
+  .ui-table--fit tbody td:nth-child(2) {
+    grid-area: product;
+    color: #64748b;
+    font-size: 0.84rem;
+  }
+
+  .ui-table--fit tbody td:nth-child(2)::before {
+    content: "สินค้า ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-table--fit tbody td.ui-promos-deal {
+    grid-area: deal;
+    font-size: 0.84rem;
+    color: #475569;
+    font-weight: 650;
+  }
+
+  .ui-table--fit tbody td:nth-child(4) {
+    grid-area: status;
+    text-align: right;
+  }
+
+  .ui-table--fit .ui-table__actions {
+    grid-area: actions;
+    display: flex;
+    width: 100%;
+    min-width: 0 !important;
+    gap: 0.4rem;
+    padding-top: 0.45rem !important;
+    border-top: 1px solid #f1f5f9;
+    text-align: left !important;
+  }
+
+  .ui-table--fit .ui-table__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 2.15rem;
+    margin: 0;
+  }
+}
+</style>

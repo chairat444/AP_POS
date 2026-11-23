@@ -488,7 +488,7 @@ onMounted(load);
       <div v-if="pending && !rows.length" class="ui-empty">กำลังโหลด...</div>
       <div v-else-if="!pageRows.length" class="ui-empty">ไม่พบข้อมูล</div>
       <div v-else class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-table--cards">
           <thead>
             <tr>
               <th>
@@ -496,7 +496,7 @@ onMounted(load);
                   รหัส{{ sortMark("code") }}
                 </button>
               </th>
-              <th>
+              <th class="ui-table__col-name">
                 <button type="button" class="ui-th-sort" @click="toggleSort('name')">
                   ชื่อ{{ sortMark("name") }}
                 </button>
@@ -511,7 +511,7 @@ onMounted(load);
                   แต้ม{{ sortMark("points") }}
                 </button>
               </th>
-              <th>
+              <th class="ui-members-col-secondary">
                 <button
                   type="button"
                   class="ui-th-sort"
@@ -520,7 +520,7 @@ onMounted(load);
                   สมัคร{{ sortMark("createdAt") }}
                 </button>
               </th>
-              <th>
+              <th class="ui-members-col-secondary">
                 <button
                   type="button"
                   class="ui-th-sort"
@@ -529,7 +529,7 @@ onMounted(load);
                   ใช้ล่าสุด{{ sortMark("lastUsedAt") }}
                 </button>
               </th>
-              <th>
+              <th class="ui-members-col-secondary">
                 <button
                   type="button"
                   class="ui-th-sort"
@@ -544,7 +544,7 @@ onMounted(load);
           <tbody>
             <tr v-for="row in pageRows" :key="row.id">
               <td>{{ row.code }}</td>
-              <td>
+              <td class="ui-table__col-name">
                 {{ row.name }}
                 <span v-if="row.lineLinked" class="ui-members__line">ไลน์</span>
               </td>
@@ -552,11 +552,11 @@ onMounted(load);
               <td>
                 <strong>{{ row.points.toLocaleString("th-TH") }}</strong>
               </td>
-              <td class="ui-members__when">{{ formatWhen(row.createdAt) }}</td>
-              <td class="ui-members__when">
+              <td class="ui-members__when ui-members-col-secondary">{{ formatWhen(row.createdAt) }}</td>
+              <td class="ui-members__when ui-members-col-secondary">
                 {{ row.lastUsedAt ? formatWhen(row.lastUsedAt) : "ยังไม่เคยใช้" }}
               </td>
-              <td class="ui-members__when">{{ shortBranch(row.lastUsedBranch) }}</td>
+              <td class="ui-members__when ui-members-col-secondary">{{ shortBranch(row.lastUsedBranch) }}</td>
               <td class="ui-table__actions">
                 <div class="ui-members__actions">
                   <NuxtLink
@@ -672,10 +672,11 @@ onMounted(load);
 
 <style scoped>
 .ui-members :deep(.ui-table--fit .ui-table__actions) {
-  width: 11.5rem;
-  max-width: 11.5rem;
-  white-space: normal;
-  overflow: hidden;
+  width: auto;
+  max-width: none;
+  min-width: 8.5rem;
+  white-space: nowrap;
+  overflow: visible;
   text-align: right !important;
   vertical-align: middle;
   padding-left: 0.5rem;
@@ -713,9 +714,115 @@ onMounted(load);
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
-@media (max-width: 720px) {
+@media (max-width: 800px) {
   .ui-members__stats {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .ui-members :deep(tbody tr) {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name points"
+      "code phone"
+      "used used"
+      "actions actions";
+    gap: 0.28rem 0.55rem;
+    padding: 0.75rem 0.85rem;
+  }
+
+  .ui-members :deep(tbody td) {
+    padding: 0 !important;
+  }
+
+  .ui-members :deep(tbody td:nth-child(1)) {
+    grid-area: code;
+    font-size: 0.8rem;
+    color: #94a3b8;
+  }
+
+  .ui-members :deep(tbody td:nth-child(1))::before {
+    content: "รหัส ";
+    font-weight: 600;
+  }
+
+  .ui-members :deep(.ui-table__col-name) {
+    grid-area: name;
+    min-width: 0 !important;
+    max-width: none !important;
+    font-weight: 700;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+  }
+
+  .ui-members :deep(tbody td:nth-child(3)) {
+    grid-area: phone;
+    color: #64748b;
+    font-size: 0.84rem;
+    text-align: right;
+  }
+
+  .ui-members :deep(tbody td:nth-child(4)) {
+    grid-area: points;
+    text-align: right;
+    align-self: start;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ui-members :deep(tbody td:nth-child(4))::before {
+    content: "แต้ม ";
+    font-weight: 600;
+    color: #94a3b8;
+    font-size: 0.78rem;
+  }
+
+  .ui-members :deep(tbody td:nth-child(5)) {
+    display: none;
+  }
+
+  .ui-members :deep(tbody td:nth-child(6)) {
+    grid-area: used;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-members :deep(tbody td:nth-child(6))::before {
+    content: "ใช้ล่าสุด ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-members :deep(tbody td:nth-child(7)) {
+    display: none;
+  }
+
+  .ui-members :deep(.ui-table--fit .ui-table__actions) {
+    grid-area: actions;
+    display: block;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    padding-top: 0.45rem !important;
+    border-top: 1px solid #f1f5f9;
+    text-align: left !important;
+  }
+
+  .ui-members__actions {
+    width: 100%;
+    justify-content: stretch;
+    flex-wrap: nowrap;
+    gap: 0.4rem;
+  }
+
+  .ui-members__actions :deep(.ui-btn),
+  .ui-members__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 2.15rem;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.82rem;
   }
 }
 

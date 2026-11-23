@@ -393,17 +393,17 @@ onMounted(load);
       <div v-if="pending && !rows.length" class="ui-empty">กำลังโหลด...</div>
       <div v-else-if="!pageRows.length" class="ui-empty">ไม่พบข้อมูล</div>
       <div v-else class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-table--cards ui-staff-table">
           <thead>
             <tr>
               <th>รหัส</th>
-              <th>ชื่อ</th>
+              <th class="ui-table__col-name">ชื่อ</th>
               <th>บทบาท</th>
-              <th>PIN</th>
+              <th class="ui-staff-col-secondary">PIN</th>
               <th>ค่าแรง/วัน</th>
-              <th>ค่าคอม</th>
-              <th>Admin</th>
-              <th>เมนู</th>
+              <th class="ui-staff-col-secondary">ค่าคอม</th>
+              <th class="ui-staff-col-secondary">Admin</th>
+              <th class="ui-staff-col-secondary">เมนู</th>
               <th>สถานะ</th>
               <th class="ui-table__actions">จัดการ</th>
             </tr>
@@ -411,13 +411,13 @@ onMounted(load);
           <tbody>
             <tr v-for="row in pageRows" :key="row.id">
               <td>{{ row.code }}</td>
-              <td>{{ row.name }}</td>
+              <td class="ui-table__col-name">{{ row.name }}</td>
               <td>{{ ROLE_LABEL[row.role] || row.role }}</td>
-              <td>{{ row.pin }}</td>
+              <td class="ui-staff-col-secondary">{{ row.pin }}</td>
               <td>{{ baht(row.dailyWage ?? 0) }}</td>
-              <td class="ui-staff-comm">{{ commissionLabel(row) }}</td>
-              <td>{{ row.canLoginAdmin ? "ได้" : "-" }}</td>
-              <td>{{ menusLabel(row) }}</td>
+              <td class="ui-staff-comm ui-staff-col-secondary">{{ commissionLabel(row) }}</td>
+              <td class="ui-staff-col-secondary">{{ row.canLoginAdmin ? "ได้" : "-" }}</td>
+              <td class="ui-staff-col-secondary">{{ menusLabel(row) }}</td>
               <td>{{ row.active ? "ใช้งาน" : "ปิด" }}</td>
               <td class="ui-table__actions">
                 <button type="button" class="ui-btn ui-btn--ghost" @click="openEdit(row)">
@@ -692,6 +692,149 @@ onMounted(load);
   font-size: 0.82rem;
   color: #475569;
   line-height: 1.35;
+}
+@media (max-width: 800px) {
+  .ui-table-wrap:has(.ui-staff-table) {
+    overflow-x: visible !important;
+  }
+
+  .ui-staff-table {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+  }
+
+  .ui-staff-table thead {
+    display: none;
+  }
+
+  .ui-staff-table tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ui-staff-table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name status"
+      "code role"
+      "wage pin"
+      "comm comm"
+      "actions actions";
+    gap: 0.28rem 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-staff-table td {
+    border: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    position: static !important;
+    box-shadow: none !important;
+  }
+
+  .ui-staff-table td:nth-child(1) {
+    grid-area: code;
+    font-size: 0.8rem;
+    color: #94a3b8;
+  }
+
+  .ui-staff-table td:nth-child(1)::before {
+    content: "รหัส ";
+    font-weight: 600;
+  }
+
+  .ui-staff-table .ui-table__col-name {
+    grid-area: name;
+    min-width: 0 !important;
+    font-weight: 700;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+  }
+
+  .ui-staff-table td:nth-child(3) {
+    grid-area: role;
+    color: #64748b;
+    font-size: 0.84rem;
+    text-align: right;
+  }
+
+  .ui-staff-table td:nth-child(4) {
+    grid-area: pin;
+    text-align: right;
+    font-size: 0.84rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ui-staff-table td:nth-child(4)::before {
+    content: "PIN ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-staff-table td:nth-child(5) {
+    grid-area: wage;
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.84rem;
+  }
+
+  .ui-staff-table td:nth-child(5)::before {
+    content: "ค่าแรง ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-staff-table td:nth-child(6) {
+    grid-area: comm;
+    font-size: 0.8rem;
+    color: #475569;
+    max-width: none;
+  }
+
+  .ui-staff-table td:nth-child(6)::before {
+    content: "คอม ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-staff-table td:nth-child(7),
+  .ui-staff-table td:nth-child(8) {
+    display: none;
+  }
+
+  .ui-staff-table td:nth-child(9) {
+    grid-area: status;
+    text-align: right;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-staff-table .ui-table__actions {
+    grid-area: actions;
+    display: flex;
+    width: 100%;
+    min-width: 0 !important;
+    gap: 0.4rem;
+    padding-top: 0.45rem !important;
+    border-top: 1px solid #f1f5f9;
+    text-align: left !important;
+  }
+
+  .ui-staff-table .ui-table__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 2.15rem;
+    margin: 0;
+  }
 }
 .ui-staff-password {
   display: flex;

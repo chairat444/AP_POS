@@ -862,7 +862,7 @@ onMounted(async () => {
         <span class="ui-toolbar-meta">คลิกแถวเพื่อเจาะลึกช่วงนั้น</span>
       </div>
       <div class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-rpt-series">
           <thead>
             <tr>
               <th rowspan="2">{{ viewLevel === "year" ? "เดือน" : "วัน" }}</th>
@@ -1014,12 +1014,12 @@ onMounted(async () => {
       </div>
 
       <div class="ui-table-wrap">
-        <table class="ui-table ui-table--fit ui-rpt__table">
+        <table class="ui-table ui-table--fit ui-table--cards ui-rpt__table ui-rpt-bills">
           <thead>
             <tr>
               <th class="ui-rpt__col-time">เวลา</th>
               <th class="ui-table__col-bill">เลขบิล</th>
-              <th v-if="!billsBranchTab">สาขา</th>
+              <th v-if="!billsBranchTab" class="ui-rpt__col-branch">สาขา</th>
               <th>สมาชิก</th>
               <th class="ui-rpt__col-pay">ชำระ</th>
               <th class="ui-rpt__num">ยอด</th>
@@ -1057,7 +1057,7 @@ onMounted(async () => {
                     {{ row.billNo }}
                   </NuxtLink>
                 </td>
-                <td v-if="!billsBranchTab">{{ branchShort(row.branchId) }}</td>
+                <td v-if="!billsBranchTab" class="ui-rpt__col-branch">{{ branchShort(row.branchId) }}</td>
                 <td class="ui-rpt__col-member">
                   <NuxtLink
                     v-if="row.customerId"
@@ -1119,7 +1119,7 @@ onMounted(async () => {
             >
           </div>
           <div class="ui-table-wrap">
-            <table class="ui-table ui-table--fit">
+            <table class="ui-table ui-table--fit ui-table--cards ui-rpt-branch">
               <thead>
                 <tr>
                   <th>สาขา</th>
@@ -1165,7 +1165,7 @@ onMounted(async () => {
             ไม่มีข้อมูลการชำระ
           </div>
           <div v-else class="ui-table-wrap">
-            <table class="ui-table ui-table--fit">
+            <table class="ui-table ui-table--fit ui-table--cards ui-rpt-pay">
               <thead>
                 <tr>
                   <th>ช่องทาง</th>
@@ -1559,13 +1559,192 @@ onMounted(async () => {
   border: 0;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 800px) {
   .ui-rpt__stat {
     min-width: calc(50% - 0.5rem);
   }
 
   .ui-rpt__search {
     max-width: none;
+  }
+
+  .ui-table-wrap:has(.ui-rpt-bills),
+  .ui-table-wrap:has(.ui-rpt-branch),
+  .ui-table-wrap:has(.ui-rpt-pay) {
+    overflow-x: visible !important;
+  }
+
+  .ui-rpt-bills,
+  .ui-rpt-branch,
+  .ui-rpt-pay {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+  }
+
+  /* ตารางสรุปปี/เดือนหลายสาขา — คงเลื่อนแนวนอน */
+  .ui-rpt-series {
+    width: max-content;
+    min-width: 100%;
+  }
+
+  .ui-rpt-bills thead,
+  .ui-rpt-branch thead,
+  .ui-rpt-pay thead {
+    display: none;
+  }
+
+  .ui-rpt-bills tbody,
+  .ui-rpt-branch tbody,
+  .ui-rpt-branch tfoot,
+  .ui-rpt-pay tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ui-rpt-bills tbody tr,
+  .ui-rpt-branch tbody tr,
+  .ui-rpt-branch tfoot tr,
+  .ui-rpt-pay tbody tr {
+    display: grid;
+    gap: 0.28rem 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-rpt-bills td,
+  .ui-rpt-branch td,
+  .ui-rpt-branch th,
+  .ui-rpt-pay td {
+    border: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    position: static !important;
+    box-shadow: none !important;
+  }
+
+  .ui-rpt-bills tbody tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "time amount"
+      "bill bill"
+      "branch member"
+      "pay pay";
+  }
+
+  .ui-rpt-bills .ui-rpt__col-time {
+    grid-area: time;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-rpt-bills .ui-table__col-bill {
+    grid-area: bill;
+    font-size: 0.95rem;
+    font-weight: 700;
+  }
+
+  .ui-rpt-bills .ui-rpt__col-branch {
+    grid-area: branch;
+    font-size: 0.8rem;
+    color: #64748b;
+    max-width: none !important;
+    min-width: 0 !important;
+  }
+
+  .ui-rpt-bills .ui-rpt__col-member {
+    grid-area: member;
+    font-size: 0.84rem;
+    color: #475569;
+    text-align: right;
+  }
+
+  .ui-rpt-bills .ui-rpt__col-pay {
+    grid-area: pay;
+    font-size: 0.8rem;
+    color: #64748b;
+    min-width: 0 !important;
+  }
+
+  .ui-rpt-bills .ui-rpt__amt {
+    grid-area: amount;
+    font-weight: 800;
+    text-align: right !important;
+  }
+
+  .ui-rpt-branch tbody tr,
+  .ui-rpt-branch tfoot tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "branch sales"
+      "bills avg";
+  }
+
+  .ui-rpt-branch tfoot tr {
+    background: #f8fafc;
+  }
+
+  .ui-rpt-branch tr > *:nth-child(1) {
+    grid-area: branch;
+    font-weight: 700;
+  }
+
+  .ui-rpt-branch tr > *:nth-child(2) {
+    grid-area: bills;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-rpt-branch tr > *:nth-child(2)::before {
+    content: "บิล ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-rpt-branch tr > *:nth-child(3) {
+    grid-area: sales;
+    font-weight: 800;
+    text-align: right !important;
+  }
+
+  .ui-rpt-branch tr > *:nth-child(4) {
+    grid-area: avg;
+    font-size: 0.8rem;
+    color: #64748b;
+    text-align: right !important;
+  }
+
+  .ui-rpt-branch tr > *:nth-child(4)::before {
+    content: "เฉลี่ย ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-rpt-pay tbody tr {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "label count amount";
+    align-items: center;
+  }
+
+  .ui-rpt-pay tr > *:nth-child(1) {
+    grid-area: label;
+    font-weight: 700;
+  }
+
+  .ui-rpt-pay tr > *:nth-child(2) {
+    grid-area: count;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-rpt-pay tr > *:nth-child(3) {
+    grid-area: amount;
+    font-weight: 800;
+    text-align: right !important;
   }
 }
 </style>

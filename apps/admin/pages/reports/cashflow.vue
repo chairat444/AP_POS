@@ -197,7 +197,7 @@ onMounted(async () => {
           <span class="ui-toolbar-meta ui-toolbar-meta--alone">สรุปแยกตามสาขา</span>
         </div>
         <div class="ui-table-wrap">
-          <table class="ui-table ui-table--fit">
+          <table class="ui-table ui-table--fit ui-table--cards ui-cf-branch">
             <thead>
               <tr>
                 <th>สาขา</th>
@@ -279,7 +279,7 @@ onMounted(async () => {
           </div>
           <div v-if="!report.incomeByMethod.length" class="ui-empty">ไม่มีรายรับ</div>
           <div v-else class="ui-table-wrap">
-            <table class="ui-table ui-table--fit">
+            <table class="ui-table ui-table--fit ui-table--cards ui-cf-simple">
               <thead>
                 <tr>
                   <th>ช่องทาง</th>
@@ -304,7 +304,7 @@ onMounted(async () => {
           </div>
           <div v-if="!report.expenseByCategory.length" class="ui-empty">ไม่มีค่าใช้จ่าย</div>
           <div v-else class="ui-table-wrap">
-            <table class="ui-table ui-table--fit">
+            <table class="ui-table ui-table--fit ui-table--cards ui-cf-simple">
               <thead>
                 <tr>
                   <th>หมวด</th>
@@ -331,7 +331,7 @@ onMounted(async () => {
         </div>
         <div v-if="!report.expenses.length" class="ui-empty">ไม่มีรายการ</div>
         <div v-else class="ui-table-wrap">
-          <table class="ui-table ui-table--fit">
+          <table class="ui-table ui-table--fit ui-table--cards ui-cf-expense">
             <thead>
               <tr>
                 <th>เวลา</th>
@@ -358,3 +358,230 @@ onMounted(async () => {
     </template>
   </div>
 </template>
+
+<style scoped>
+@media (max-width: 800px) {
+  .ui-table-wrap:has(.ui-table--fit) {
+    overflow-x: visible !important;
+  }
+
+  .ui-table--fit {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+  }
+
+  .ui-table--fit thead {
+    display: none;
+  }
+
+  .ui-table--fit tbody,
+  .ui-table--fit tfoot {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ui-table--fit tbody tr,
+  .ui-table--fit tfoot tr {
+    display: grid;
+    gap: 0.28rem 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-table--fit tfoot tr {
+    background: #f8fafc;
+    border-color: #cbd5e1;
+  }
+
+  .ui-table--fit td,
+  .ui-table--fit th {
+    border: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    position: static !important;
+    box-shadow: none !important;
+    text-align: left !important;
+    font-weight: inherit;
+  }
+
+  .ui-cf-branch tbody tr,
+  .ui-cf-branch tfoot tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "branch net"
+      "income expense"
+      "cash xfer"
+      "gov office";
+  }
+
+  .ui-cf-branch tr > *:nth-child(1) {
+    grid-area: branch;
+    font-weight: 700;
+    font-size: 0.95rem;
+  }
+
+  .ui-cf-branch tr > *:nth-child(2) {
+    grid-area: income;
+    font-size: 0.84rem;
+  }
+
+  .ui-cf-branch tr > *:nth-child(2)::before {
+    content: "รับ ";
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .ui-cf-branch tr > *:nth-child(3) {
+    grid-area: cash;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-cf-branch tr > *:nth-child(3)::before {
+    content: "สด ";
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .ui-cf-branch tr > *:nth-child(4) {
+    grid-area: xfer;
+    font-size: 0.8rem;
+    color: #64748b;
+    text-align: right !important;
+  }
+
+  .ui-cf-branch tr > *:nth-child(4)::before {
+    content: "โอน ";
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .ui-cf-branch tr > *:nth-child(5) {
+    grid-area: gov;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-cf-branch tr > *:nth-child(5)::before {
+    content: "รัฐ ";
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .ui-cf-branch tr > *:nth-child(6) {
+    grid-area: expense;
+    font-size: 0.84rem;
+    text-align: right !important;
+  }
+
+  .ui-cf-branch tr > *:nth-child(6)::before {
+    content: "จ่าย ";
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .ui-cf-branch tr > *:nth-child(7) {
+    grid-area: net;
+    font-weight: 800;
+    text-align: right !important;
+  }
+
+  .ui-cf-branch tr > *:nth-child(8) {
+    grid-area: office;
+    font-size: 0.8rem;
+    color: #64748b;
+    text-align: right !important;
+  }
+
+  .ui-cf-branch tr > *:nth-child(8)::before {
+    content: "สำนักงาน ";
+    color: #94a3b8;
+    font-weight: 600;
+  }
+
+  .ui-cf-simple tbody tr {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "label count amount";
+    align-items: center;
+  }
+
+  .ui-cf-simple tr > *:nth-child(1) {
+    grid-area: label;
+    font-weight: 700;
+  }
+
+  .ui-cf-simple tr > *:nth-child(2) {
+    grid-area: count;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-cf-simple tr > *:nth-child(3) {
+    grid-area: amount;
+    font-weight: 800;
+    text-align: right !important;
+  }
+
+  .ui-cf-expense tbody tr {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "when amount"
+      "cat cat"
+      "desc desc"
+      "paid by";
+  }
+
+  .ui-cf-expense tr > *:nth-child(1) {
+    grid-area: when;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-cf-expense tr > *:nth-child(2) {
+    grid-area: cat;
+    font-weight: 700;
+  }
+
+  .ui-cf-expense tr > *:nth-child(3) {
+    grid-area: desc;
+    font-size: 0.84rem;
+    color: #475569;
+  }
+
+  .ui-cf-expense tr > *:nth-child(4) {
+    grid-area: paid;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-cf-expense tr > *:nth-child(4)::before {
+    content: "จาก ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-cf-expense tr > *:nth-child(5) {
+    grid-area: by;
+    text-align: right !important;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-cf-expense tr > *:nth-child(5)::before {
+    content: "โดย ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-cf-expense tr > *:nth-child(6) {
+    grid-area: amount;
+    font-weight: 800;
+    text-align: right !important;
+  }
+}
+</style>

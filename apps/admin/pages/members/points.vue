@@ -173,7 +173,7 @@ onMounted(async () => {
 
     <div class="ui-card ui-report-filters">
       <form class="ui-rdf" @submit.prevent="search">
-        <label class="ui-field" style="flex: 1; min-width: 16rem">
+        <label class="ui-field ui-points-search-field">
           <span>ค้นหาชื่อ / รหัส / เบอร์</span>
           <input
             v-model="q"
@@ -207,7 +207,7 @@ onMounted(async () => {
         </span>
       </div>
       <div class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-table--cards">
           <thead>
             <tr>
               <th>รหัส</th>
@@ -287,7 +287,7 @@ onMounted(async () => {
           ยังไม่มีประวัติแต้ม (ได้/ใช้แต้มจะขึ้นหลัง sync บิล)
         </div>
         <div v-else class="ui-table-wrap ui-points-ledger-wrap">
-          <table class="ui-table ui-points-ledger">
+          <table class="ui-table ui-table--cards ui-points-ledger">
             <thead>
               <tr>
                 <th>วันเวลา</th>
@@ -379,5 +379,209 @@ onMounted(async () => {
 .ui-points-ledger__num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+.ui-points-search-field {
+  flex: 1;
+  min-width: 16rem;
+}
+
+@media (max-width: 800px) {
+  .ui-points-search-field {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .ui-report-filters .ui-rdf {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ui-report-filters .ui-btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .ui-table-wrap:has(.ui-table--fit) {
+    overflow-x: visible !important;
+  }
+
+  .ui-table--fit {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+  }
+
+  .ui-table--fit thead {
+    display: none;
+  }
+
+  .ui-table--fit tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ui-table--fit tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name points"
+      "code phone"
+      "actions actions";
+    gap: 0.28rem 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-table--fit td {
+    border: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    position: static !important;
+    box-shadow: none !important;
+  }
+
+  .ui-table--fit td:nth-child(1) {
+    grid-area: code;
+    font-size: 0.8rem;
+    color: #94a3b8;
+  }
+
+  .ui-table--fit td:nth-child(1)::before {
+    content: "รหัส ";
+    font-weight: 600;
+  }
+
+  .ui-table--fit td:nth-child(2) {
+    grid-area: name;
+    font-weight: 700;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    word-break: keep-all;
+  }
+
+  .ui-table--fit td:nth-child(3) {
+    grid-area: phone;
+    font-size: 0.84rem;
+    color: #64748b;
+    text-align: right;
+  }
+
+  .ui-table--fit td:nth-child(4) {
+    grid-area: points;
+    text-align: right;
+  }
+
+  .ui-table--fit td:nth-child(4)::before {
+    content: "แต้ม ";
+    font-weight: 600;
+    color: #94a3b8;
+    font-size: 0.78rem;
+  }
+
+  .ui-table--fit .ui-table__actions {
+    grid-area: actions;
+    display: flex;
+    width: 100%;
+    min-width: 0 !important;
+    padding-top: 0.45rem !important;
+    border-top: 1px solid #f1f5f9;
+  }
+
+  .ui-table--fit .ui-table__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 2.15rem;
+    margin: 0;
+  }
+
+  .ui-points-ledger-wrap {
+    overflow-x: visible !important;
+  }
+
+  .ui-points-ledger {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .ui-points-ledger thead {
+    display: none;
+  }
+
+  .ui-points-ledger tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ui-points-ledger tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "when delta"
+      "reason reason"
+      "bill branch"
+      "bal bal";
+    gap: 0.28rem 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-points-ledger th,
+  .ui-points-ledger td {
+    border: 0 !important;
+    padding: 0 !important;
+    white-space: normal !important;
+    position: static !important;
+    box-shadow: none !important;
+  }
+
+  .ui-points-ledger__when {
+    grid-area: when;
+  }
+
+  .ui-points-ledger td:nth-child(2) {
+    grid-area: reason;
+    font-weight: 700;
+    font-size: 0.92rem;
+  }
+
+  .ui-points-ledger__bill {
+    grid-area: bill;
+    padding-right: 0 !important;
+    font-size: 0.84rem;
+  }
+
+  .ui-points-ledger__branch {
+    grid-area: branch;
+    padding-left: 0 !important;
+    text-align: right;
+    font-size: 0.8rem;
+  }
+
+  .ui-points-ledger td:nth-child(5) {
+    grid-area: delta;
+    text-align: right;
+    font-size: 1rem;
+  }
+
+  .ui-points-ledger td:nth-child(6) {
+    grid-area: bal;
+    text-align: left !important;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-points-ledger td:nth-child(6)::before {
+    content: "คงเหลือ ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
 }
 </style>

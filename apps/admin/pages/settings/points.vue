@@ -284,7 +284,7 @@ onMounted(load);
             placeholder="สมัครผ่านไลน์วันนี้รับ {n} แต้ม"
           />
         </label>
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem">
+        <div class="ui-points-date-grid">
           <label class="ui-field">
             <span>เริ่ม (ว่าง = ทันที)</span>
             <input v-model="lineForm.startDate" class="ui-input" type="date" />
@@ -305,7 +305,7 @@ onMounted(load);
           ใส่ลิงก์ LIFF นี้ในเมนูลัด / ข้อความต้อนรับของ LINE OA
           (`https://liff.line.me/…`) ระบบจะผูก LINE user ID ให้
         </p>
-        <div v-if="joinUrl" style="display: flex; gap: 0.5rem; align-items: stretch">
+        <div v-if="joinUrl" class="ui-points-join-url">
           <input class="ui-input" type="text" readonly :value="joinUrl" />
           <button type="button" class="ui-btn ui-btn--ghost" @click="copyJoinUrl">
             {{ copied ? "คัดลอกแล้ว" : "คัดลอก" }}
@@ -337,3 +337,32 @@ onMounted(load);
     </div>
   </div>
 </template>
+
+<style scoped>
+.ui-points-date-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.ui-points-join-url {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+@media (max-width: 800px) {
+  .ui-points-date-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ui-points-join-url {
+    flex-direction: column;
+  }
+
+  .ui-points-join-url .ui-btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+</style>

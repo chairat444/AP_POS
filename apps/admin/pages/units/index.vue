@@ -180,7 +180,7 @@ onMounted(load);
         </span>
       </div>
       <div v-else class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-table--cards">
           <thead>
             <tr>
               <th>ชื่อหน่วย</th>
@@ -250,3 +250,63 @@ onMounted(load);
     </div>
   </div>
 </template>
+
+<style scoped>
+@media (max-width: 800px) {
+  .ui-table-wrap:has(.ui-table--fit) {
+    overflow-x: visible !important;
+  }
+
+  .ui-table--fit tbody tr {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "name"
+      "when"
+      "actions";
+    gap: 0.3rem;
+    padding: 0.75rem 0.85rem;
+  }
+
+  .ui-table--fit tbody td {
+    padding: 0 !important;
+  }
+
+  .ui-table--fit tbody td:nth-child(1) {
+    grid-area: name;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    word-break: keep-all;
+  }
+
+  .ui-table--fit tbody td:nth-child(2) {
+    grid-area: when;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-table--fit tbody td:nth-child(2)::before {
+    content: "อัปเดต ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-table--fit .ui-table__actions {
+    grid-area: actions;
+    display: flex;
+    width: 100%;
+    min-width: 0 !important;
+    gap: 0.4rem;
+    padding-top: 0.45rem !important;
+    border-top: 1px solid #f1f5f9;
+    text-align: left !important;
+  }
+
+  .ui-table--fit .ui-table__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 2.15rem;
+    margin: 0;
+  }
+}
+</style>

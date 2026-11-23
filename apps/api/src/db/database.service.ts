@@ -26,6 +26,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async ensureSchema() {
+    await this.ensureAppSettingsPrimaryKey();
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS branches (
         id TEXT PRIMARY KEY,
@@ -386,6 +387,38 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       INSERT INTO app_settings (key, value)
       VALUES ('display', '{"customerScreenEnabled":true}')
       ON CONFLICT (key) DO NOTHING;
+    `);
+  }
+
+  /**
+   * กัน DB โลคอลค้างจากทดลอง multi-tenant
+   * (PK กลายเป็น tenant_id+key แล้ว seed ON CONFLICT (key) พัง)
+   */
+  private async ensureAppSettingsPrimaryKey() {
+    await this.pool.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM information_schema.tables
+          WHERE table_schema = 'public'
+            AND table_name = 'app_settings'
+        ) THEN
+          RETURN;
+        END IF;
+
+        IF EXISTS (
+          SELECT 1
+          FROM information_schema.key_column_usage
+          WHERE table_schema = 'public'
+            AND table_name = 'app_settings'
+            AND constraint_name = 'app_settings_pkey'
+            AND column_name = 'tenant_id'
+        ) THEN
+          ALTER TABLE app_settings DROP CONSTRAINT app_settings_pkey;
+          ALTER TABLE app_settings ADD PRIMARY KEY (key);
+        END IF;
+      END $$;
     `);
   }
 }

@@ -9,7 +9,6 @@
 
 .ui-main {
   min-width: 0;
-  overflow-x: hidden;
 }
 
 .ui-page-head {
@@ -372,9 +371,10 @@
 /* Table polish */
 .ui-card > .ui-table-wrap,
 .ui-card > .ui-table-wrap:has(.ui-table--fit) {
-  overflow-x: hidden;
+  overflow-x: auto;
   overflow-y: visible;
   max-width: 100%;
+  -webkit-overflow-scrolling: touch;
 }
 
 .ui-card > .ui-table-wrap .ui-table--fit {
@@ -409,6 +409,22 @@
 
 .ui-card > .ui-table-wrap .ui-table--fit .ui-table__actions .ui-btn:last-child {
   margin-right: 0;
+}
+
+/* Desktop: คอลัมน์ชื่อห่อบรรทัดได้ ไม่ตัดทีละตัว */
+@media (min-width: 801px) {
+  .ui-card > .ui-table-wrap .ui-table--fit .ui-table__col-name,
+  .ui-table--fit .ui-table__col-name {
+    width: auto;
+    min-width: 12rem;
+    max-width: 22rem;
+    white-space: normal;
+    line-height: 1.35;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+    overflow: visible;
+    text-overflow: clip;
+  }
 }
 
 .ui-card__toolbar {
@@ -1429,7 +1445,20 @@
 
 @media (max-width: 560px) {
   .ui-report-tabs {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .ui-report-tabs__item {
+    padding: 0.55rem 0.65rem;
+  }
+
+  .ui-report-tabs__item strong {
+    font-size: 0.84rem;
+  }
+
+  .ui-report-tabs__item span {
+    font-size: 0.68rem;
   }
 }
 
@@ -1439,6 +1468,26 @@
   flex-wrap: wrap;
   gap: 0.35rem;
   align-items: center;
+}
+
+.ui-date-daybar {
+  flex-wrap: nowrap;
+  width: 100%;
+  max-width: 22rem;
+}
+
+.ui-date-daybar > .ui-btn,
+.ui-date-daybar > .ui-rdf__nav {
+  flex: 0 0 auto;
+}
+
+.ui-date-daybar > .ui-date,
+.ui-date-daybar > .ui-rdf__date,
+.ui-date-daybar .ui-date {
+  flex: 1 1 auto;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none;
 }
 
 .ui-date-mode .ui-btn {
@@ -1452,4 +1501,417 @@
   background: #f8fafc;
   font-weight: 700;
   padding: 0.65rem 0.75rem;
+}
+
+/* —— Mobile-only polish (desktop unchanged above 800px) —— */
+@media (max-width: 800px) {
+  .ui-content {
+    padding: 1rem 0.85rem 1.75rem;
+  }
+
+  .ui-page-head {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+    margin-bottom: 0.95rem;
+  }
+
+  .ui-page-head__actions {
+    width: 100%;
+  }
+
+  .ui-page-head__actions .ui-btn,
+  .ui-page-head__actions .ui-export-menu,
+  .ui-page-head__actions > a.ui-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+    text-align: center;
+  }
+
+  .ui-page-title {
+    font-size: 1.28rem;
+  }
+
+  .ui-page-sub {
+    font-size: 0.88rem;
+    line-height: 1.45;
+  }
+
+  .ui-card__toolbar {
+    gap: 0.55rem;
+    padding: 0.8rem 0.9rem;
+  }
+
+  .ui-toolbar-meta {
+    line-height: 1.35;
+  }
+
+  .ui-card.ui-filter-bar,
+  .ui-report-filters {
+    padding: 0.8rem 0.9rem;
+    grid-template-columns: 1fr;
+  }
+
+  .ui-report-filters .ui-rdf {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ui-rdf__presets,
+  .ui-date-mode,
+  .ui-date-daybar {
+    width: 100%;
+  }
+
+  .ui-date-daybar {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    align-items: center;
+    gap: 0.35rem;
+    max-width: none;
+  }
+
+  .ui-date-daybar > .ui-btn,
+  .ui-date-daybar > .ui-rdf__nav {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-width: 2.35rem;
+    justify-content: center;
+  }
+
+  .ui-date-daybar > .ui-date,
+  .ui-date-daybar > .ui-rdf__date,
+  .ui-date-daybar .ui-date,
+  .ui-date-daybar .ui-rdf__date {
+    flex: 1 1 auto !important;
+    width: auto !important;
+    min-width: 0 !important;
+  }
+
+  .ui-rdf__presets .ui-btn,
+  .ui-date-mode .ui-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .ui-list-filters__form,
+  .ui-list-filters__fields {
+    width: 100%;
+  }
+
+  .ui-list-filters__actions {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .ui-list-filters__apply,
+  .ui-list-filters__reset {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .ui-table-wrap {
+    margin-inline: 0;
+    padding-bottom: 0.25rem;
+  }
+
+  /*
+    มือถือ — 2 โหมด:
+    1) ตารางเลื่อนแนวนอน (ค่าเริ่มต้น)
+    2) .ui-table--cards = การ์ดเต็มจอ (ต้องใส่คลาสนี้ที่ตาราง)
+  */
+  .ui-card > .ui-table-wrap:not(:has(.ui-table--cards)),
+  .ui-table-wrap:has(.ui-table--fit):not(:has(.ui-table--cards)) {
+    overflow-x: auto !important;
+    overflow-y: visible;
+  }
+
+  .ui-card > .ui-table-wrap .ui-table--fit:not(.ui-table--cards),
+  .ui-table--fit:not(.ui-table--cards) {
+    table-layout: auto !important;
+    width: max-content !important;
+    min-width: 100%;
+    max-width: none !important;
+  }
+
+  .ui-card > .ui-table-wrap .ui-table--fit:not(.ui-table--cards) th,
+  .ui-card > .ui-table-wrap .ui-table--fit:not(.ui-table--cards) td,
+  .ui-table--fit:not(.ui-table--cards) th,
+  .ui-table--fit:not(.ui-table--cards) td {
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: nowrap;
+    word-break: normal;
+    overflow-wrap: normal;
+    padding: 0.65rem 0.75rem;
+    font-size: 0.88rem;
+  }
+
+  .ui-card > .ui-table-wrap .ui-table--fit:not(.ui-table--cards) .ui-table__col-name,
+  .ui-table--fit:not(.ui-table--cards) .ui-table__col-name,
+  .ui-table--fit:not(.ui-table--cards) td.ui-table__col-name,
+  .ui-table--fit:not(.ui-table--cards) th.ui-table__col-name {
+    min-width: 12.5rem !important;
+    max-width: 18rem !important;
+    width: auto !important;
+    white-space: normal !important;
+    line-height: 1.35;
+    overflow-wrap: break-word;
+    word-break: keep-all;
+  }
+
+  .ui-card > .ui-table-wrap .ui-table--fit:not(.ui-table--cards) .ui-table__col-barcode {
+    min-width: 8.5rem !important;
+    width: auto !important;
+    max-width: none !important;
+  }
+
+  .ui-card > .ui-table-wrap .ui-table--fit:not(.ui-table--cards) .ui-table__col-bill {
+    min-width: 9rem !important;
+    width: auto !important;
+    max-width: 14rem !important;
+  }
+
+  /* คอลัมน์แรกติดซ้าย — เฉพาะโหมดเลื่อน ไม่ใช่การ์ด */
+  .ui-table--fit:not(.ui-table--cards) thead th:first-child,
+  .ui-table--fit:not(.ui-table--cards) tbody td:first-child,
+  .ui-table:not(.ui-table--cards) thead th:first-child,
+  .ui-table:not(.ui-table--cards) tbody td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: #fff;
+    box-shadow: 4px 0 10px rgb(15 23 42 / 6%);
+  }
+
+  .ui-table--fit:not(.ui-table--cards) thead th:first-child,
+  .ui-table:not(.ui-table--cards) thead th:first-child {
+    z-index: 3;
+    background: color-mix(in srgb, var(--ui-primary) 12%, #ffffff);
+  }
+
+  .ui-card > .ui-table-wrap .ui-table--fit:not(.ui-table--cards) .ui-table__actions,
+  .ui-table--fit:not(.ui-table--cards) .ui-table__actions {
+    width: auto !important;
+    min-width: 7.25rem !important;
+    max-width: none !important;
+    padding-right: 0.75rem;
+    overflow: visible !important;
+    white-space: nowrap !important;
+  }
+
+  .ui-card > .ui-table-wrap .ui-table--fit:not(.ui-table--cards) .ui-table__actions .ui-btn {
+    padding: 0.35rem 0.55rem;
+    font-size: 0.8rem;
+    margin-right: 0.25rem;
+  }
+
+  /* ===== โหมดการ์ด: เต็มความกว้างจอ ชื่อไม่หักทีละตัว ===== */
+  .ui-table-wrap:has(.ui-table--cards) {
+    overflow-x: visible !important;
+    overflow-y: visible !important;
+  }
+
+  .ui-card > .ui-table-wrap .ui-table--cards,
+  .ui-table--cards,
+  .ui-table.ui-table--fit.ui-table--cards {
+    display: block !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    table-layout: auto !important;
+  }
+
+  .ui-table--cards colgroup {
+    display: none !important;
+  }
+
+  .ui-table--cards thead {
+    display: none !important;
+  }
+
+  .ui-table--cards tbody,
+  .ui-table--cards tfoot {
+    display: flex !important;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 100%;
+  }
+
+  .ui-table--cards tbody tr,
+  .ui-table--cards tfoot tr {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-table--cards tfoot tr {
+    background: #f8fafc;
+  }
+
+  .ui-table--cards th,
+  .ui-table--cards td {
+    position: static !important;
+    left: auto !important;
+    z-index: auto !important;
+    box-shadow: none !important;
+    background: transparent !important;
+    border: 0 !important;
+    white-space: normal !important;
+    word-break: keep-all !important;
+    overflow-wrap: break-word !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    width: auto !important;
+  }
+
+  .ui-table--cards .ui-table__actions {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    white-space: normal !important;
+  }
+
+  .ui-table__actions {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+  }
+
+  .ui-toolbar-search {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .ui-toolbar-search__controls {
+    width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .ui-toolbar-search__controls .ui-input,
+  .ui-toolbar-search__controls select.ui-input {
+    min-width: 0 !important;
+    flex: 1 1 8rem;
+  }
+
+  /* ฟิลด์ในแถวกรอง — อย่าบังคับวันที่ใน daybar ให้กว้าง 100% (จะดันลูกศรขึ้นลง) */
+  .ui-rdf__fields .ui-field,
+  .ui-list-filters__input,
+  .ui-list-filters .ui-input {
+    min-width: 0 !important;
+    width: 100%;
+  }
+
+  .ui-rdf__when {
+    flex-direction: column;
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .ui-rdf__range {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .ui-rdf__range .ui-rdf__date,
+  .ui-rdf__range .ui-date {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .ui-rdf__range-sep {
+    display: none;
+  }
+
+  .ui-stat-grid {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 0.65rem;
+  }
+
+  .ui-modal {
+    padding: 0.65rem;
+    align-items: flex-end;
+  }
+
+  .ui-modal__panel,
+  .ui-modal__panel--wide,
+  .ui-modal__panel--xl {
+    width: min(36rem, 100%) !important;
+    max-width: 100% !important;
+    max-height: min(92dvh, 46rem);
+    border-radius: 1rem 1rem 0.65rem 0.65rem;
+  }
+
+  .ui-modal__head,
+  .ui-modal__body,
+  .ui-modal__foot {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  .ui-modal__foot {
+    justify-content: stretch;
+  }
+
+  .ui-modal__foot .ui-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .ui-empty {
+    padding: 1.25rem 0.85rem;
+  }
+
+  .ui-pagination,
+  .ui-pager {
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    justify-content: center;
+  }
+
+  .ui-filter-bar {
+    flex-direction: column;
+    align-items: stretch !important;
+  }
+
+  .ui-stat-grid > * {
+    min-width: 0;
+  }
+
+  /* ตารางทั่วไป (ไม่ใช่แค่ --fit) ต้องเลื่อนแนวนอนได้ */
+  .ui-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ui-table-wrap .ui-table:not(.ui-table--fit) {
+    width: max-content;
+    min-width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .ui-stat-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .ui-page-head__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .ui-page-head__actions > * {
+    flex: 1 1 calc(50% - 0.3rem);
+    min-width: 0;
+  }
 }

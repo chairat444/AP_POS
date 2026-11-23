@@ -410,7 +410,7 @@ onMounted(async () => {
         คลิกแถวเพื่อกรองรายบิล · แถวแดง = ไม่มีทุน / กำไรติดลบ / % สูงผิดปกติ (&gt;55%)
       </p>
       <div class="ui-table-wrap">
-        <table class="ui-table">
+        <table class="ui-table ui-table--cards ui-profit-day">
           <thead>
             <tr>
               <th>วันที่</th>
@@ -488,7 +488,7 @@ onMounted(async () => {
           · บิลไม่มีทุนขึ้นก่อน · แดง = ไม่มีทุน / กำไรติดลบ / % สูงผิดปกติ
         </p>
         <div class="ui-table-wrap ui-profit__bill-scroll">
-          <table class="ui-table">
+          <table class="ui-table ui-table--cards ui-profit-bill">
             <thead>
               <tr>
                 <th>บิล</th>
@@ -623,7 +623,7 @@ onMounted(async () => {
           </div>
 
           <div class="ui-table-wrap">
-            <table class="ui-table">
+            <table class="ui-table ui-table--cards ui-profit-line">
               <thead>
                 <tr>
                   <th>รายการ</th>
@@ -693,7 +693,7 @@ onMounted(async () => {
         แก้ master มีผลบิลใหม่ · แก้ทุนในบิลเก่าได้จากรายบิล
       </p>
       <div class="ui-table-wrap">
-        <table class="ui-table">
+        <table class="ui-table ui-table--cards ui-profit-miss">
           <thead>
             <tr>
               <th>สินค้า</th>
@@ -841,6 +841,276 @@ onMounted(async () => {
 @media (max-width: 960px) {
   .ui-profit__split {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 800px) {
+  .ui-table-wrap {
+    overflow-x: visible !important;
+  }
+
+  .ui-profit-day,
+  .ui-profit-bill,
+  .ui-profit-line,
+  .ui-profit-miss {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .ui-profit-day thead,
+  .ui-profit-bill thead,
+  .ui-profit-line thead,
+  .ui-profit-miss thead {
+    display: none;
+  }
+
+  .ui-profit-day tbody,
+  .ui-profit-bill tbody,
+  .ui-profit-line tbody,
+  .ui-profit-miss tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ui-profit-day tbody tr,
+  .ui-profit-bill tbody tr,
+  .ui-profit-line tbody tr,
+  .ui-profit-miss tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.28rem 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-profit-day td,
+  .ui-profit-bill td,
+  .ui-profit-line td,
+  .ui-profit-miss td {
+    border: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    text-align: left !important;
+  }
+
+  .ui-profit-day tbody tr {
+    grid-template-areas:
+      "day sales"
+      "bills profit"
+      "pct missing";
+  }
+
+  .ui-profit-day tr > *:nth-child(1) {
+    grid-area: day;
+    font-weight: 700;
+  }
+
+  .ui-profit-day tr > *:nth-child(2) {
+    grid-area: bills;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-profit-day tr > *:nth-child(2)::before {
+    content: "บิล ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-profit-day tr > *:nth-child(3) {
+    grid-area: sales;
+    font-weight: 800;
+    text-align: right !important;
+  }
+
+  .ui-profit-day tr > *:nth-child(4) {
+    grid-area: profit;
+    text-align: right !important;
+    font-size: 0.88rem;
+  }
+
+  .ui-profit-day tr > *:nth-child(4)::before {
+    content: "กำไร ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-profit-day tr > *:nth-child(5) {
+    grid-area: pct;
+    font-size: 0.84rem;
+  }
+
+  .ui-profit-day tr > *:nth-child(6) {
+    grid-area: missing;
+    font-size: 0.8rem;
+    text-align: right !important;
+    color: #64748b;
+  }
+
+  .ui-profit-day tr > *:nth-child(6)::before {
+    content: "ไม่มีทุน ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-profit-bill tbody tr {
+    grid-template-areas:
+      "bill sales"
+      "branch profit"
+      "pct missing";
+  }
+
+  .ui-profit-bill tr > *:nth-child(1) {
+    grid-area: bill;
+    font-weight: 700;
+  }
+
+  .ui-profit-bill tr > *:nth-child(2) {
+    grid-area: branch;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-profit-bill tr > *:nth-child(3) {
+    grid-area: sales;
+    font-weight: 800;
+    text-align: right !important;
+  }
+
+  .ui-profit-bill tr > *:nth-child(4) {
+    grid-area: profit;
+    text-align: right !important;
+    font-size: 0.88rem;
+  }
+
+  .ui-profit-bill tr > *:nth-child(4)::before {
+    content: "กำไร ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-profit-bill tr > *:nth-child(5) {
+    grid-area: pct;
+    font-size: 0.84rem;
+  }
+
+  .ui-profit-bill tr > *:nth-child(6) {
+    grid-area: missing;
+    font-size: 0.8rem;
+    text-align: right !important;
+    color: #64748b;
+  }
+
+  .ui-profit-bill tr > *:nth-child(6)::before {
+    content: "ไม่มีทุน ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-profit-line tbody tr {
+    grid-template-areas:
+      "name total"
+      "qty profit"
+      "cost status";
+  }
+
+  .ui-profit-line tr > *:nth-child(1) {
+    grid-area: name;
+    font-size: 0.92rem;
+    line-height: 1.35;
+    word-break: keep-all;
+  }
+
+  .ui-profit-line tr > *:nth-child(2) {
+    grid-area: qty;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-profit-line tr > *:nth-child(3) {
+    grid-area: total;
+    font-weight: 800;
+    text-align: right !important;
+  }
+
+  .ui-profit-line tr > *:nth-child(4) {
+    grid-area: cost;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-profit-line tr > *:nth-child(4)::before {
+    content: "ทุน ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-profit-line tr > *:nth-child(5) {
+    grid-area: profit;
+    text-align: right !important;
+    font-size: 0.88rem;
+  }
+
+  .ui-profit-line tr > *:nth-child(5)::before {
+    content: "กำไร ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-profit-line tr > *:nth-child(6) {
+    grid-area: status;
+    font-size: 0.8rem;
+    color: #64748b;
+    text-align: right !important;
+  }
+
+  .ui-profit-miss tbody tr {
+    grid-template-areas:
+      "name sales"
+      "barcode qty"
+      "bills bills";
+  }
+
+  .ui-profit-miss tr > *:nth-child(1) {
+    grid-area: name;
+    font-weight: 700;
+    font-size: 0.95rem;
+    word-break: keep-all;
+  }
+
+  .ui-profit-miss tr > *:nth-child(2) {
+    grid-area: barcode;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-profit-miss tr > *:nth-child(3) {
+    grid-area: qty;
+    font-size: 0.8rem;
+    color: #64748b;
+    text-align: right !important;
+  }
+
+  .ui-profit-miss tr > *:nth-child(4) {
+    grid-area: sales;
+    font-weight: 800;
+    text-align: right !important;
+  }
+
+  .ui-profit-miss tr > *:nth-child(5) {
+    grid-area: bills;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-profit-miss tr > *:nth-child(5)::before {
+    content: "บิล ";
+    font-weight: 600;
+    color: #94a3b8;
   }
 }
 

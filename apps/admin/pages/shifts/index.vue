@@ -412,7 +412,7 @@ onMounted(load);
           </span>
         </div>
         <div class="ui-table-wrap">
-          <table class="ui-table ui-table--fit">
+          <table class="ui-table ui-table--fit ui-table--cards ui-shift-branch">
             <thead>
               <tr>
                 <th>สาขา</th>
@@ -1048,6 +1048,159 @@ onMounted(load);
 
   .ui-shift__detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 800px) {
+  .ui-shift__search {
+    flex: 1 1 100%;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .ui-shift__kpis,
+  .ui-shift__detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ui-shift__list-body {
+    max-height: 14rem;
+  }
+
+  .ui-shift__row-main {
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .ui-shift__row-main strong {
+    flex: 1 1 100%;
+    font-size: 0.95rem;
+    line-height: 1.3;
+    word-break: keep-all;
+  }
+
+  .ui-shift__audit,
+  .ui-shift__move {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+  }
+
+  .ui-shift__audit em,
+  .ui-shift__move em {
+    align-self: flex-end;
+  }
+
+  .ui-table-wrap:has(.ui-shift-branch) {
+    overflow-x: visible !important;
+  }
+
+  .ui-shift-branch {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+  }
+
+  .ui-shift-branch thead {
+    display: none;
+  }
+
+  .ui-shift-branch tbody,
+  .ui-shift-branch tfoot {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ui-shift-branch tbody tr,
+  .ui-shift-branch tfoot tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "branch sales"
+      "shifts bills"
+      "var short";
+    gap: 0.28rem 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-shift-branch tfoot tr {
+    background: #f8fafc;
+  }
+
+  .ui-shift-branch td,
+  .ui-shift-branch th {
+    border: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    position: static !important;
+    box-shadow: none !important;
+    text-align: left !important;
+  }
+
+  .ui-shift-branch tr > *:nth-child(1) {
+    grid-area: branch;
+    font-weight: 700;
+    font-size: 0.95rem;
+  }
+
+  .ui-shift-branch tr > *:nth-child(2) {
+    grid-area: shifts;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-shift-branch tr > *:nth-child(2)::before {
+    content: "กะ ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-shift-branch tr > *:nth-child(3) {
+    grid-area: bills;
+    font-size: 0.8rem;
+    color: #64748b;
+    text-align: right !important;
+  }
+
+  .ui-shift-branch tr > *:nth-child(3)::before {
+    content: "บิล ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-shift-branch tr > *:nth-child(4) {
+    grid-area: sales;
+    font-weight: 800;
+    text-align: right !important;
+  }
+
+  .ui-shift-branch tr > *:nth-child(5) {
+    grid-area: var;
+    font-size: 0.84rem;
+  }
+
+  .ui-shift-branch tr > *:nth-child(5)::before {
+    content: "ส่วนต่าง ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-shift-branch tr > *:nth-child(6) {
+    grid-area: short;
+    font-size: 0.8rem;
+    color: #64748b;
+    text-align: right !important;
+  }
+
+  .ui-shift-branch tr > *:nth-child(6)::before {
+    content: "ขาด/เกิน ";
+    font-weight: 600;
+    color: #94a3b8;
   }
 }
 </style>

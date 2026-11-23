@@ -97,7 +97,13 @@ const report = ref<MonthReport | null>(null);
 const expandedDay = ref<string | null>(null);
 const dayCache = ref<Record<string, DayDetail>>({});
 const dayLoading = ref("");
+const isNarrow = ref(false);
 let messageTimer: ReturnType<typeof setTimeout> | null = null;
+let narrowMq: MediaQueryList | null = null;
+
+function syncNarrow() {
+  isNarrow.value = Boolean(narrowMq?.matches);
+}
 
 /** แถวว่างด้านล่าง — พิมพ์แล้ว Enter */
 const draft = reactive({
@@ -383,6 +389,12 @@ function extraIncomeTotal(detail: DayDetail | undefined) {
   );
 }
 
+/** มือถือ: รายการที่แก้ได้ (เข้าอื่น + จ่าย) ไม่รวมยอดขายออโต้ */
+function mobileDayLines(detail: DayDetail | undefined) {
+  if (!detail) return [] as Entry[];
+  return [...extraIncomeLines(detail), ...expenseLines(detail)];
+}
+
 type ExpenseGroupId =
   | "goods"
   | "drawer"
@@ -503,6 +515,11 @@ function lineLabel(e: Entry) {
   if (d.startsWith("ค่าแรง+คอม · ")) return d.slice("ค่าแรง+คอม · ".length);
   if (d.startsWith("ค่าแรง · ")) return d.slice("ค่าแรง · ".length);
   if (d.includes("เจ้าของร้าน") || d === "ค่าแรง ปอ") return "ปอ";
+  // จ่ายจากลิ้นชัก: โชว์ชื่อรายการ + สาขาถ้ามี
+  if ((e.sourceKey ?? "").startsWith("auto:drawer-exp:")) {
+    const name = d || e.categoryName || "จ่ายจากลิ้นชัก";
+    return e.branchName ? `${name} · ${e.branchName}` : name;
+  }
   return d || e.categoryName || "รายการ";
 }
 
@@ -905,7 +922,16 @@ onMounted(async () => {
   } catch {
     bucketsOpen.value = false;
   }
+  if (import.meta.client) {
+    narrowMq = window.matchMedia("(max-width: 800px)");
+    syncNarrow();
+    narrowMq.addEventListener("change", syncNarrow);
+  }
   await Promise.all([loadMonth(), loadDescriptions()]);
+});
+
+onBeforeUnmount(() => {
+  narrowMq?.removeEventListener("change", syncNarrow);
 });
 
 function toggleBuckets() {
@@ -1159,6 +1185,327 @@ function toggleBuckets() {
 
     <div class="ui-card cb-sheet">
       <div v-if="!report?.days.length" class="ui-empty">ยังไม่มีรายการในเดือนนี้</div>
+      <template v-else>
+      <div v-if="isNarrow" class="cb-day-cards">
+        <div
+          v-for="row in report.days"
+          :key="`m-${row.day}`"
+          class="cb-day-card"
+          :class="{ open: expandedDay === row.day }"
+        >
+          <button
+            type="button"
+            class="cb-day-card__main"
+            @click="toggleDay(row.day)"
+          >
+            <div class="cb-day-card__head">
+              <strong>
+                <span class="cb-chevron">{{
+                  expandedDay === row.day ? "▾" : "▸"
+                }}</span>
+                {{ fmtDay(row.day) }}
+              </strong>
+              <span
+                class="cb-day-card__net"
+                :class="row.net >= 0 ? 'cb-sale' : 'cb-pay'"
+                >{{ baht(row.net) }}</span
+              >
+            </div>
+            <div class="cb-day-card__stats">
+              <span
+                >รายรับ
+                <b class="cb-sale">{{ baht(daySales(row)) }}</b></span
+              >
+              <span
+                >รายจ่าย <b class="cb-pay">{{ baht(row.expense) }}</b></span
+              >
+              <span
+                >สะสม
+                <b
+                  :class="
+                    (dayRunningNet[row.day] ?? 0) >= 0 ? 'cb-sale' : 'cb-pay'
+                  "
+                  >{{ baht(dayRunningNet[row.day] ?? 0) }}</b
+                ></span
+              >
+            </div>
+            <div
+              v-if="dayOtherIncome(row) > 0"
+              class="cb-day-card__loan"
+            >
+              +เงินยืม/เข้าอื่น {{ baht(dayOtherIncome(row)) }}
+            </div>
+            <div class="cb-day-card__branches">
+              <div
+                v-for="b in branchCols"
+                :key="`m-${row.day}-${b.id}`"
+                class="cb-day-card__branch"
+                :class="{ 'is-empty': !branchDayTotal(row, b.id) }"
+              >
+                <div class="cb-day-card__branch-top">
+                  <span class="cb-day-card__branch-name">{{
+                    shortBranch(b.name)
+                  }}</span>
+                  <strong>{{
+                    branchDayTotal(row, b.id)
+                      ? baht(branchDayTotal(row, b.id))
+                      : "—"
+                  }}</strong>
+                </div>
+                <div
+                  v-if="branchDayLines(row, b.id).length"
+                  class="cb-day-card__branch-lines"
+                >
+                  <span
+                    v-for="line in branchDayLines(row, b.id)"
+                    :key="line.key"
+                    class="cb-day-card__bline"
+                    :class="`cb-day-card__bline--${line.key}`"
+                  >
+                    {{ line.label }} {{ baht(line.amount)
+                    }}<template v-if="line.bills"
+                      >({{ line.bills }})</template
+                    >
+                  </span>
+                </div>
+              </div>
+            </div>
+          </button>
+
+          <div
+            v-if="expandedDay === row.day"
+            class="cb-day-card__detail"
+            @click.stop
+          >
+            <div v-if="dayLoading === row.day" class="cb-detail-loading">
+              กำลังโหลด…
+            </div>
+            <template v-else>
+              <div
+                v-if="!mobileDayLines(dayCache[row.day]).length"
+                class="cb-day-card__empty"
+              >
+                ยังไม่มีรายการจ่าย/เข้าอื่น
+              </div>
+
+              <template v-if="extraIncomeLines(dayCache[row.day]).length">
+                <div class="cb-m-group">
+                  <div class="cb-m-group__head">
+                    <span>เงินเข้า</span>
+                    <strong class="cb-sale">{{
+                      baht(extraIncomeTotal(dayCache[row.day]))
+                    }}</strong>
+                  </div>
+                  <div
+                    v-for="e in extraIncomeLines(dayCache[row.day])"
+                    :key="e.id"
+                    class="cb-m-line is-income"
+                  >
+                    <template v-if="editId === e.id">
+                      <input
+                        :id="`cb-edit-desc-${e.id}`"
+                        v-model="edit.description"
+                        class="cb-cell"
+                        lang="th"
+                        inputmode="text"
+                        autocomplete="off"
+                        @input="onDescTyped('edit')"
+                        @keydown="onEditDescKey($event, e.id, row.day)"
+                      />
+                      <input
+                        :id="`cb-edit-amt-${e.id}`"
+                        v-model="edit.amount"
+                        class="cb-cell cb-cell--amt cb-cell--in"
+                        lang="en"
+                        inputmode="decimal"
+                        autocomplete="off"
+                        @input="onAmountTyped('edit')"
+                        @keydown="onEditAmtKey($event, row.day)"
+                      />
+                      <div class="cb-m-line__act">
+                        <button
+                          type="button"
+                          :disabled="saving"
+                          @click="saveEdit(row.day)"
+                        >
+                          บันทึก
+                        </button>
+                        <button type="button" @click="cancelEdit">ยกเลิก</button>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <button
+                        type="button"
+                        class="cb-m-line__name"
+                        :disabled="!canEditEntry(e)"
+                        @click="startEdit(e)"
+                      >
+                        {{ lineLabel(e) }}
+                      </button>
+                      <button
+                        type="button"
+                        class="cb-m-line__amt cb-pay-note__amt--in"
+                        :disabled="!canEditEntry(e)"
+                        @click="startEdit(e)"
+                      >
+                        {{ baht(e.amount) }}
+                      </button>
+                      <span
+                        class="cb-m-line__run cb-sale"
+                      >
+                        {{ baht(expandedRunning?.byId[e.id] ?? 0) }}
+                      </span>
+                      <div v-if="canEditEntry(e)" class="cb-m-line__act">
+                        <button type="button" @click="startEdit(e)">แก้</button>
+                        <button type="button" @click="removeRow(e)">ลบ</button>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </template>
+
+              <div
+                v-for="g in expenseGroups(dayCache[row.day])"
+                :key="g.id"
+                class="cb-m-group"
+              >
+                <div class="cb-m-group__head">
+                  <span>{{ g.label }}</span>
+                  <strong class="cb-pay">{{ baht(g.total) }}</strong>
+                </div>
+                <div
+                  v-for="e in g.items"
+                  :key="e.id"
+                  class="cb-m-line"
+                >
+                  <template v-if="editId === e.id">
+                    <input
+                      :id="`cb-edit-desc-${e.id}`"
+                      v-model="edit.description"
+                      class="cb-cell"
+                      lang="th"
+                      inputmode="text"
+                      autocomplete="off"
+                      @input="onDescTyped('edit')"
+                      @keydown="onEditDescKey($event, e.id, row.day)"
+                    />
+                    <input
+                      :id="`cb-edit-amt-${e.id}`"
+                      v-model="edit.amount"
+                      class="cb-cell cb-cell--amt"
+                      :class="{ 'cb-cell--in': edit.direction === 'in' }"
+                      lang="en"
+                      inputmode="decimal"
+                      autocomplete="off"
+                      @input="onAmountTyped('edit')"
+                      @keydown="onEditAmtKey($event, row.day)"
+                    />
+                    <div class="cb-m-line__act">
+                      <button
+                        type="button"
+                        :disabled="saving"
+                        @click="saveEdit(row.day)"
+                      >
+                        บันทึก
+                      </button>
+                      <button type="button" @click="cancelEdit">ยกเลิก</button>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <button
+                      type="button"
+                      class="cb-m-line__name"
+                      :disabled="!canEditEntry(e)"
+                      @click="startEdit(e)"
+                    >
+                      {{ lineLabel(e) }}
+                    </button>
+                    <button
+                      type="button"
+                      class="cb-m-line__amt cb-pay"
+                      :disabled="!canEditEntry(e)"
+                      @click="startEdit(e)"
+                    >
+                      {{ baht(e.amount) }}
+                    </button>
+                    <span
+                      class="cb-m-line__run"
+                      :class="
+                        (expandedRunning?.byId[e.id] ?? 0) >= 0
+                          ? 'cb-sale'
+                          : 'cb-pay'
+                      "
+                    >
+                      {{ baht(expandedRunning?.byId[e.id] ?? 0) }}
+                    </span>
+                    <div v-if="canEditEntry(e)" class="cb-m-line__act">
+                      <button type="button" @click="startEdit(e)">แก้</button>
+                      <button type="button" @click="removeRow(e)">ลบ</button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+
+              <div
+                v-if="mobileDayLines(dayCache[row.day]).length"
+                class="cb-m-foot"
+              >
+                <span>รวมจ่าย</span>
+                <strong class="cb-pay">{{
+                  baht(dayCache[row.day]?.summary.expense || row.expense)
+                }}</strong>
+                <span
+                  class="cb-m-foot__net"
+                  :class="row.net >= 0 ? 'cb-sale' : 'cb-pay'"
+                >
+                  สุทธิ {{ baht(row.net) }}
+                </span>
+              </div>
+
+              <div class="cb-m-draft">
+                <select v-model="draft.direction" class="cb-dir">
+                  <option value="out">จ่าย</option>
+                  <option value="in">รับ</option>
+                </select>
+                <input
+                  :id="`cb-draft-desc-${row.day}`"
+                  v-model="draft.description"
+                  class="cb-cell"
+                  placeholder="ชื่อรายการ"
+                  lang="th"
+                  inputmode="text"
+                  autocomplete="off"
+                  :disabled="saving"
+                  @input="onDescTyped('draft')"
+                  @keydown="onDraftDescKey($event, row.day)"
+                />
+                <input
+                  :id="`cb-draft-amt-${row.day}`"
+                  v-model="draft.amount"
+                  class="cb-cell cb-cell--amt"
+                  :class="{ 'cb-cell--in': draft.direction === 'in' }"
+                  placeholder="0"
+                  lang="en"
+                  inputmode="decimal"
+                  autocomplete="off"
+                  :disabled="saving"
+                  @input="onAmountTyped('draft')"
+                  @keydown="onDraftAmtKey($event, row.day)"
+                />
+                <button
+                  type="button"
+                  class="ui-btn"
+                  :disabled="saving"
+                  @click="addDraft(row.day)"
+                >
+                  {{ saving ? "…" : "เพิ่ม" }}
+                </button>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+
       <div v-else class="cb-table-wrap">
         <table class="cb-sheet-table">
           <thead>
@@ -1663,6 +2010,7 @@ function toggleBuckets() {
           </tfoot>
         </table>
       </div>
+      </template>
     </div>
   </div>
 </template>
@@ -2285,5 +2633,354 @@ function toggleBuckets() {
   background: #fff7ed;
   border-top: 2px solid #fdba74;
   font-size: 0.88rem;
+}
+
+.cb-day-cards {
+  display: block;
+}
+
+.cb-day-card {
+  border-bottom: 1px solid #f5f5f4;
+}
+
+.cb-day-card.open {
+  background: #fffbeb;
+}
+
+.cb-day-card__main {
+  appearance: none;
+  width: 100%;
+  margin: 0;
+  padding: 0.85rem 1rem;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.cb-day-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.45rem;
+}
+
+.cb-day-card__head strong {
+  font-size: 0.98rem;
+  color: #0f172a;
+}
+
+.cb-day-card__net {
+  font-size: 1.05rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.cb-day-card__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+  margin-bottom: 0.45rem;
+  font-size: 0.75rem;
+  color: #78716c;
+}
+
+.cb-day-card__stats b {
+  display: block;
+  margin-top: 0.1rem;
+  font-size: 0.88rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cb-day-card__loan {
+  margin-bottom: 0.4rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #15803d;
+}
+
+.cb-day-card__branches {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.35rem;
+}
+
+.cb-day-card__branch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 0.55rem;
+  background: #f8fafc;
+  font-size: 0.78rem;
+}
+
+.cb-day-card__branch.is-empty {
+  opacity: 0.72;
+}
+
+.cb-day-card__branch-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.4rem;
+}
+
+.cb-day-card__branch-name {
+  color: #64748b;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cb-day-card__branch strong {
+  font-variant-numeric: tabular-nums;
+  color: #0f172a;
+  font-weight: 800;
+}
+
+.cb-day-card__branch-lines {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.55rem;
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+  color: #78716c;
+}
+
+.cb-day-card__bline--cash {
+  color: #15803d;
+}
+
+.cb-day-card__bline--xfer {
+  color: #1d4ed8;
+}
+
+.cb-day-card__bline--gov {
+  color: #7e22ce;
+}
+
+.cb-day-card__detail {
+  padding: 0 0.85rem 0.95rem;
+}
+
+.cb-day-card__empty {
+  padding: 0.55rem 0.15rem;
+  color: #a8a29e;
+  font-size: 0.82rem;
+}
+
+.cb-m-group {
+  margin-top: 0.55rem;
+}
+
+.cb-m-group:first-child {
+  margin-top: 0.15rem;
+}
+
+.cb-m-group__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.15rem 0.2rem;
+  border-top: 1px solid #e7e5e4;
+  font-size: 0.72rem;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+  color: #78716c;
+  text-transform: none;
+}
+
+.cb-m-group:first-child .cb-m-group__head {
+  border-top: 0;
+  padding-top: 0.15rem;
+}
+
+.cb-m-group__head strong {
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.cb-m-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.25rem 0.45rem;
+  align-items: center;
+  padding: 0.5rem 0.15rem;
+  border-top: 1px solid #f5f5f4;
+}
+
+.cb-m-group .cb-m-line:first-of-type {
+  border-top: 0;
+}
+
+.cb-m-line.is-income .cb-m-line__amt {
+  color: #047857;
+}
+
+.cb-m-line__name,
+.cb-m-line__amt {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+
+.cb-m-line__name:disabled,
+.cb-m-line__amt:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.cb-m-line__name {
+  min-width: 0;
+  color: #44403c;
+  font-size: 0.9rem;
+}
+
+.cb-m-line__amt {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cb-m-line__run {
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  min-width: 3.2rem;
+  text-align: right;
+}
+
+.cb-m-line__act {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.45rem;
+}
+
+.cb-m-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem 0.75rem;
+  margin-top: 0.55rem;
+  padding: 0.55rem 0.15rem 0.15rem;
+  border-top: 1px solid #e7e5e4;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #57534e;
+}
+
+.cb-m-foot strong {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.95rem;
+}
+
+.cb-m-foot__net {
+  width: 100%;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.88rem;
+}
+
+.cb-m-line__act button {
+  appearance: none;
+  border: 1px solid #e7e5e4;
+  background: #fff;
+  border-radius: 0.45rem;
+  padding: 0.35rem 0.65rem;
+  font: inherit;
+  font-size: 0.78rem;
+  color: #57534e;
+  cursor: pointer;
+}
+
+.cb-m-line .cb-cell {
+  width: 100%;
+}
+
+.cb-m-draft {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+  padding-top: 0.65rem;
+  border-top: 1px dashed #fde68a;
+}
+
+.cb-m-draft .cb-cell--amt,
+.cb-m-draft .ui-btn {
+  grid-column: 1 / -1;
+}
+
+.cb-m-draft .ui-btn {
+  justify-content: center;
+}
+
+@media (max-width: 800px) {
+  .cb :deep(.ui-page-head) {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .cb :deep(.ui-page-head__actions) {
+    width: 100%;
+  }
+
+  .cb :deep(.ui-page-head__actions .ui-btn) {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .cb-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.85rem;
+    padding: 0.85rem 1rem;
+  }
+
+  .cb-month-nav {
+    justify-content: space-between;
+  }
+
+  .cb-month-label {
+    flex: 1 1 auto;
+  }
+
+  .cb-kpis {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .cb-kpi {
+    min-width: 0;
+  }
+
+  .cb-kpi__sub {
+    max-width: none;
+  }
+
+  .cb-check-toggle {
+    grid-column: 1 / -1;
+    text-align: left;
+  }
+
+  .cb-buckets__peek {
+    width: 100%;
+  }
 }
 </style>

@@ -2112,6 +2112,11 @@ onBeforeUnmount(() => {
   grid-template-columns: 1fr 1fr 1fr 1fr;
   gap: 0.35rem;
 }
+@media (max-width: 420px) {
+  .po__modes {
+    grid-template-columns: 1fr 1fr;
+  }
+}
 .po__mode {
   height: 2.8rem;
   border: 1px solid #ddd;

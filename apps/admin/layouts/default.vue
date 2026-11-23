@@ -54,6 +54,9 @@ function readCollapsed() {
 }
 
 const collapsed = ref(import.meta.client ? readCollapsed() : false);
+const navOpen = ref(false);
+const isMobileNav = ref(false);
+let mobileMq: MediaQueryList | null = null;
 
 function persistCollapsed() {
   try {
@@ -64,8 +67,26 @@ function persistCollapsed() {
 }
 
 function toggleSidebar() {
+  if (isMobileNav.value) {
+    navOpen.value = !navOpen.value;
+    return;
+  }
   collapsed.value = !collapsed.value;
   persistCollapsed();
+}
+
+function openNav() {
+  navOpen.value = true;
+}
+
+function closeNav() {
+  navOpen.value = false;
+}
+
+function syncMobileNav() {
+  const mobile = Boolean(mobileMq?.matches);
+  isMobileNav.value = mobile;
+  if (!mobile) navOpen.value = false;
 }
 
 function canSeeItem(item: NavItem) {
@@ -77,9 +98,28 @@ function canSeeItem(item: NavItem) {
 onMounted(() => {
   void loadBranding();
   if (token.value) void fetchMe();
+  if (!import.meta.client) return;
+  mobileMq = window.matchMedia("(max-width: 960px)");
+  syncMobileNav();
+  mobileMq.addEventListener("change", syncMobileNav);
 });
-watch(() => route.path, (p) => {
-  if (p.startsWith("/settings")) void loadBranding();
+
+watch(
+  () => route.path,
+  (p) => {
+    closeNav();
+    if (p.startsWith("/settings")) void loadBranding();
+  },
+);
+
+watch(navOpen, (open) => {
+  if (!import.meta.client) return;
+  document.body.style.overflow = open ? "hidden" : "";
+});
+
+onBeforeUnmount(() => {
+  mobileMq?.removeEventListener("change", syncMobileNav);
+  if (import.meta.client) document.body.style.overflow = "";
 });
 
 const dashboard: NavItem = {
@@ -214,7 +254,7 @@ function isGroupActive(group: NavGroup) {
 
 /** เปิดได้ทีละกลุ่ม (accordion) — ถ้า sidebar ยุบอยู่ ให้ขยายก่อน */
 function toggleGroup(id: string) {
-  if (collapsed.value) {
+  if (collapsed.value && !isMobileNav.value) {
     collapsed.value = false;
     persistCollapsed();
     openGroups.value = Object.fromEntries(
@@ -246,10 +286,33 @@ async function onLogout() {
 </script>
 
 <template>
-  <div class="ui-shell" :class="{ 'is-collapsed': collapsed }">
-    <aside class="ui-sidebar">
+  <div
+    class="ui-shell"
+    :class="{
+      'is-collapsed': collapsed && !isMobileNav,
+      'is-nav-open': navOpen,
+      'is-mobile-nav': isMobileNav,
+    }"
+  >
+    <div
+      v-if="navOpen"
+      class="ui-nav-backdrop"
+      aria-hidden="true"
+      @click="closeNav"
+    />
+
+    <aside
+      id="admin-sidebar"
+      class="ui-sidebar"
+      :aria-hidden="isMobileNav ? (!navOpen).toString() : undefined"
+    >
       <div class="ui-sidebar__brand">
-        <NuxtLink to="/" class="ui-sidebar__brand-link" :title="displayName">
+        <NuxtLink
+          to="/"
+          class="ui-sidebar__brand-link"
+          :title="displayName"
+          @click="closeNav"
+        >
           <img
             class="ui-sidebar__brand-logo"
             :src="logoSrc"
@@ -266,7 +329,7 @@ async function onLogout() {
         </NuxtLink>
         <button
           type="button"
-          class="ui-sidebar__collapse"
+          class="ui-sidebar__collapse ui-sidebar__collapse--desktop"
           :title="collapsed ? 'ขยายเมนู' : 'ยุบเมนู'"
           :aria-label="collapsed ? 'ขยายเมนู' : 'ยุบเมนู'"
           :aria-expanded="!collapsed"
@@ -274,15 +337,25 @@ async function onLogout() {
         >
           <span aria-hidden="true">{{ collapsed ? "»" : "«" }}</span>
         </button>
+        <button
+          type="button"
+          class="ui-sidebar__collapse ui-sidebar__collapse--mobile"
+          title="ปิดเมนู"
+          aria-label="ปิดเมนู"
+          @click="closeNav"
+        >
+          <span aria-hidden="true">✕</span>
+        </button>
       </div>
 
-      <nav class="ui-sidebar__nav">
+      <nav class="ui-sidebar__nav" aria-label="เมนูหลัก">
         <div class="ui-sidebar__nav-main">
           <NuxtLink
             :to="dashboard.to"
             class="ui-nav-top"
             :class="{ 'is-active': isActive(dashboard.to, true) }"
             :title="dashboard.label"
+            @click="closeNav"
           >
             <UiNavIcon :name="dashboard.icon" class="ui-nav-top__icon" />
             <span class="ui-nav-top__text">{{ dashboard.label }}</span>
@@ -315,6 +388,7 @@ async function onLogout() {
                   class="ui-nav-link"
                   :class="{ 'is-active': isActive(item.to, item.exact) }"
                   :title="item.label"
+                  @click="closeNav"
                 >
                   <UiNavIcon :name="item.icon" class="ui-nav-link__icon" />
                   <span class="ui-nav-link__text">{{ item.label }}</span>
@@ -328,17 +402,34 @@ async function onLogout() {
 
     <div class="ui-main">
       <header class="ui-topbar">
-        <ol class="ui-breadcrumb">
-          <li>
-            <NuxtLink to="/" class="ui-breadcrumb__link">หน้าแรก</NuxtLink>
-          </li>
-          <template v-if="crumb">
-            <li class="ui-breadcrumb__sep">/</li>
-            <li>
-              <span class="ui-breadcrumb__link is-current">{{ crumb }}</span>
+        <div class="ui-topbar__lead">
+          <button
+            type="button"
+            class="ui-topbar__menu"
+            aria-label="เปิดเมนู"
+            :aria-expanded="navOpen"
+            aria-controls="admin-sidebar"
+            @click="openNav"
+          >
+            <span class="ui-topbar__menu-bars" aria-hidden="true">
+              <span /><span /><span />
+            </span>
+          </button>
+          <ol class="ui-breadcrumb">
+            <li class="ui-breadcrumb__home">
+              <NuxtLink to="/" class="ui-breadcrumb__link">หน้าแรก</NuxtLink>
             </li>
-          </template>
-        </ol>
+            <template v-if="crumb">
+              <li class="ui-breadcrumb__sep">/</li>
+              <li>
+                <span class="ui-breadcrumb__link is-current">{{ crumb }}</span>
+              </li>
+            </template>
+            <li v-else>
+              <span class="ui-breadcrumb__link is-current">แดชบอร์ด</span>
+            </li>
+          </ol>
+        </div>
         <div class="ui-topbar__user">
           <div class="ui-topbar__user-meta">
             <span class="ui-topbar__user-name">{{ user?.name || "Admin" }}</span>

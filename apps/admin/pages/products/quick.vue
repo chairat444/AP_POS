@@ -972,4 +972,159 @@ onBeforeUnmount(() => {
   height: 1.85rem;
   font-size: 1rem;
 }
+
+@media (max-width: 800px) {
+  .qb-panel__meta,
+  .qb-panel__head {
+    padding: 0.75rem 0.85rem 0.6rem;
+  }
+
+  .qb-slots {
+    gap: 0.5rem;
+    padding: 0.55rem 0.65rem 0.75rem;
+  }
+
+  /* การ์ด 2 แถว: ชื่อเต็ม + ปุ่มด้านล่าง */
+  .qb-slot {
+    grid-template-columns: 1.4rem 2.6rem minmax(0, 1fr);
+    grid-template-areas:
+      "seq thumb info"
+      "actions actions actions";
+    height: auto;
+    min-height: 0;
+    gap: 0.45rem 0.55rem;
+    padding: 0.65rem 0.7rem;
+    align-items: center;
+    cursor: default;
+  }
+
+  .qb-slot__grip {
+    display: none;
+  }
+
+  .qb-slot__seq {
+    grid-area: seq;
+    width: 1.4rem;
+    height: 1.4rem;
+    font-size: 0.72rem;
+  }
+
+  .qb-slot__thumb {
+    grid-area: thumb;
+    width: 2.6rem;
+    height: 2.6rem;
+  }
+
+  .qb-slot__info {
+    grid-area: info;
+  }
+
+  .qb-slot__name {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+    line-height: 1.3;
+    font-size: 0.92rem;
+  }
+
+  .qb-slot__meta {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    font-size: 0.74rem;
+  }
+
+  .qb-slot__actions {
+    grid-area: actions;
+    display: flex;
+    width: 100%;
+    justify-content: stretch;
+    gap: 0.35rem;
+    padding-top: 0.45rem;
+    margin-top: 0.1rem;
+    border-top: 1px solid #f1f5f9;
+  }
+
+  .qb-slot__actions .qb-icon-btn,
+  .qb-slot__actions .qb-tab-select {
+    flex: 1 1 0;
+    min-width: 0;
+    height: 2.15rem;
+    width: auto;
+    max-width: none;
+    border-radius: 0.45rem;
+    font-size: 0.85rem;
+  }
+
+  .qb-slot__actions .qb-tab-select {
+    flex: 1.15 1 0;
+    padding: 0 0.35rem;
+  }
+
+  /* ชื่อกดแก้ได้แล้ว — ซ่อนปุ่มดินสอซ้ำบนมือถือ */
+  .qb-slot__actions .qb-icon-btn--link {
+    display: none;
+  }
+
+  .qb-slot.is-empty {
+    grid-template-columns: 1.4rem minmax(0, 1fr);
+    grid-template-areas: "seq empty";
+    min-height: 2.6rem;
+    padding: 0.55rem 0.7rem;
+  }
+
+  .qb-slot.is-empty .qb-slot__empty {
+    grid-area: empty;
+  }
+
+  .qb-add-row {
+    grid-template-columns: 2.6rem minmax(0, 1fr);
+    grid-template-areas:
+      "thumb info"
+      "actions actions";
+    height: auto;
+    min-height: 0;
+    gap: 0.45rem 0.55rem;
+    padding: 0.65rem 0.7rem;
+    align-items: center;
+  }
+
+  .qb-add-row .qb-slot__thumb {
+    grid-area: thumb;
+  }
+
+  .qb-add-row .qb-slot__info {
+    grid-area: info;
+  }
+
+  .qb-add-row .qb-add-actions {
+    grid-area: actions;
+    width: 100%;
+    justify-content: stretch;
+    padding-top: 0.45rem;
+    border-top: 1px solid #f1f5f9;
+  }
+
+  .qb-add-row .qb-slot__name {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+  }
+
+  .qb-add-row .qb-icon-btn--link {
+    display: none;
+  }
+
+  .qb-add-row .qb-add-btn {
+    flex: 1 1 auto;
+    width: 100%;
+    justify-content: center;
+    height: 2.15rem;
+    font-size: 0.88rem;
+  }
+}
 </style>

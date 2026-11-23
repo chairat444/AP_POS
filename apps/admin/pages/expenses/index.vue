@@ -265,7 +265,7 @@ onMounted(async () => {
               title="วันก่อน"
               @click="shiftDay(-1); load()"
             >
-              ‹ วันก่อน
+              ‹
             </button>
             <UiDateInput
               :model-value="day"
@@ -281,7 +281,7 @@ onMounted(async () => {
               title="วันถัดไป"
               @click="shiftDay(1); load()"
             >
-              วันถัดไป ›
+              ›
             </button>
             <button
               type="button"
@@ -481,16 +481,16 @@ onMounted(async () => {
         </span>
       </div>
       <div v-else class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-table--cards">
           <thead>
             <tr>
               <th>วันเวลา</th>
               <th>สาขา</th>
               <th>หมวด</th>
-              <th>รายละเอียด</th>
-              <th>จ่ายจาก</th>
+              <th class="ui-table__col-name">รายละเอียด</th>
+              <th class="ui-expense-col-secondary">จ่ายจาก</th>
               <th>จำนวน</th>
-              <th>โดย</th>
+              <th class="ui-expense-col-secondary">โดย</th>
               <th class="ui-table__actions">จัดการ</th>
             </tr>
           </thead>
@@ -499,10 +499,10 @@ onMounted(async () => {
               <td>{{ fmtAt(row.spentAt) }}</td>
               <td>{{ branchName(row.branchId) }}</td>
               <td>{{ row.categoryName || "-" }}</td>
-              <td>{{ row.description || row.note || "-" }}</td>
-              <td>{{ paidLabel(row.paidFrom) }}</td>
+              <td class="ui-table__col-name">{{ row.description || row.note || "-" }}</td>
+              <td class="ui-expense-col-secondary">{{ paidLabel(row.paidFrom) }}</td>
               <td>{{ baht(row.amount) }}</td>
-              <td>{{ row.staffName || "-" }}</td>
+              <td class="ui-expense-col-secondary">{{ row.staffName || "-" }}</td>
               <td class="ui-table__actions">
                 <button type="button" class="ui-btn ui-btn--ghost" @click="openEdit(row)">
                   แก้ไข
@@ -638,6 +638,157 @@ onMounted(async () => {
 @media (max-width: 900px) {
   .ui-expense-form__row {
     grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 800px) {
+  .ui-expense-form__row {
+    grid-template-columns: 1fr;
+  }
+  .ui-expense-filters__date {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .ui-expense-filters__date :deep(.ui-date) {
+    width: auto;
+    min-width: 0;
+  }
+  .ui-expense-filters__date .ui-date-daybar {
+    display: flex;
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+  .ui-expense-filters__date .ui-date-daybar > .ui-btn {
+    flex: 0 0 auto;
+    min-width: 2.35rem;
+    justify-content: center;
+  }
+  .ui-expense-filters__presets {
+    flex-wrap: wrap;
+  }
+  .ui-expense-filters__presets .ui-btn {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+  .ui-table-wrap:has(.ui-table--fit) {
+    overflow-x: visible !important;
+  }
+
+  .ui-table--fit {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+  }
+
+  .ui-table--fit thead {
+    display: none;
+  }
+
+  .ui-table--fit tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ui-table--fit tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "when amount"
+      "cat branch"
+      "desc desc"
+      "paid by"
+      "actions actions";
+    gap: 0.28rem 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-table--fit tbody td {
+    border: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    position: static !important;
+    box-shadow: none !important;
+  }
+
+  .ui-table--fit tbody td:nth-child(1) {
+    grid-area: when;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-table--fit tbody td:nth-child(2) {
+    grid-area: branch;
+    font-size: 0.8rem;
+    color: #64748b;
+    text-align: right;
+  }
+
+  .ui-table--fit tbody td:nth-child(3) {
+    grid-area: cat;
+    font-weight: 700;
+    font-size: 0.92rem;
+  }
+
+  .ui-table--fit tbody td.ui-table__col-name {
+    grid-area: desc;
+    color: #475569;
+    font-size: 0.84rem;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+
+  .ui-table--fit tbody td:nth-child(5) {
+    grid-area: paid;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-table--fit tbody td:nth-child(5)::before {
+    content: "จ่ายจาก ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-table--fit tbody td:nth-child(6) {
+    grid-area: amount;
+    text-align: right;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .ui-table--fit tbody td:nth-child(7) {
+    grid-area: by;
+    text-align: right;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-table--fit tbody td:nth-child(7)::before {
+    content: "โดย ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-table--fit tbody td.ui-table__actions {
+    grid-area: actions;
+    display: flex;
+    width: 100%;
+    min-width: 0 !important;
+    gap: 0.4rem;
+    padding-top: 0.45rem !important;
+    border-top: 1px solid #f1f5f9;
+    text-align: left !important;
+  }
+
+  .ui-table--fit tbody td.ui-table__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 2.15rem;
+    margin: 0;
   }
 }
 </style>

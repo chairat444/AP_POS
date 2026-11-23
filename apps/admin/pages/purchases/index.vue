@@ -1976,6 +1976,7 @@ onUnmounted(() => {
               v-for="br in copyBranchOrder"
               :key="br.id"
               class="ui-purchase-sheet__qty"
+              :data-branch="shortBranchName(br.name)"
               @mousedown.stop
             >
               <input
@@ -1983,6 +1984,7 @@ onUnmounted(() => {
                 type="text"
                 inputmode="decimal"
                 data-sheet-nav
+                :aria-label="`จำนวน ${shortBranchName(br.name)}`"
                 @input="onAddQtyInput(col.key, br.id, $event)"
                 @keydown.enter.prevent="onSheetEnter($event, col.key)"
               />
@@ -2258,7 +2260,7 @@ onUnmounted(() => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.85rem;
 }
-@media (max-width: 720px) {
+@media (max-width: 800px) {
   .ui-purchase-pastes {
     grid-template-columns: 1fr;
   }
@@ -2758,13 +2760,145 @@ onUnmounted(() => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-@media (max-width: 720px) {
+@media (max-width: 800px) {
   .ui-purchase-board {
     grid-template-columns: 1fr;
   }
   .ui-purchase-page :deep(.ui-page-head) {
     flex-direction: column;
     align-items: stretch;
+    gap: 0.65rem;
+  }
+  .ui-purchase-page :deep(.ui-page-head__actions) {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .ui-purchase-page :deep(.ui-page-head__actions .ui-btn) {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .ui-purchase-sheet__head {
+    display: none;
+  }
+
+  .ui-purchase-sheet__block {
+    position: relative;
+    padding: 0.15rem 0;
+  }
+
+  .ui-purchase-sheet__row {
+    display: flex !important;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.4rem 0.45rem;
+    padding: 0.65rem 2rem 0.65rem 0.35rem;
+  }
+
+  .ui-purchase-sheet__name {
+    flex: 1 1 100%;
+    min-width: 0;
+    padding-right: 0;
+  }
+
+  .ui-purchase-sheet__name .ui-purchase-suggest {
+    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .ui-purchase-sheet__name-input {
+    width: 100%;
+    font-size: 0.95rem;
+  }
+
+  .ui-purchase-sheet__qty {
+    flex: 1 1 0;
+    min-width: 4.25rem;
+    max-width: 6.5rem;
+  }
+
+  .ui-purchase-sheet__qty::before {
+    content: attr(data-branch);
+    display: block;
+    margin-bottom: 0.15rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #78716c;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .ui-purchase-sheet__qty input {
+    max-width: none;
+    width: 100%;
+    min-height: 2.25rem;
+    font-size: 0.95rem;
+    padding: 0.35rem 0.25rem;
+    border-radius: 0.45rem;
+  }
+
+  .ui-purchase-sheet__tot {
+    flex: 0 0 auto;
+    min-width: 2.75rem;
+    text-align: center;
+    font-size: 0.95rem;
+    padding-bottom: 0.35rem;
+  }
+
+  .ui-purchase-sheet__tot::before {
+    content: "รวม";
+    display: block;
+    margin-bottom: 0.15rem;
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #78716c;
+  }
+
+  .ui-purchase-sheet__del {
+    position: absolute;
+    top: 0.55rem;
+    right: 0.15rem;
+    z-index: 2;
+    width: 1.75rem;
+    height: 1.75rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.4rem;
+    color: #a8a29e;
+  }
+
+  .ui-purchase-sheet__row--add {
+    display: flex !important;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 0.4rem 0.45rem;
+    padding-right: 0.35rem;
+  }
+
+  .ui-purchase-sheet__row--add .ui-purchase-suggest--add {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .ui-purchase-sheet__row--add .ui-purchase-sheet__qty {
+    max-width: 6.5rem;
+  }
+
+  .ui-purchase-sheet__row--add .ui-purchase-sheet__add-btn {
+    flex: 1 1 100%;
+    width: 100%;
+    justify-content: center;
+    min-height: 2.4rem;
+  }
+
+  .ui-purchase-move {
+    flex-wrap: wrap;
+    padding: 0.35rem 0.35rem 0.55rem;
   }
 }
 /* Surface 2736×1824 ที่ scale 200% ≈ 1368×912 CSS */

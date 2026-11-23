@@ -1306,7 +1306,7 @@ onMounted(async () => {
   flex: 1 1 auto;
   min-height: 14rem;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
   padding: 0.25rem;
@@ -1752,12 +1752,14 @@ onMounted(async () => {
 @media (max-width: 720px) {
   .ui-page-head__actions {
     width: 100%;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
   }
 
   .ui-page-head__actions .ui-btn {
-    width: 100%;
+    flex: 1 1 auto;
+    min-width: calc(50% - 0.3rem);
     justify-content: center;
   }
 
@@ -1796,6 +1798,50 @@ onMounted(async () => {
 
   .ui-sales__back {
     display: inline-flex;
+  }
+
+  .ui-sales__detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ui-sales__lines-head {
+    display: none;
+  }
+
+  .ui-sales__line {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name total"
+      "qty qty";
+    gap: 0.25rem 0.55rem;
+    padding: 0.55rem 0.65rem;
+  }
+
+  .ui-sales__line-name {
+    grid-area: name;
+  }
+
+  .ui-sales__line-name strong {
+    font-size: 0.9rem;
+    line-height: 1.3;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+  }
+
+  .ui-sales__line-qty {
+    grid-area: qty;
+    text-align: left;
+    color: #64748b;
+  }
+
+  .ui-sales__line-total {
+    grid-area: total;
+    align-self: start;
+    font-size: 0.95rem;
+  }
+
+  .ui-sales__detail-foot {
+    grid-template-columns: 1fr;
   }
 
   .ui-sales__close-desk {

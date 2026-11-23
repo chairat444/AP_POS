@@ -147,6 +147,11 @@ function selectPerson(row: PersonRow) {
   const firstPay = row.days.find((d) => d.commission > 0)?.date;
   if (firstPay) openDays.value[firstPay] = true;
   else if (row.days[0]) openDays.value[row.days[0].date] = true;
+  nextTick(() => {
+    document
+      .querySelector(".ui-comm__detail")
+      ?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
 function toggleDay(date: string) {
@@ -420,243 +425,229 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div class="ui-comm__split">
-        <section class="ui-card ui-comm__list">
-          <div class="ui-card__toolbar">
-            <span class="ui-toolbar-meta ui-toolbar-meta--alone">
-              พนักงาน {{ people.length }} คน
-            </span>
-          </div>
+      <section class="ui-card ui-comm__people">
+        <div class="ui-card__toolbar">
+          <span class="ui-toolbar-meta ui-toolbar-meta--alone">
+            พนักงาน {{ people.length }} คน · เลือกเพื่อดูรายวัน
+          </span>
+        </div>
 
-          <div v-if="pending && !people.length" class="ui-empty">กำลังโหลด...</div>
-          <div v-else-if="!people.length" class="ui-empty">
-            ยังไม่มีข้อมูลค่าแรงหรือค่าคอมในเดือนนี้
-            <span class="ui-empty__hint">
-              ตั้งค่าแรง/สูตรคอมที่เมนูพนักงาน · ค่าคอมคิดตอนปิดกะบน POS
-            </span>
-          </div>
-          <div v-else class="ui-comm__list-body">
-            <button
-              v-for="row in people"
-              :key="row.staffId"
-              type="button"
-              class="ui-comm__row"
-              :class="{ 'is-active': selectedId === row.staffId }"
-              @click="selectPerson(row)"
+        <div v-if="pending && !people.length" class="ui-empty">กำลังโหลด...</div>
+        <div v-else-if="!people.length" class="ui-empty">
+          ยังไม่มีข้อมูลค่าแรงหรือค่าคอมในเดือนนี้
+          <span class="ui-empty__hint">
+            ตั้งค่าแรง/สูตรคอมที่เมนูพนักงาน · ค่าคอมคิดตอนปิดกะบน POS
+          </span>
+        </div>
+        <div v-else class="ui-comm__people-grid">
+          <button
+            v-for="row in people"
+            :key="row.staffId"
+            type="button"
+            class="ui-comm__person"
+            :class="{ 'is-active': selectedId === row.staffId }"
+            @click="selectPerson(row)"
+          >
+            <div class="ui-comm__person-top">
+              <strong>{{ row.staffName }}</strong>
+              <em>{{ row.staffCode }}</em>
+            </div>
+            <div class="ui-comm__person-amt">{{ baht(row.incomeTotal) }}</div>
+            <div class="ui-comm__person-meta">
+              <span>แรง {{ baht(row.wageTotal) }}</span>
+              <span>คอม {{ baht(row.commissionTotal) }}</span>
+              <span>{{ row.dayCount }} วัน</span>
+            </div>
+            <span
+              class="ui-comm__person-badge"
+              :class="{ 'is-off': !row.commissionEnabled }"
             >
-              <div class="ui-comm__row-main">
-                <strong>{{ row.staffName }}</strong>
-                <span>{{ row.staffCode }}</span>
-              </div>
-              <div class="ui-comm__row-meta">
-                <span v-if="row.commissionEnabled">คอมเปิด</span>
-                <span v-else class="is-off">ไม่คิดคอม</span>
-                <span>·</span>
-                <span>{{ row.dayCount }} วันทำงาน · ได้คอม {{ row.daysWithPay }}</span>
-              </div>
-              <div class="ui-comm__row-foot">
+              {{ row.commissionEnabled ? "คิดคอม" : "ไม่คิดคอม" }}
+            </span>
+          </button>
+        </div>
+      </section>
+
+      <section v-if="!selected" class="ui-card ui-comm__pick-hint">
+        <p>เลือกพนักงานด้านบน</p>
+        <span>ดูรายวัน · รอบขาย · แก้ค่าแรงได้ที่นี่</span>
+      </section>
+
+      <section v-else class="ui-card ui-comm__detail">
+        <header class="ui-comm__detail-head">
+          <div>
+            <p class="ui-comm__detail-kicker">{{ monthLabel }}</p>
+            <h2>
+              {{ selected.staffName }}
+              <em>{{ selected.staffCode }}</em>
+            </h2>
+            <p class="ui-comm__detail-rule">{{ selected.rule }}</p>
+          </div>
+        </header>
+
+        <div class="ui-comm__detail-grid">
+          <div>
+            <span>ค่าแรง/วัน</span>
+            <strong>{{ baht(selected.dailyWage) }}</strong>
+          </div>
+          <div>
+            <span>ค่าแรงรวม</span>
+            <strong>{{ baht(selected.wageTotal) }}</strong>
+          </div>
+          <div>
+            <span>ค่าคอม</span>
+            <strong>{{ baht(selected.commissionTotal) }}</strong>
+          </div>
+          <div>
+            <span>รายได้รวม</span>
+            <strong class="is-total">{{ baht(selected.incomeTotal) }}</strong>
+          </div>
+          <div>
+            <span>ยอดขายเดือน</span>
+            <strong>{{ baht(selected.salesTotal) }}</strong>
+          </div>
+          <div>
+            <span>วันทำงาน</span>
+            <strong>{{ selected.dayCount }}</strong>
+          </div>
+          <div>
+            <span>รอบขาย</span>
+            <strong>{{ selected.shiftCount }}</strong>
+          </div>
+        </div>
+
+        <div class="ui-comm__days-head">
+          <strong>รายวัน</strong>
+          <span>{{ selected.dayCount }} วัน · ได้คอม {{ selected.daysWithPay }}</span>
+        </div>
+        <p class="ui-comm__days-hint">
+          กด “แก้ค่าแรง” เพื่อปรับรายวัน (เช่น ครึ่งวัน) · ค่าเริ่มต้นตั้งที่เมนูพนักงาน
+        </p>
+
+        <div v-if="!selected.days.length" class="ui-empty">ไม่มีกะขายในเดือนนี้</div>
+        <div v-else class="ui-comm__days">
+          <div
+            v-for="d in selected.days"
+            :key="d.date"
+            class="ui-comm__day"
+            :class="{
+              'is-open': openDays[d.date],
+              'has-pay': d.commission > 0,
+            }"
+          >
+            <button
+              type="button"
+              class="ui-comm__day-toggle"
+              @click="toggleDay(d.date)"
+            >
+              <div class="ui-comm__day-left">
+                <strong>{{ fmtDay(d.date) }}</strong>
                 <span>
-                  แรง {{ baht(row.wageTotal) }}
-                  <template v-if="row.dailyWage > 0">
-                    ({{ baht(row.dailyWage) }}/วัน)
+                  {{ d.shiftCount }} รอบ · ขาย {{ baht(d.daySales) }}
+                  <template v-if="d.wage > 0 || d.wageAdjusted">
+                    · แรง {{ baht(d.wage) }}
+                    <em v-if="d.wageAdjusted" class="ui-comm__adj">ปรับแล้ว</em>
                   </template>
-                  · คอม {{ baht(row.commissionTotal) }}
                 </span>
-                <strong>{{ baht(row.incomeTotal) }}</strong>
+              </div>
+              <div class="ui-comm__day-right">
+                <strong :class="{ 'is-muted': d.dayIncome <= 0 }">
+                  {{ baht(d.dayIncome) }}
+                </strong>
+                <span v-if="d.commission > 0">คอม {{ baht(d.commission) }}</span>
+                <span v-else-if="d.steps">{{ d.steps }} ขั้น</span>
+                <span v-else class="is-muted">-</span>
+                <em>{{ openDays[d.date] ? "▾" : "▸" }}</em>
               </div>
             </button>
-          </div>
-        </section>
 
-        <section class="ui-card ui-comm__detail">
-          <div v-if="!selected" class="ui-comm__detail-empty">
-            <p>เลือกพนักงานจากรายการ</p>
-            <span>ดูรายวัน · รอบขาย · ค่าคอมแบบเต็มที่นี่</span>
-          </div>
-
-          <div v-else class="ui-comm__detail-scroll">
-            <header class="ui-comm__detail-head">
-              <div>
-                <p class="ui-comm__detail-kicker">{{ monthLabel }}</p>
-                <h2>
-                  {{ selected.staffName }}
-                  <em>{{ selected.staffCode }}</em>
-                </h2>
-                <p class="ui-comm__detail-rule">{{ selected.rule }}</p>
-              </div>
-            </header>
-
-            <div class="ui-comm__detail-grid">
-              <div>
-                <span>ค่าแรง/วัน</span>
-                <strong>{{ baht(selected.dailyWage) }}</strong>
-              </div>
-              <div>
-                <span>ค่าแรงรวม</span>
-                <strong>{{ baht(selected.wageTotal) }}</strong>
-              </div>
-              <div>
-                <span>ค่าคอม</span>
-                <strong>{{ baht(selected.commissionTotal) }}</strong>
-              </div>
-              <div>
-                <span>รายได้รวม</span>
-                <strong class="is-total">{{ baht(selected.incomeTotal) }}</strong>
-              </div>
-              <div>
-                <span>ยอดขายเดือน</span>
-                <strong>{{ baht(selected.salesTotal) }}</strong>
-              </div>
-              <div>
-                <span>วันทำงาน</span>
-                <strong>{{ selected.dayCount }}</strong>
-              </div>
-              <div>
-                <span>รอบขาย</span>
-                <strong>{{ selected.shiftCount }}</strong>
-              </div>
-            </div>
-
-            <div class="ui-comm__days-head">
-              <strong>รายวัน</strong>
-              <span>{{ selected.dayCount }} วัน · ได้คอม {{ selected.daysWithPay }}</span>
-            </div>
-            <p class="ui-comm__days-hint">
-              กด “แก้ค่าแรง” เพื่อปรับรายวัน (เช่น ครึ่งวัน) · ค่าเริ่มต้นตั้งที่เมนูพนักงาน
-            </p>
-
-            <div v-if="!selected.days.length" class="ui-empty">
-              ไม่มีกะขายในเดือนนี้
-            </div>
-            <div v-else class="ui-comm__days">
-              <div
-                v-for="d in selected.days"
-                :key="d.date"
-                class="ui-comm__day"
-                :class="{
-                  'is-open': openDays[d.date],
-                  'has-pay': d.commission > 0,
-                }"
-              >
-                <button
-                  type="button"
-                  class="ui-comm__day-toggle"
-                  @click="toggleDay(d.date)"
-                >
-                  <div class="ui-comm__day-left">
-                    <strong>{{ fmtDay(d.date) }}</strong>
+            <div v-if="openDays[d.date]" class="ui-comm__shifts">
+              <div class="ui-comm__wage-edit">
+                <template v-if="wageEditDate === d.date">
+                  <label>
+                    <span>ค่าแรงวันนี้ (บาท)</span>
+                    <input
+                      v-model="wageEditValue"
+                      type="number"
+                      min="0"
+                      step="50"
+                      class="ui-input"
+                      :placeholder="String(d.wageDefault)"
+                    />
+                  </label>
+                  <label>
+                    <span>หมายเหตุ</span>
+                    <input
+                      v-model="wageEditNote"
+                      type="text"
+                      class="ui-input"
+                      placeholder="เช่น ครึ่งวัน"
+                    />
+                  </label>
+                  <p v-if="wageError" class="ui-comm__wage-err">{{ wageError }}</p>
+                  <div class="ui-comm__wage-actions">
+                    <button
+                      type="button"
+                      class="ui-btn ui-btn--primary"
+                      :disabled="wageSaving"
+                      @click="saveWageEdit"
+                    >
+                      {{ wageSaving ? "กำลังบันทึก..." : "บันทึก" }}
+                    </button>
+                    <button
+                      type="button"
+                      class="ui-btn"
+                      :disabled="wageSaving"
+                      @click="cancelWageEdit"
+                    >
+                      ยกเลิก
+                    </button>
+                  </div>
+                  <p class="ui-field-hint">
+                    ค่าเริ่มต้น {{ baht(d.wageDefault) }}/วัน · ว่างแล้วบันทึก = คืนค่าเริ่มต้น
+                  </p>
+                </template>
+                <template v-else>
+                  <div class="ui-comm__wage-summary">
                     <span>
-                      {{ d.shiftCount }} รอบ · ขาย {{ baht(d.daySales) }}
-                      <template v-if="d.wage > 0 || d.wageAdjusted">
-                        · แรง {{ baht(d.wage) }}
-                        <em v-if="d.wageAdjusted" class="ui-comm__adj">ปรับแล้ว</em>
+                      ค่าแรง {{ baht(d.wage) }}
+                      <template v-if="d.wageAdjusted">
+                        (ปรับจาก {{ baht(d.wageDefault) }})
                       </template>
+                      <template v-else> (ตามอัตรา)</template>
                     </span>
+                    <span v-if="d.wageNote">· {{ d.wageNote }}</span>
                   </div>
-                  <div class="ui-comm__day-right">
-                    <strong :class="{ 'is-muted': d.dayIncome <= 0 }">
-                      {{ baht(d.dayIncome) }}
-                    </strong>
-                    <span v-if="d.commission > 0">คอม {{ baht(d.commission) }}</span>
-                    <span v-else-if="d.steps">{{ d.steps }} ขั้น</span>
-                    <span v-else class="is-muted">-</span>
-                    <em>{{ openDays[d.date] ? "▾" : "▸" }}</em>
+                  <div class="ui-comm__wage-actions">
+                    <button type="button" class="ui-btn" @click="startWageEdit(d)">
+                      แก้ค่าแรง
+                    </button>
+                    <button
+                      v-if="d.wageAdjusted"
+                      type="button"
+                      class="ui-btn"
+                      :disabled="wageSaving"
+                      @click="resetWageEdit(d)"
+                    >
+                      คืนค่าเริ่มต้น
+                    </button>
                   </div>
-                </button>
+                </template>
+              </div>
 
-                <div v-if="openDays[d.date]" class="ui-comm__shifts">
-                  <div class="ui-comm__wage-edit">
-                    <template v-if="wageEditDate === d.date">
-                      <label>
-                        <span>ค่าแรงวันนี้ (บาท)</span>
-                        <input
-                          v-model="wageEditValue"
-                          type="number"
-                          min="0"
-                          step="50"
-                          class="ui-input"
-                          :placeholder="String(d.wageDefault)"
-                        />
-                      </label>
-                      <label>
-                        <span>หมายเหตุ</span>
-                        <input
-                          v-model="wageEditNote"
-                          type="text"
-                          class="ui-input"
-                          placeholder="เช่น ครึ่งวัน"
-                        />
-                      </label>
-                      <p v-if="wageError" class="ui-comm__wage-err">{{ wageError }}</p>
-                      <div class="ui-comm__wage-actions">
-                        <button
-                          type="button"
-                          class="ui-btn ui-btn--primary"
-                          :disabled="wageSaving"
-                          @click="saveWageEdit"
-                        >
-                          {{ wageSaving ? "กำลังบันทึก..." : "บันทึก" }}
-                        </button>
-                        <button
-                          type="button"
-                          class="ui-btn"
-                          :disabled="wageSaving"
-                          @click="cancelWageEdit"
-                        >
-                          ยกเลิก
-                        </button>
-                      </div>
-                      <p class="ui-field-hint">
-                        ค่าเริ่มต้น {{ baht(d.wageDefault) }}/วัน · ว่างแล้วบันทึก = คืนค่าเริ่มต้น
-                      </p>
-                    </template>
-                    <template v-else>
-                      <div class="ui-comm__wage-summary">
-                        <span>
-                          ค่าแรง {{ baht(d.wage) }}
-                          <template v-if="d.wageAdjusted">
-                            (ปรับจาก {{ baht(d.wageDefault) }})
-                          </template>
-                          <template v-else> (ตามอัตรา)</template>
-                        </span>
-                        <span v-if="d.wageNote">· {{ d.wageNote }}</span>
-                      </div>
-                      <div class="ui-comm__wage-actions">
-                        <button
-                          type="button"
-                          class="ui-btn"
-                          @click="startWageEdit(d)"
-                        >
-                          แก้ค่าแรง
-                        </button>
-                        <button
-                          v-if="d.wageAdjusted"
-                          type="button"
-                          class="ui-btn"
-                          :disabled="wageSaving"
-                          @click="resetWageEdit(d)"
-                        >
-                          คืนค่าเริ่มต้น
-                        </button>
-                      </div>
-                    </template>
-                  </div>
-
-                  <div
-                    v-for="s in d.shifts"
-                    :key="s.id"
-                    class="ui-comm__shift"
-                  >
-                    <span>{{ fmtTime(s.openedAt) }} – {{ fmtTime(s.closedAt) }}</span>
-                    <span>{{ s.billCount }} บิล</span>
-                    <strong>{{ baht(s.grossTotal) }}</strong>
-                  </div>
-                </div>
+              <div
+                v-for="s in d.shifts"
+                :key="s.id"
+                class="ui-comm__shift"
+              >
+                <span>{{ fmtTime(s.openedAt) }} – {{ fmtTime(s.closedAt) }}</span>
+                <span>{{ s.billCount }} บิล</span>
+                <strong>{{ baht(s.grossTotal) }}</strong>
               </div>
             </div>
           </div>
-        </section>
-      </div>
+        </div>
+      </section>
     </template>
   </div>
 </template>
@@ -712,134 +703,132 @@ onMounted(async () => {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
-.ui-comm__split {
-  display: grid;
-  grid-template-columns: minmax(260px, 340px) minmax(0, 1fr);
-  gap: 1rem;
+.ui-comm__people {
   margin-top: 1rem;
-  align-items: stretch;
-  /* ความสูงคงที่พอให้รายวันเลื่อนในแผงได้ แม้จอสั้น */
-  height: min(70dvh, calc(100dvh - 15rem));
-  min-height: 22rem;
+  padding-bottom: 0.85rem;
 }
 
-.ui-comm__list,
-.ui-comm__detail {
+.ui-comm__people-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(11.5rem, 1fr));
+  gap: 0.55rem;
+  padding: 0 0.85rem 0.15rem;
+}
+
+.ui-comm__person {
+  position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-}
-
-.ui-comm__list-body {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 0.35rem 0.55rem 0.75rem;
-}
-
-.ui-comm__detail-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-bottom: 1.25rem;
-}
-
-.ui-comm__days {
-  padding: 0.35rem 0.55rem 0.75rem;
-}
-
-.ui-comm__row {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  width: 100%;
+  gap: 0.3rem;
   text-align: left;
-  border: 1px solid transparent;
-  border-radius: 0.75rem;
-  background: transparent;
-  padding: 0.7rem 0.8rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 0.85rem;
+  background: #fff;
+  padding: 0.75rem 0.8rem 0.7rem;
   cursor: pointer;
   color: inherit;
-  transition: background 0.12s ease, border-color 0.12s ease;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+  min-width: 0;
 }
 
-.ui-comm__row:hover {
+.ui-comm__person:hover {
   background: #f8fafc;
+  border-color: #cbd5e1;
 }
 
-.ui-comm__row.is-active {
+.ui-comm__person.is-active {
   background: #eff6ff;
-  border-color: #bfdbfe;
+  border-color: #93c5fd;
+  box-shadow: 0 0 0 1px #bfdbfe inset;
 }
 
-.ui-comm__row-main {
+.ui-comm__person-top {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  padding-right: 3.2rem;
 }
 
-.ui-comm__row-main strong {
-  font-size: 0.95rem;
+.ui-comm__person-top strong {
+  font-size: 0.92rem;
+  font-weight: 700;
   color: #0f172a;
+  line-height: 1.25;
+  word-break: keep-all;
 }
 
-.ui-comm__row-main span,
-.ui-comm__row-meta {
-  font-size: 0.78rem;
+.ui-comm__person-top em {
+  font-style: normal;
+  font-size: 0.72rem;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+.ui-comm__person-amt {
+  font-size: 1.05rem;
+  font-weight: 750;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+
+.ui-comm__person.is-active .ui-comm__person-amt {
+  color: var(--ui-primary-dark, #1d4ed8);
+}
+
+.ui-comm__person-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.45rem;
+  font-size: 0.7rem;
   color: #64748b;
 }
 
-.ui-comm__row-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
+.ui-comm__person-badge {
+  position: absolute;
+  top: 0.55rem;
+  right: 0.55rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  background: #ecfdf5;
+  color: #047857;
+  line-height: 1.3;
 }
 
-.ui-comm__row-meta .is-off {
+.ui-comm__person-badge.is-off {
+  background: #f1f5f9;
   color: #94a3b8;
 }
 
-.ui-comm__row-foot {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-  margin-top: 0.15rem;
-  font-size: 0.78rem;
-  color: #64748b;
-}
-
-.ui-comm__row-foot strong {
-  color: #0f172a;
-  font-size: 0.95rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.ui-comm__detail {
-  padding-bottom: 0;
-}
-
-.ui-comm__detail-empty {
-  flex: 1;
+.ui-comm__pick-hint {
+  margin-top: 1rem;
   display: grid;
   place-content: center;
   text-align: center;
-  padding: 2rem;
+  padding: 2rem 1.25rem;
   color: #64748b;
 }
 
-.ui-comm__detail-empty p {
-  margin: 0 0 0.35rem;
+.ui-comm__pick-hint p {
+  margin: 0 0 0.3rem;
   font-weight: 650;
   color: #334155;
 }
 
-.ui-comm__detail-empty span {
+.ui-comm__pick-hint span {
   font-size: 0.85rem;
   color: #94a3b8;
+}
+
+.ui-comm__detail {
+  margin-top: 1rem;
+  padding-bottom: 1rem;
 }
 
 .ui-comm__detail-head {
@@ -859,6 +848,7 @@ onMounted(async () => {
   font-weight: 750;
   color: #0f172a;
   letter-spacing: -0.02em;
+  word-break: keep-all;
 }
 
 .ui-comm__detail-head em {
@@ -913,7 +903,7 @@ onMounted(async () => {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  padding: 0.35rem 1.15rem 0.5rem;
+  padding: 0.35rem 1.15rem 0.35rem;
   border-top: 1px solid #e2e8f0;
 }
 
@@ -925,6 +915,16 @@ onMounted(async () => {
 .ui-comm__days-head span {
   font-size: 0.78rem;
   color: #64748b;
+}
+
+.ui-comm__days-hint {
+  margin: 0 1.15rem 0.55rem;
+  font-size: 0.78rem;
+  color: #64748b;
+}
+
+.ui-comm__days {
+  padding: 0 0.85rem 0.25rem;
 }
 
 .ui-comm__day {
@@ -999,12 +999,6 @@ onMounted(async () => {
   font-size: 0.75rem;
 }
 
-.ui-comm__days-hint {
-  margin: 0 0 0.55rem;
-  font-size: 0.78rem;
-  color: #64748b;
-}
-
 .ui-comm__adj {
   font-style: normal;
   margin-left: 0.25rem;
@@ -1074,23 +1068,6 @@ onMounted(async () => {
 }
 
 @media (max-width: 980px) {
-  .ui-comm__split {
-    grid-template-columns: 1fr;
-    height: auto;
-    min-height: 0;
-  }
-
-  .ui-comm__list {
-    height: auto;
-    max-height: 16rem;
-  }
-
-  .ui-comm__detail {
-    height: auto;
-    min-height: 24rem;
-    max-height: min(65dvh, 36rem);
-  }
-
   .ui-comm__kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1098,24 +1075,80 @@ onMounted(async () => {
   .ui-comm__detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .ui-comm__people-grid {
+    grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  }
 }
 
-@media (max-height: 820px) {
-  .ui-comm__split {
-    height: min(75dvh, calc(100dvh - 12rem));
-    min-height: 18rem;
+@media (max-width: 800px) {
+  .ui-comm__kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .ui-comm__detail-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: 1fr 1fr;
   }
 
-  .ui-comm__detail-grid > div {
-    padding: 0.4rem 0.55rem;
+  .ui-comm__people-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 0.45rem;
+    padding: 0 0.65rem 0.1rem;
   }
 
-  .ui-comm__detail-grid strong {
+  .ui-comm__person {
+    padding: 0.65rem 0.7rem 0.6rem;
+  }
+
+  .ui-comm__person-top {
+    padding-right: 0;
+  }
+
+  .ui-comm__person-badge {
+    position: static;
+    align-self: flex-start;
+    margin-top: 0.1rem;
+  }
+
+  .ui-comm__person-amt {
+    font-size: 1rem;
+  }
+
+  .ui-comm__day-toggle {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.45rem;
+    padding: 0.75rem 0.85rem;
+  }
+
+  .ui-comm__day-right {
+    width: 100%;
+    justify-content: space-between;
+    padding-top: 0.4rem;
+    border-top: 1px solid #f1f5f9;
+    flex-wrap: wrap;
+  }
+
+  .ui-comm__day-left strong {
     font-size: 0.95rem;
+    line-height: 1.3;
+    word-break: keep-all;
+  }
+
+  .ui-comm__shift {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .ui-comm__people-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ui-comm__kpis,
+  .ui-comm__detail-grid {
+    grid-template-columns: 1fr;
   }
 }
 

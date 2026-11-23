@@ -247,14 +247,14 @@ onMounted(load);
       <div v-if="pending && !rows.length" class="ui-empty">กำลังโหลด...</div>
       <div v-else-if="!pageRows.length" class="ui-empty">ไม่พบข้อมูล</div>
       <div v-else class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-table--cards">
           <thead>
             <tr>
               <th>รหัส</th>
-              <th>ชื่อสาขา</th>
-              <th>PromptPay</th>
-              <th>ชื่อบัญชี</th>
-              <th>Discord</th>
+              <th class="ui-table__col-name">ชื่อสาขา</th>
+              <th class="ui-branches-col-secondary">PromptPay</th>
+              <th class="ui-branches-col-secondary">ชื่อบัญชี</th>
+              <th class="ui-branches-col-secondary">Discord</th>
               <th>สถานะ</th>
               <th class="ui-table__actions">จัดการ</th>
             </tr>
@@ -262,10 +262,10 @@ onMounted(load);
           <tbody>
             <tr v-for="row in pageRows" :key="row.id">
               <td>{{ row.code }}</td>
-              <td>{{ row.name }}</td>
-              <td>{{ row.promptPayId || "—" }}</td>
-              <td>{{ row.promptPayName || "—" }}</td>
-              <td>
+              <td class="ui-table__col-name">{{ row.name }}</td>
+              <td class="ui-branches-col-secondary">{{ row.promptPayId || "—" }}</td>
+              <td class="ui-branches-col-secondary">{{ row.promptPayName || "—" }}</td>
+              <td class="ui-branches-col-secondary">
                 <div v-if="row.discordWebhookUrl" class="branches-discord">
                   <span>ตั้งแล้ว</span>
                   <button
@@ -398,5 +398,128 @@ onMounted(load);
 .branches-discord__test {
   padding: 0.3rem 0.55rem;
   font-size: 0.85em;
+}
+
+@media (max-width: 800px) {
+  .ui-table-wrap:has(.ui-table--fit) {
+    overflow-x: visible !important;
+  }
+
+  .ui-table--fit {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+  }
+
+  .ui-table--fit thead {
+    display: none;
+  }
+
+  .ui-table--fit tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ui-table--fit tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "name status"
+      "code code"
+      "pp namepp"
+      "discord discord"
+      "actions actions";
+    gap: 0.28rem 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-table--fit tbody td {
+    border: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    position: static !important;
+    box-shadow: none !important;
+  }
+
+  .ui-table--fit tbody td:nth-child(1) {
+    grid-area: code;
+    font-size: 0.8rem;
+    color: #94a3b8;
+  }
+
+  .ui-table--fit tbody td:nth-child(1)::before {
+    content: "รหัส ";
+    font-weight: 600;
+  }
+
+  .ui-table--fit .ui-table__col-name {
+    grid-area: name;
+    min-width: 0 !important;
+    font-weight: 700;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    word-break: keep-all;
+  }
+
+  .ui-table--fit tbody td:nth-child(3) {
+    grid-area: pp;
+    font-size: 0.82rem;
+    color: #475569;
+  }
+
+  .ui-table--fit tbody td:nth-child(3)::before {
+    content: "PromptPay ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-table--fit tbody td:nth-child(4) {
+    grid-area: namepp;
+    font-size: 0.82rem;
+    color: #475569;
+    text-align: right;
+  }
+
+  .ui-table--fit tbody td:nth-child(5) {
+    grid-area: discord;
+    font-size: 0.82rem;
+    color: #475569;
+  }
+
+  .ui-table--fit tbody td:nth-child(5)::before {
+    content: "Discord ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-table--fit tbody td:nth-child(6) {
+    grid-area: status;
+    text-align: right;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-table--fit .ui-table__actions {
+    grid-area: actions;
+    display: flex;
+    width: 100%;
+    min-width: 0 !important;
+    gap: 0.4rem;
+    padding-top: 0.45rem !important;
+    border-top: 1px solid #f1f5f9;
+    text-align: left !important;
+  }
+
+  .ui-table--fit .ui-table__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 2.15rem;
+    margin: 0;
+  }
 }
 </style>

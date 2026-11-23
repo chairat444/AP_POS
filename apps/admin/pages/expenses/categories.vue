@@ -202,7 +202,7 @@ onMounted(load);
       <div v-if="pending && !rows.length" class="ui-empty">กำลังโหลด...</div>
       <div v-else-if="!rows.length" class="ui-empty">ยังไม่มีประเภท</div>
       <div v-else class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-table--cards">
           <thead>
             <tr>
               <th class="ui-table__col-drag" />
@@ -332,5 +332,74 @@ onMounted(load);
 }
 .ui-expense-cat-grip:active {
   cursor: grabbing;
+}
+
+@media (max-width: 800px) {
+  .ui-expense-cat-row {
+    display: grid !important;
+    grid-template-columns: 1.55rem minmax(0, 1fr) auto;
+    grid-template-areas:
+      "grip name status"
+      "seq seq seq"
+      "actions actions actions";
+    gap: 0.3rem 0.55rem;
+    padding: 0.75rem 0.85rem;
+    align-items: center;
+  }
+
+  .ui-expense-cat-row td {
+    padding: 0 !important;
+  }
+
+  .ui-expense-cat-row.is-over {
+    background: #fffbeb !important;
+  }
+
+  .ui-table__col-drag {
+    grid-area: grip;
+  }
+
+  .ui-expense-cat-row td:nth-child(2) {
+    grid-area: seq;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-expense-cat-row td:nth-child(2)::before {
+    content: "ลำดับ ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-expense-cat-row td:nth-child(3) {
+    grid-area: name;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    word-break: keep-all;
+  }
+
+  .ui-expense-cat-row td:nth-child(4) {
+    grid-area: status;
+    font-size: 0.8rem;
+    color: #64748b;
+  }
+
+  .ui-expense-cat-row .ui-table__actions {
+    grid-area: actions;
+    display: flex;
+    width: 100%;
+    min-width: 0 !important;
+    gap: 0.4rem;
+    padding-top: 0.45rem !important;
+    border-top: 1px solid #f1f5f9;
+    text-align: left !important;
+  }
+
+  .ui-expense-cat-row .ui-table__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 2.15rem;
+    margin: 0;
+  }
 }
 </style>

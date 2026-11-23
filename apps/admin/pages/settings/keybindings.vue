@@ -199,7 +199,7 @@ onUnmounted(() => {
         </span>
       </div>
       <div class="ui-table-wrap">
-        <table class="ui-table ui-table--fit">
+        <table class="ui-table ui-table--fit ui-table--cards">
           <thead>
             <tr>
               <th>ฟังก์ชัน</th>
@@ -256,3 +256,100 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+@media (max-width: 800px) {
+  .ui-table-wrap:has(.ui-table--fit) {
+    overflow-x: visible !important;
+  }
+
+  .ui-table--fit {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: auto !important;
+  }
+
+  .ui-table--fit thead {
+    display: none;
+  }
+
+  .ui-table--fit tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ui-table--fit tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "name name"
+      "key def"
+      "actions actions";
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.28rem 0.55rem;
+    padding: 0.7rem 0.75rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 0.65rem;
+    background: #fff;
+  }
+
+  .ui-table--fit tbody td {
+    border: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    white-space: normal !important;
+    position: static !important;
+    box-shadow: none !important;
+  }
+
+  .ui-table--fit tbody td:nth-child(1) {
+    grid-area: name;
+    font-size: 0.95rem;
+    line-height: 1.35;
+    word-break: keep-all;
+  }
+
+  .ui-table--fit tbody td:nth-child(2) {
+    grid-area: key;
+    font-size: 0.88rem;
+  }
+
+  .ui-table--fit tbody td:nth-child(2)::before {
+    content: "คีย์ ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-table--fit tbody td:nth-child(3) {
+    grid-area: def;
+    font-size: 0.8rem;
+    color: #64748b;
+    text-align: right;
+  }
+
+  .ui-table--fit tbody td:nth-child(3)::before {
+    content: "เริ่มต้น ";
+    font-weight: 600;
+    color: #94a3b8;
+  }
+
+  .ui-table--fit .ui-table__actions {
+    grid-area: actions;
+    display: flex;
+    width: 100%;
+    min-width: 0 !important;
+    gap: 0.4rem;
+    padding-top: 0.45rem !important;
+    border-top: 1px solid #f1f5f9;
+    text-align: left !important;
+  }
+
+  .ui-table--fit .ui-table__actions .ui-btn {
+    flex: 1 1 0;
+    justify-content: center;
+    min-height: 2.15rem;
+    margin: 0;
+  }
+}
+</style>

@@ -176,4 +176,10 @@ onMounted(load);
   color: #0f172a;
   word-break: break-all;
 }
+@media (max-width: 520px) {
+  .ui-backup-meta > div {
+    grid-template-columns: 1fr;
+    gap: 0.15rem;
+  }
+}
 </style>

@@ -15,6 +15,7 @@
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--ui-sidebar-bg);
@@ -558,12 +559,16 @@
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .ui-topbar {
   position: sticky;
   top: 0;
-  z-index: 20;
+  z-index: 50;
+  flex: 0 0 auto;
   height: var(--ui-shell-header-height);
   display: flex;
   align-items: center;
@@ -573,6 +578,52 @@
   background: var(--ui-topbar-bg);
   border-bottom: 1px solid rgba(15, 90, 61, 0.08);
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+.ui-topbar__lead {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ui-topbar__menu {
+  display: none;
+  appearance: none;
+  flex: 0 0 auto;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin: 0;
+  padding: 0;
+  border: 1px solid #dbe4df;
+  border-radius: 0.7rem;
+  background: #fff;
+  color: var(--ui-primary-dark, #0f5a3d);
+  cursor: pointer;
+  place-items: center;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ui-topbar__menu-bars {
+  display: grid;
+  gap: 0.28rem;
+  width: 1.05rem;
+}
+
+.ui-topbar__menu-bars span {
+  display: block;
+  height: 2px;
+  border-radius: 99px;
+  background: currentColor;
+}
+
+.ui-sidebar__collapse--mobile {
+  display: none;
+}
+
+.ui-nav-backdrop {
+  display: none;
 }
 
 .ui-breadcrumb {
@@ -2094,6 +2145,10 @@
   width: 100%;
   min-width: 0;
   max-width: 100%;
+  flex: 1 1 auto;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 1.5rem clamp(1.25rem, 2.5vw, 2.25rem) 2.5rem;
 }
 
@@ -4729,18 +4784,118 @@ select.ui-input,
 
 @media (max-width: 960px) {
   .ui-shell,
-  .ui-shell.is-collapsed {
+  .ui-shell.is-collapsed,
+  .ui-shell.is-mobile-nav {
     grid-template-columns: 1fr;
   }
 
+  .ui-topbar {
+    padding: 0 0.85rem;
+    gap: 0.55rem;
+  }
+
+  .ui-topbar__menu {
+    display: grid;
+  }
+
+  .ui-topbar__user-meta {
+    display: none;
+  }
+
+  .ui-topbar__logout-btn {
+    padding: 0.55rem 0.85rem;
+  }
+
+  .ui-breadcrumb__sep,
+  .ui-breadcrumb__home {
+    display: none;
+  }
+
+  .ui-nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgb(15 23 42 / 42%);
+    backdrop-filter: blur(2px);
+  }
+
   .ui-sidebar {
-    position: relative;
-    height: auto;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: min(19rem, 86vw);
+    height: 100vh;
+    max-height: 100dvh;
+    z-index: 60;
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+    box-shadow: 12px 0 32px rgb(15 23 42 / 16%);
+  }
+
+  .ui-shell.is-nav-open .ui-sidebar {
+    transform: translateX(0);
+  }
+
+  .ui-sidebar__collapse--desktop {
+    display: none;
+  }
+
+  .ui-sidebar__collapse--mobile {
+    display: inline-grid;
+    place-items: center;
+  }
+
+  /* มือถือ: เมนูเต็มเสมอ ไม่ใช้โหมดยุบไอคอน */
+  .ui-shell.is-collapsed .ui-sidebar__brand-full,
+  .ui-shell.is-collapsed .ui-nav-group__label,
+  .ui-shell.is-collapsed .ui-nav-link__text,
+  .ui-shell.is-collapsed .ui-nav-top__text,
+  .ui-shell.is-collapsed .ui-nav-section__label,
+  .ui-shell.is-collapsed .ui-nav-section__chevron,
+  .ui-shell.is-collapsed .ui-nav-group__chevron {
+    display: initial;
+  }
+
+  .ui-shell.is-collapsed .ui-sidebar__brand-short {
+    display: none;
+  }
+
+  .ui-shell.is-collapsed .ui-sidebar__brand {
+    justify-content: space-between;
+    padding-inline: inherit;
+  }
+
+  .ui-shell.is-collapsed .ui-nav-tree {
+    display: block;
+  }
+
+  .ui-shell.is-collapsed .ui-nav-tree > li::before,
+  .ui-shell.is-collapsed .ui-nav-tree > li::after {
+    display: block;
+  }
+
+  .ui-shell.is-collapsed .ui-nav-link,
+  .ui-shell.is-collapsed .ui-nav-group__head,
+  .ui-shell.is-collapsed .ui-nav-top {
+    justify-content: flex-start;
+    padding-inline: inherit;
+  }
+
+  .ui-content {
+    padding: 1rem 0.85rem 1.75rem;
   }
 
   .ui-stat-grid,
   .ui-quick {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 961px) {
+  .ui-shell.is-nav-open .ui-nav-backdrop {
+    display: none;
   }
 }
 
